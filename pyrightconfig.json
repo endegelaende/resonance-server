@@ -1,0 +1,38 @@
+{
+  "include": [
+    "resonance",
+    "tests"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    ".build",
+    "web-ui",
+    "node_modules",
+    "cache",
+    "audiotest",
+    ".venv"
+  ],
+  "pythonVersion": "3.11",
+  "pythonPlatform": "All",
+  "venvPath": ".",
+  "venv": ".venv",
+  "typeCheckingMode": "standard",
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false,
+  "reportUnusedImport": true,
+  "reportUnusedVariable": true,
+  "reportUnusedFunction": "warning",
+  "reportOptionalMemberAccess": true,
+  "reportGeneralTypeIssues": true,
+  "reportPrivateUsage": "warning",
+  "reportIncompatibleMethodOverride": true,
+  "reportIncompatibleVariableOverride": true,
+  "reportUntypedFunctionDecorator": false,
+  "reportUntypedClassDecorator": false,
+  "reportUntypedBaseClass": false,
+  "reportUnknownParameterType": false,
+  "reportUnknownArgumentType": false,
+  "reportUnknownLambdaType": false,
+  "reportUnknownVariableType": false,
+  "reportUnknownMemberType": false
+}

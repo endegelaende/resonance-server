@@ -1,0 +1,98 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+*.manifest
+*.spec
+
+# === Virtual Environments ===
+.venv/
+venv/
+ENV/
+env/
+
+# === micromamba / conda ===
+.build/
+
+# === IDE / Editor ===
+.idea/
+.zed/
+.vscode/
+*.swp
+*.swo
+*~
+
+# === Testing ===
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# === Linting ===
+.ruff_cache/
+.mypy_cache/
+
+# === SQLite Database ===
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
+# === Cache ===
+cache/
+
+# === Logs ===
+*.log
+logs/
+
+# === OS ===
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# === Node.js (web-ui) ===
+node_modules/
+web-ui/node_modules/
+web-ui/.svelte-kit/
+web-ui/build/
+web-ui/.env
+web-ui/.env.*
+!web-ui/.env.example
+
+# === Audio Test Files ===
+audiotest/
+audiotest/*.mp3
+audiotest/*.flac
+audiotest/*.wav
+audiotest/*.ogg
+audiotest/*.m4b
+audiotest/*.m4a
+audiotest/*.aac
+audiotest/*.wma
+audiotest/*.opus
+
+# === Project Folders (local only) ===
+docs/
+scripts/
+tests/
+
+# === Local Dev/Repo Metadata ===
+.git_/
+artifacts/
+
+# === Misc ===
+*.bak
+*.tmp
+*.temp
+.env
+.env.local
+
+# === Design Scratch Files ===
+assets/logos/logo-gallery*.html

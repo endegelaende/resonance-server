@@ -1,0 +1,145 @@
+# Resonance Device Capabilities
+# ==============================
+#
+# Defines what each device type can handle for audio streaming.
+#
+# IMPORTANT DISTINCTION:
+# - "Codec support" = Can the device DECODE this audio format?
+# - "Container streaming" = Can the device parse this container over HTTP?
+#
+# Many devices support AAC/ALAC codecs but CANNOT stream MP4 containers
+# over HTTP because they need to seek to read the 'moov' atom.
+#
+# Device types come from the HELO handshake when a player connects.
+
+# -----------------------------------------------------------------------------
+# Modern Devices (Software Players)
+# -----------------------------------------------------------------------------
+# Software players with full codec support via ffmpeg/libav.
+# However, MP4 container streaming is PROBLEMATIC even for these!
+#
+# In practice (tested Session 8): Squeezelite could NOT reliably stream
+# M4B/M4A over HTTP - transcoding to PCM/WAV was required.
+#
+# Strategy: Transcode MP4 containers to FLAC for reliable streaming.
+
+[modern]
+description = "Software players (Squeezelite, SqueezePlay) - full codec support"
+devices = [
+    "squeezeslave",   # Squeezelite and derivatives
+    "squeezeplay",    # SqueezePlay desktop app
+    "softsqueeze3",   # SoftSqueeze 3
+    "softboom",       # Software Boom emulator
+]
+
+# Formats that stream reliably over HTTP (no container issues)
+native_formats = [
+    "mp3",
+    "flac",
+    "ogg",
+    "wav",
+    "aiff",
+    "aif",
+]
+
+# Formats that REQUIRE transcoding (container streaming issues)
+# Even though the codec is supported, HTTP streaming doesn't work reliably
+transcode_required = [
+    "m4a",    # AAC in MP4 container - HTTP streaming problematic
+    "m4b",    # Audiobook in MP4 container - HTTP streaming problematic
+    "mp4",    # Generic MP4 - HTTP streaming problematic
+    "alac",   # Apple Lossless in MP4 - HTTP streaming problematic
+    "aac",    # Raw AAC-ADTS might work, but transcode for safety
+    "wma",    # WMA can be problematic
+    "opus",   # Opus in OGG is fine, raw opus needs transcode
+]
+
+# -----------------------------------------------------------------------------
+# Legacy Devices (Original Squeezebox Hardware)
+# -----------------------------------------------------------------------------
+# Original hardware with dedicated decoder chips.
+# These devices:
+# - CANNOT parse MP4/MOV containers at all
+# - Have limited codec support (no AAC on SLIMP3, etc.)
+# - Need raw audio streams (MP3, FLAC, PCM, AAC-ADTS)
+
+[legacy]
+description = "Original Squeezebox hardware with hardware decoders"
+devices = [
+    "slimp3",         # Original SLIMP3 (MP3 only!)
+    "squeezebox",     # Squeezebox 1
+    "squeezebox2",    # Squeezebox 2/3
+    "transporter",    # Transporter (high-end)
+    "receiver",       # Squeezebox Receiver
+    "boom",           # Squeezebox Boom
+    "controller",     # Squeezebox Controller (no audio)
+    "softsqueeze",    # Original SoftSqueeze (v1/v2)
+    "baby",           # Squeezebox Radio
+    "fab4",           # Squeezebox Touch
+]
+
+# Formats these devices can decode natively via HTTP streaming
+native_formats = [
+    "mp3",
+    "flac",
+    "ogg",
+    "wav",
+    "aiff",
+    "aif",
+    "wma",    # SB2+ only, but let legacy.conf handle SLIMP3 exception
+]
+
+# Formats that ALWAYS require transcoding
+transcode_required = [
+    "m4a",    # Cannot parse MP4 container
+    "m4b",    # Cannot parse MP4 container
+    "mp4",    # Cannot parse MP4 container
+    "alac",   # Cannot parse MP4 container
+    "aac",    # AAC-ADTS might work on SB2+, but transcode for safety
+    "opus",   # Not supported on hardware
+]
+
+# -----------------------------------------------------------------------------
+# Future Devices (Resonance Native Clients)
+# -----------------------------------------------------------------------------
+# Next-generation clients built specifically for Resonance.
+# These will use modern protocols and have full format support.
+
+[future]
+description = "Next-generation Resonance clients (Flutter app, Web)"
+devices = [
+    "resonance_flutter",   # Mobile app (iOS/Android)
+    "resonance_web",       # Web browser client (uses browser codecs)
+    "resonance_desktop",   # Desktop app (Electron/Tauri)
+]
+
+# These clients handle everything natively
+native_formats = ["*"]
+
+# No transcoding needed - they use adaptive streaming
+transcode_required = []
+
+# Modern streaming protocols (future implementation)
+streaming_protocols = [
+    "http",       # Direct HTTP streaming (current)
+    "hls",        # HTTP Live Streaming (future)
+    "dash",       # MPEG-DASH (future)
+]
+
+# -----------------------------------------------------------------------------
+# Defaults
+# -----------------------------------------------------------------------------
+
+[defaults]
+# When device type is unknown, assume it needs transcoding for safety.
+# This ensures old/unknown hardware still works.
+unknown_device_tier = "legacy"
+
+# Target format when transcoding is needed.
+# Must stay aligned with streaming/policy.py TRANSCODE_TARGET_FORMAT
+# and the legacy.conf transcode rules (faad/ffmpeg → lame).
+# MP3 = fast start, broad player compatibility (LMS default for MP4 family).
+transcode_target = "mp3"
+
+# Fallback if FLAC encoding fails or isn't supported
+transcode_fallback = "pcm"

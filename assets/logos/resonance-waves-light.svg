@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <linearGradient id="resLogoWarm" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#ef4444" />
+    </linearGradient>
+  </defs>
+  <circle cx="100" cy="100" r="92" fill="#1a120e" />
+  <text
+    x="80"
+    y="130"
+    text-anchor="middle"
+    font-family="system-ui,sans-serif"
+    font-size="100"
+    font-weight="800"
+    fill="url(#resLogoWarm)"
+  >R</text>
+  <path
+    d="M125,65 Q145,100 125,135"
+    fill="none"
+    stroke="url(#resLogoWarm)"
+    stroke-width="4"
+    stroke-linecap="round"
+    opacity="0.6"
+  />
+  <path
+    d="M140,52 Q165,100 140,148"
+    fill="none"
+    stroke="url(#resLogoWarm)"
+    stroke-width="3"
+    stroke-linecap="round"
+    opacity="0.35"
+  />
+</svg>
