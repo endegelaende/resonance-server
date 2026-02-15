@@ -236,20 +236,13 @@ class UDPDiscoveryProtocol(asyncio.DatagramProtocol):
         return tlvs
 
     def _get_local_ip_for_client(self, client_ip: str) -> str | None:
-        """
-        Determine which local IP address can reach the given client.
-
-        This creates a temporary UDP socket and "connects" it to the client
-        (no actual packets sent), then checks which local IP was chosen.
-        """
-        # Use cached value if we have one
+        """Determine which local IP address can reach the given client."""
         if self._local_ip:
             return self._local_ip
 
         try:
-            # Create a temporary UDP socket to determine routing
+            # UDP "connect" without sending — lets the OS pick the right interface
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as temp_sock:
-                # Connect to client (doesn't send anything, just sets up routing)
                 temp_sock.connect((client_ip, 80))
                 local_ip = temp_sock.getsockname()[0]
                 if local_ip and local_ip != '0.0.0.0':

@@ -1,40 +1,50 @@
-"""
-Resonance Music Server - Main Server Module
-
-This module contains the main ResonanceServer class that orchestrates
-all server components and manages the application lifecycle.
-"""
+"""Main server — orchestrates all components and manages lifecycle."""
 
 import asyncio
 import logging
+import os
 import signal
 import uuid
 from pathlib import Path
 
+from resonance.content_provider import ContentProviderRegistry
 from resonance.core.alarm_runtime import AlarmRuntime
 from resonance.core.artwork import ArtworkManager
 from resonance.core.events import (
     Event,
+    LiveStreamDroppedEvent,
     PlayerDecodeReadyEvent,
     PlayerTrackFinishedEvent,
     PlayerTrackStartedEvent,
+    ServerStartedEvent,
+    ServerStoppingEvent,
     event_bus,
 )
 from resonance.core.library import MusicLibrary
 from resonance.core.library_db import LibraryDb
 from resonance.core.playlist import PlaylistManager
+from resonance.display.manager import DisplayManager, set_display_manager
 from resonance.player.registry import PlayerRegistry
+from resonance.plugin_manager import PluginManager
 from resonance.protocol.cli import CliServer
 from resonance.protocol.discovery import UDPDiscoveryServer
 from resonance.protocol.slimproto import SlimprotoServer
 from resonance.streaming.seek_coordinator import init_seek_coordinator
 from resonance.streaming.server import StreamingServer
+from resonance.web.handlers.alarm import configure_persistence as configure_alarm_persistence
+from resonance.web.handlers.alarm import load_alarms
+from resonance.web.handlers.compat import configure_prefs_persistence, load_all_player_prefs
+from resonance.web.jsonrpc import register_command, unregister_command
 from resonance.web.server import WebServer
 
 logger = logging.getLogger(__name__)
 
 # Path for persisting server UUID
 SERVER_UUID_FILE = Path("cache/server_uuid")
+
+# Feature flag: enable bitmap display rendering for SB2/SB3/Classic/Boom.
+# Default OFF until hardware-verified.  Set RESONANCE_DISPLAY=1 to activate.
+DISPLAY_RENDERING_ENABLED = os.environ.get("RESONANCE_DISPLAY", "0") == "1"
 
 
 def get_or_create_server_uuid() -> str:
@@ -105,6 +115,7 @@ class ResonanceServer:
         cli_port: int = 9090,
         music_root: Path | None = None,
         library_db_path: Path | None = None,
+        cors_origins: str | list[str] = "*",
     ) -> None:
         """
         Initialize the Resonance server.
@@ -116,11 +127,21 @@ class ResonanceServer:
             cli_port: Telnet CLI port (default 9090, 0 disables CLI).
             music_root: Optional root directory for the local music library.
             library_db_path: Optional path to the library SQLite DB file.
+            cors_origins: Allowed CORS origins for the web server (default ``"*"``).
         """
         self.host = host
         self.port = port
         self.web_port = web_port
         self.cli_port = cli_port
+        self.cors_origins = cors_origins
+
+        # Plugin manager (discovers/loads/starts plugins from plugins/ directory)
+        self.plugin_manager = PluginManager(plugins_dir=Path("plugins"))
+
+        # Content provider registry (Radio, Podcasts, external sources).
+        # Plugins register providers during setup; the streaming/handler layer
+        # queries the registry when users browse or play remote content.
+        self.content_registry = ContentProviderRegistry()
 
         # Core components
         self.player_registry = PlayerRegistry()
@@ -162,8 +183,21 @@ class ResonanceServer:
         # Artwork manager (handles cover art extraction and caching)
         self.artwork_manager = ArtworkManager(cache_dir=Path("cache/artwork"))
 
-        # Playlist manager (one playlist per player)
-        self.playlist_manager = PlaylistManager()
+        # Playlist manager (one playlist per player, persisted to disk)
+        playlist_persistence_dir = Path("data/playlists")
+        self.playlist_manager = PlaylistManager(persistence_dir=playlist_persistence_dir)
+
+        # Display manager (bitmap rendering for SB2/SB3/Classic/Boom).
+        # Gated behind RESONANCE_DISPLAY=1 env var until hardware-verified.
+        self.display_manager: DisplayManager | None = None
+        if DISPLAY_RENDERING_ENABLED:
+            self.display_manager = DisplayManager(
+                self.slimproto,
+                playlist_manager=self.playlist_manager,
+                streaming_server=self.streaming_server,
+            )
+            set_display_manager(self.display_manager)
+            logger.info("Display rendering enabled (RESONANCE_DISPLAY=1)")
 
         # Web server (HTTP/JSON-RPC on port 9000)
         self.web_server: WebServer | None = None
@@ -242,9 +276,12 @@ class ResonanceServer:
         # Streaming is now handled via FastAPI routes at /stream.mp3
         await self.streaming_server.start()
 
-        # Initialize SeekCoordinator with StreamingServer for generation tracking.
-        # This provides latest-wins semantics and safe subprocess termination for seeks.
         self.seek_coordinator = init_seek_coordinator(self.streaming_server)
+
+        # Start DisplayManager (bitmap rendering for SB2/SB3/Classic/Boom)
+        # Must come after slimproto + streaming_server are ready.
+        if self.display_manager is not None:
+            await self.display_manager.start()
 
         # Start Web server (HTTP/JSON-RPC + Streaming)
         self.web_server = WebServer(
@@ -255,8 +292,28 @@ class ResonanceServer:
             artwork_manager=self.artwork_manager,
             slimproto=self.slimproto,
             server_uuid=self.server_uuid,
+            cors_origins=self.cors_origins,
         )
         await self.web_server.start(host=self.host, port=self.web_port)
+
+        # Load persisted playlists and start background auto-save
+        self.playlist_manager.load_all()
+        await self.playlist_manager.start_autosave()
+
+        # Load persisted alarms
+        alarm_persistence_path = Path("data/alarms.json")
+        configure_alarm_persistence(alarm_persistence_path)
+        load_alarms()
+
+        # Load persisted player preferences
+        prefs_persistence_dir = Path("data/player_prefs")
+        configure_prefs_persistence(prefs_persistence_dir)
+        load_all_player_prefs()
+
+        # Configure saved-playlists directory (M3U persistence)
+        from resonance.web.handlers.playlist import configure_saved_playlists_dir
+        saved_playlists_dir = Path("data/saved_playlists")
+        configure_saved_playlists_dir(saved_playlists_dir)
 
         # Wire JSON-RPC handler onto SlimprotoServer so IR/BUTN dispatch
         # can execute playback commands (pause, volume, skip, etc.)
@@ -280,6 +337,7 @@ class ResonanceServer:
                 host=self.host,
                 port=self.cli_port,
                 command_executor=_execute_cli_command,
+                event_bus=event_bus,
             )
             await self.cli_server.start()
 
@@ -306,7 +364,34 @@ class ResonanceServer:
 
         await event_bus.subscribe("player.track_finished", _on_track_finished_event)
 
+        # Subscribe to live stream dropped events for automatic re-stream
+        # (LMS _RetryOrNext equivalent — StreamingController.pm L920-927)
+        async def _on_live_stream_dropped_event(event: Event) -> None:
+            if isinstance(event, LiveStreamDroppedEvent):
+                await self._on_live_stream_dropped(event)
+
+        await event_bus.subscribe("player.live_stream_dropped", _on_live_stream_dropped_event)
+
+        # ── Plugin lifecycle: discover → load → start ────────────
+        await self.plugin_manager.discover()
+        await self.plugin_manager.load_all()
+        await self.plugin_manager.start_all(
+            event_bus=event_bus,
+            music_library=self.music_library,
+            player_registry=self.player_registry,
+            playlist_manager=self.playlist_manager,
+            command_register=register_command,
+            command_unregister=unregister_command,
+            route_register=lambda r: self.web_server.app.include_router(r) if self.web_server else None,
+            content_registry=self.content_registry,
+        )
+
+        # Notify listeners that the server is fully operational
+        await event_bus.publish(ServerStartedEvent())
+
         logger.info("Resonance server started successfully")
+        if self.plugin_manager.started_plugins:
+            logger.info("Plugins: %s", ", ".join(self.plugin_manager.started_plugins))
         if self.cli_server is not None:
             logger.info("Slimproto: port %d | Web/Streaming: port %d | CLI: port %d", self.port, self.web_port, self.cli_server.port)
         else:
@@ -319,7 +404,13 @@ class ResonanceServer:
         logger.info("Stopping Resonance server...")
         self._running = False
 
-        # Stop CLI server first (line-based control channel).
+        # Notify listeners that shutdown is beginning
+        await event_bus.publish(ServerStoppingEvent())
+
+        # Stop plugins first (they may depend on other components)
+        await self.plugin_manager.stop_all()
+
+        # Stop CLI server (line-based control channel).
         if self.cli_server:
             await self.cli_server.stop()
             self.cli_server = None
@@ -328,6 +419,13 @@ class ResonanceServer:
         if self.alarm_runtime is not None:
             await self.alarm_runtime.stop()
             self.alarm_runtime = None
+
+        # Flush dirty playlists and stop background auto-save
+        await self.playlist_manager.stop_autosave()
+
+        # Stop DisplayManager (before streaming/slimproto — reverse of start order)
+        if self.display_manager is not None:
+            await self.display_manager.stop()
 
         # Stop Web server (clients get 503)
         if self.web_server:
@@ -427,6 +525,25 @@ class ResonanceServer:
         based on the transition parameters we send in the strm frame.
         """
         player_id = event.player_id
+
+        # ── Diagnostic: trace every STMd event ──
+        _diag_cur_gen = self.streaming_server.get_stream_generation(player_id)
+        _diag_prefetch_gen = self._prefetched_generation.get(player_id)
+        _diag_playlist = self.playlist_manager.get(player_id) if player_id in self.playlist_manager else None
+        _diag_cur_track = _diag_playlist.current_track if _diag_playlist else None
+        _diag_next_track = _diag_playlist.peek_next() if _diag_playlist else None
+        logger.info(
+            "[DIAG-DECODE] STMd player=%s event_gen=%s current_gen=%s prefetch_gen=%s "
+            "cur_track=%s (idx=%s/%s) next_track=%s",
+            player_id,
+            event.stream_generation,
+            _diag_cur_gen,
+            _diag_prefetch_gen,
+            getattr(_diag_cur_track, "title", None),
+            getattr(_diag_playlist, "current_index", "?"),
+            len(_diag_playlist) if _diag_playlist else "?",
+            getattr(_diag_next_track, "title", None),
+        )
 
         # Generation guard — ignore stale STMd from a previous stream.
         if event.stream_generation is not None:
@@ -532,9 +649,16 @@ class ResonanceServer:
         send_transition_duration = runtime_params.transition_duration
         send_replay_gain = runtime_params.replay_gain
 
+        # Remote tracks: skip server-side crossfade (requires local files for SoX),
+        # use queue_url() instead of queue_file().
+        _next_is_remote = getattr(next_track, "is_remote", False)
+
         # Optional server-side overlap engine for real mixed crossfades.
+        # Only available for local files — remote URLs cannot be mixed by SoX.
         if (
-            current_track is not None
+            not _next_is_remote
+            and current_track is not None
+            and not getattr(current_track, "is_remote", False)
             and runtime_params.transition_type in (1, 5)
             and runtime_params.transition_duration > 0
         ):
@@ -573,6 +697,14 @@ class ResonanceServer:
                 send_replay_gain = 0
             else:
                 self.streaming_server.queue_file(player_id, Path(next_track.path))
+        elif _next_is_remote:
+            self.streaming_server.queue_url(
+                player_id,
+                getattr(next_track, "effective_stream_url", next_track.path),
+                content_type=getattr(next_track, "content_type", None) or "audio/mpeg",
+                is_live=getattr(next_track, "is_live", False),
+                title=next_track.title or next_track.path,
+            )
         else:
             self.streaming_server.queue_file(player_id, Path(next_track.path))
 
@@ -624,19 +756,38 @@ class ResonanceServer:
             decode_ready_handled[player_id] = decode_ready_gen
 
         logger.info(
-            "Prefetched next track for player %s: %s (transition=%d/%ds, mixed=%s, gen=%s)",
+            "[DIAG-DECODE] Prefetched next track for player %s: %s (transition=%d/%ds, mixed=%s, gen=%s, "
+            "flags=0x%02x, replay_gain=%d, format_override=%s)",
             player_id,
             next_track.title,
             send_transition_type,
             send_transition_duration,
             use_server_side_crossfade,
             new_gen,
+            runtime_params.flags,
+            send_replay_gain,
+            stream_format_hint_override,
         )
 
     async def _on_track_started(self, event: PlayerTrackStartedEvent) -> None:
         """Advance playlist metadata when a prefetched stream actually starts (STMs)."""
         player_id = event.player_id
         started_gen = event.stream_generation
+
+        # ── Diagnostic: trace every STMs event ──
+        _diag_prefetch_gen = self._prefetched_generation.get(player_id)
+        _diag_cur_gen = self.streaming_server.get_stream_generation(player_id)
+        _diag_playlist = self.playlist_manager.get(player_id) if player_id in self.playlist_manager else None
+        _diag_cur_track = _diag_playlist.current_track if _diag_playlist else None
+        logger.info(
+            "[DIAG-STARTED] STMs player=%s started_gen=%s current_gen=%s prefetch_gen=%s "
+            "cur_track=%s (idx=%s/%s)",
+            player_id, started_gen, _diag_cur_gen, _diag_prefetch_gen,
+            getattr(_diag_cur_track, "title", None),
+            getattr(_diag_playlist, "current_index", "?"),
+            len(_diag_playlist) if _diag_playlist else "?",
+        )
+
         if started_gen is None:
             return
 
@@ -679,6 +830,23 @@ class ResonanceServer:
     async def _on_track_finished(self, event: PlayerTrackFinishedEvent) -> None:
         """Handle track finished event by playing the next track in the playlist."""
         player_id = event.player_id
+
+        # ── Diagnostic: trace every STMu event ──
+        _diag_cur_gen = self.streaming_server.get_stream_generation(player_id)
+        _diag_prefetch_gen = self._prefetched_generation.get(player_id)
+        _diag_suppress = self._suppress_track_finished_until.get(player_id)
+        _diag_now = asyncio.get_running_loop().time()
+        _diag_playlist = self.playlist_manager.get(player_id) if player_id in self.playlist_manager else None
+        _diag_cur_track = _diag_playlist.current_track if _diag_playlist else None
+        logger.info(
+            "[DIAG-FINISHED] STMu player=%s event_gen=%s current_gen=%s prefetch_gen=%s "
+            "suppress_remaining=%.3fs cur_track=%s (idx=%s/%s)",
+            player_id, event.stream_generation, _diag_cur_gen, _diag_prefetch_gen,
+            max(0, (_diag_suppress or 0) - _diag_now),
+            getattr(_diag_cur_track, "title", None),
+            getattr(_diag_playlist, "current_index", "?"),
+            len(_diag_playlist) if _diag_playlist else "?",
+        )
 
         # Suppress late STMu from a previous stream right after a manual track start.
         # This prevents: user clicks track A -> server starts A -> late STMu arrives -> server jumps to next.
@@ -771,8 +939,17 @@ class ResonanceServer:
             current_muted = getattr(player.status, "muted", False)
             await player.set_volume(current_volume, current_muted)
 
-            # Queue file in streaming server (cancels old stream + increments generation)
-            self.streaming_server.queue_file(player_id, Path(next_track.path))
+            # Queue track in streaming server (cancels old stream + increments generation)
+            if getattr(next_track, "is_remote", False):
+                self.streaming_server.queue_url(
+                    player_id,
+                    getattr(next_track, "effective_stream_url", next_track.path),
+                    content_type=getattr(next_track, "content_type", None) or "audio/mpeg",
+                    is_live=getattr(next_track, "is_live", False),
+                    title=next_track.title or next_track.path,
+                )
+            else:
+                self.streaming_server.queue_file(player_id, Path(next_track.path))
 
             # Store track duration for server-side track-end detection.
             # Controller-class players with transitionType=0 never send STMd/STMu,
@@ -804,6 +981,117 @@ class ResonanceServer:
             )
         else:
             logger.info("Playlist finished for player %s (all %d tracks played)", player_id, len(playlist))
+
+    async def _on_live_stream_dropped(self, event: LiveStreamDroppedEvent) -> None:
+        """Handle a live radio stream that dropped unexpectedly.
+
+        Mirrors LMS ``_RetryOrNext`` (StreamingController.pm L910-930):
+        if the stream was live, remote, played for >10 s, and we haven't
+        exhausted retries, re-queue the same URL and send a new ``strm``
+        command so the player reconnects seamlessly.
+        """
+        player_id = event.player_id
+
+        # ── Guard 1: generation must still match (no user action replaced it) ──
+        current_gen = self.streaming_server.get_stream_generation(player_id)
+        if event.stream_generation is not None and current_gen != event.stream_generation:
+            logger.info(
+                "[RESTREAM] Ignoring stale live-stream-dropped for player %s "
+                "(event_gen=%s, current_gen=%s)",
+                player_id, event.stream_generation, current_gen,
+            )
+            return
+
+        # ── Guard 2: at least 10 s of playback (LMS: $elapsed > 10) ──
+        stream_age = self.streaming_server.get_stream_generation_age(player_id)
+        min_elapsed = self.streaming_server.MIN_ELAPSED_FOR_RESTREAM
+        if stream_age is not None and stream_age < min_elapsed:
+            logger.info(
+                "[RESTREAM] Stream too short for re-stream player=%s age=%.1fs (min %.0fs)",
+                player_id, stream_age, min_elapsed,
+            )
+            return
+
+        # ── Guard 3: retry budget ──
+        if not self.streaming_server.record_restream_attempt(player_id):
+            # Budget exhausted — let normal STMu → advance/stop proceed.
+            logger.info(
+                "[RESTREAM] Retry budget exhausted for player %s — not re-streaming",
+                player_id,
+            )
+            return
+
+        # ── Guard 4: player still exists ──
+        player = await self.player_registry.get_by_mac(player_id)
+        if not player:
+            logger.info("[RESTREAM] Player %s no longer connected — skipping", player_id)
+            return
+
+        # ── Suppress any pending/upcoming STMu from the old stream ──
+        # The old stream's buffer will drain and fire STMu, which must NOT
+        # advance the playlist — we are re-queuing the SAME track.
+        self.suppress_track_finished_for_player(player_id, seconds=10.0)
+
+        retry_count = self.streaming_server.get_restream_retry_count(player_id)
+        logger.info(
+            "[RESTREAM] Re-streaming live radio for player %s "
+            "(attempt %d/%d, age=%.1fs, url=%s)",
+            player_id,
+            retry_count,
+            self.streaming_server.MAX_RESTREAM_RETRIES,
+            stream_age or 0.0,
+            event.title or event.remote_url,
+        )
+
+        # ── Re-queue the same URL (is_restream=True preserves retry counter) ──
+        self.streaming_server.queue_url(
+            player_id,
+            event.remote_url,
+            content_type=event.content_type,
+            is_live=True,
+            title=event.title,
+            is_restream=True,
+        )
+
+        # ── Send strm command so the player connects to the new stream ──
+        # Resolve volume first (audg must precede strm on some models).
+        current_volume = getattr(player.status, "volume", 100)
+        current_muted = getattr(player.status, "muted", False)
+        await player.set_volume(current_volume, current_muted)
+
+        # Determine format hint from content type (same as initial play).
+        _ct_to_fmt = {
+            "audio/mpeg": "mp3",
+            "audio/mp3": "mp3",
+            "audio/aac": "aac",
+            "audio/aacp": "aac",
+            "audio/ogg": "ogg",
+            "application/ogg": "ogg",
+            "audio/flac": "flc",
+        }
+        format_hint = _ct_to_fmt.get(event.content_type, "mp3")
+
+        # Use the playlist's current track to build the strm command.
+        playlist = self.playlist_manager.get(player_id)
+        current_track = playlist.current_track if playlist else None
+
+        if current_track is not None:
+            server_ip = self.slimproto.get_advertise_ip_for_player(player)
+            await player.start_track(
+                current_track,
+                server_port=self.web_port,
+                server_ip=server_ip,
+                format_hint_override=format_hint,
+            )
+        else:
+            # Fallback: use start_stream directly with the URL path.
+            server_ip = self.slimproto.get_advertise_ip_for_player(player)
+            await player.start_stream(
+                event.remote_url,
+                server_port=self.web_port,
+                server_ip=server_ip,
+                format_hint=format_hint,
+            )
 
     def suppress_track_finished_for_player(self, player_mac: str, seconds: float = 1.0) -> None:
         """

@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from resonance.core.db.query_builder import AlbumFilter, ArtistFilter, TrackFilter
 from resonance.web.handlers import CommandContext
 from resonance.web.jsonrpc_helpers import (
     build_album_item,
@@ -72,41 +73,8 @@ async def cmd_artists(
 
     db = ctx.music_library._db
 
-    # Build query based on filters
-    if role_id is not None:
-        # Filter by role
-        total_count = await db.count_artists_by_role_id(role_id)
-        rows = await db.list_artists_with_album_counts_by_role_id(
-            role_id=role_id,
-            offset=start,
-            limit=items,
-        )
-    elif genre_id is not None:
-        # Filter by genre
-        total_count = await db.count_artists_by_genre_id(genre_id)
-        rows = await db.list_artists_by_genre_id(
-            genre_id=genre_id,
-            offset=start,
-            limit=items,
-        )
-    elif year is not None:
-        # Filter by year
-        total_count = await db.count_artists_by_year(year)
-        rows = await db.list_artists_with_album_counts_by_year(
-            year=year,
-            offset=start,
-            limit=items,
-        )
-    elif compilation is not None:
-        # Filter by compilation
-        total_count = await db.count_artists_by_compilation(compilation)
-        rows = await db.list_artists_with_album_counts_by_compilation(
-            compilation=compilation,
-            offset=start,
-            limit=items,
-        )
-    elif search_term:
-        # Search - use list_artists with search
+    if search_term:
+        # Search — uses legacy list_artists with search (not filter-based)
         rows = await db.list_artists(
             search=search_term,
             offset=start,
@@ -114,9 +82,17 @@ async def cmd_artists(
         )
         total_count = len(rows)  # Approximate for search
     else:
-        # All artists with album counts
-        total_count = await db.count_artists()
-        rows = await db.list_artists_with_album_counts(
+        # Build composable filter
+        f = ArtistFilter(
+            genre_id=genre_id,
+            role_id=role_id,
+            year=year,
+            compilation=compilation,
+        )
+
+        total_count = await db.count_artists_filtered(f)
+        rows = await db.list_artists_filtered(
+            f,
             offset=start,
             limit=items,
             order_by=sort_key,
@@ -168,86 +144,14 @@ async def cmd_albums(
     compilation = get_filter_int(tagged_params, "compilation")
     search_term = get_filter_str(tagged_params, "search")
 
+    # Parse sort
+    sort_key = tagged_params.get("sort", "album").lower()
+
     db = ctx.music_library._db
     server_url = f"http://{ctx.server_host}:{ctx.server_port}"
 
-    # Handle combined filters
-    if compilation is not None and genre_id is not None:
-        total_count = await db.count_albums_by_compilation_and_genre_id(compilation, genre_id)
-        rows = await db.list_albums_with_track_counts_by_compilation_and_genre_id(
-            compilation=compilation,
-            genre_id=genre_id,
-            offset=start,
-            limit=items,
-        )
-    elif compilation is not None and year is not None:
-        total_count = await db.count_albums_by_compilation_and_year(compilation, year)
-        rows = await db.list_albums_with_track_counts_by_compilation_and_year(
-            compilation=compilation,
-            year=year,
-            offset=start,
-            limit=items,
-        )
-    elif compilation is not None and artist_id is not None:
-        total_count = await db.count_albums_by_compilation_and_artist(compilation, artist_id)
-        rows = await db.list_albums_with_track_counts_by_compilation_and_artist(
-            compilation=compilation,
-            artist_id=artist_id,
-            offset=start,
-            limit=items,
-        )
-    elif artist_id is not None and year is not None:
-        total_count = await db.count_albums_by_artist_and_year(artist_id, year)
-        rows = await db.list_albums_with_track_counts_by_artist_and_year(
-            artist_id=artist_id,
-            year=year,
-            offset=start,
-            limit=items,
-        )
-    elif genre_id is not None and year is not None:
-        total_count = await db.count_albums_by_genre_and_year(genre_id, year)
-        rows = await db.list_albums_by_genre_and_year(
-            genre_id=genre_id,
-            year=year,
-            offset=start,
-            limit=items,
-        )
-    elif role_id is not None:
-        total_count = await db.count_albums_by_role_id(role_id)
-        rows = await db.list_albums_with_track_counts_by_role_id(
-            role_id=role_id,
-            offset=start,
-            limit=items,
-        )
-    elif genre_id is not None:
-        total_count = await db.count_albums_by_genre_id(genre_id)
-        rows = await db.list_albums_by_genre_id(
-            genre_id=genre_id,
-            offset=start,
-            limit=items,
-        )
-    elif artist_id is not None:
-        total_count = await db.count_albums_by_artist(artist_id)
-        rows = await db.list_albums_with_track_counts_by_artist(
-            artist_id=artist_id,
-            offset=start,
-            limit=items,
-        )
-    elif year is not None:
-        total_count = await db.count_albums_by_year(year)
-        rows = await db.list_albums_with_track_counts_by_year(
-            year=year,
-            offset=start,
-            limit=items,
-        )
-    elif compilation is not None:
-        total_count = await db.count_albums_by_compilation(compilation)
-        rows = await db.list_albums_with_track_counts_by_compilation(
-            compilation=compilation,
-            offset=start,
-            limit=items,
-        )
-    elif search_term:
+    if search_term:
+        # Search — uses legacy list_albums with search (not filter-based)
         rows = await db.list_albums(
             search=search_term,
             offset=start,
@@ -255,10 +159,21 @@ async def cmd_albums(
         )
         total_count = len(rows)
     else:
-        total_count = await db.count_albums()
-        rows = await db.list_albums_with_track_counts(
+        # Build composable filter
+        f = AlbumFilter(
+            artist_id=artist_id,
+            genre_id=genre_id,
+            year=year,
+            compilation=compilation,
+            role_id=role_id,
+        )
+
+        total_count = await db.count_albums_filtered(f)
+        rows = await db.list_albums_filtered(
+            f,
             offset=start,
             limit=items,
+            order_by=sort_key,
         )
 
     # Build response items
@@ -309,117 +224,14 @@ async def cmd_titles(
     compilation = get_filter_int(tagged_params, "compilation")
     search_term = get_filter_str(tagged_params, "search")
 
+    # Parse sort
+    sort_key = tagged_params.get("sort", "title").lower()
+
     db = ctx.music_library._db
     server_url = f"http://{ctx.server_host}:{ctx.server_port}"
 
-    # Handle combined filters
-    if genre_id is not None and year is not None:
-        total_count = await db.count_tracks_by_genre_and_year(genre_id, year)
-        rows = await db.list_tracks_by_genre_and_year(
-            genre_id=genre_id,
-            year=year,
-            offset=start,
-            limit=items,
-        )
-    elif genre_id is not None and artist_id is not None:
-        total_count = await db.count_tracks_by_genre_and_artist(genre_id, artist_id)
-        rows = await db.list_tracks_by_genre_and_artist(
-            genre_id=genre_id,
-            artist_id=artist_id,
-            offset=start,
-            limit=items,
-        )
-    elif compilation is not None and genre_id is not None:
-        total_count = await db.count_tracks_by_compilation_and_genre_id(compilation, genre_id)
-        rows = await db.list_tracks_by_compilation_and_genre_id(
-            compilation=compilation,
-            genre_id=genre_id,
-            offset=start,
-            limit=items,
-        )
-    elif compilation is not None and year is not None:
-        total_count = await db.count_tracks_by_compilation_and_year(compilation, year)
-        rows = await db.list_tracks_by_compilation_and_year(
-            compilation=compilation,
-            year=year,
-            offset=start,
-            limit=items,
-        )
-    elif compilation is not None and artist_id is not None:
-        total_count = await db.count_tracks_by_compilation_and_artist(compilation, artist_id)
-        rows = await db.list_tracks_by_compilation_and_artist(
-            compilation=compilation,
-            artist_id=artist_id,
-            offset=start,
-            limit=items,
-        )
-    elif compilation is not None and album_id is not None:
-        total_count = await db.count_tracks_by_compilation_and_album(compilation, album_id)
-        rows = await db.list_tracks_by_compilation_and_album(
-            compilation=compilation,
-            album_id=album_id,
-            offset=start,
-            limit=items,
-        )
-    elif artist_id is not None and year is not None:
-        total_count = await db.count_tracks_by_artist_and_year(artist_id, year)
-        rows = await db.list_tracks_by_artist_and_year(
-            artist_id=artist_id,
-            year=year,
-            offset=start,
-            limit=items,
-        )
-    elif album_id is not None and year is not None:
-        total_count = await db.count_tracks_by_album_and_year(album_id, year)
-        rows = await db.list_tracks_by_album_and_year(
-            album_id=album_id,
-            year=year,
-            offset=start,
-            limit=items,
-        )
-    elif role_id is not None:
-        total_count = await db.count_tracks_by_role_id(role_id)
-        rows = await db.list_tracks_by_role_id(
-            role_id=role_id,
-            offset=start,
-            limit=items,
-        )
-    elif genre_id is not None:
-        total_count = await db.count_tracks_by_genre_id(genre_id)
-        rows = await db.list_tracks_by_genre_id(
-            genre_id=genre_id,
-            offset=start,
-            limit=items,
-        )
-    elif artist_id is not None:
-        total_count = await db.count_tracks_by_artist(artist_id)
-        rows = await db.list_tracks_by_artist(
-            artist_id=artist_id,
-            offset=start,
-            limit=items,
-        )
-    elif album_id is not None:
-        total_count = await db.count_tracks_by_album(album_id)
-        rows = await db.list_tracks_by_album(
-            album_id=album_id,
-            offset=start,
-            limit=items,
-        )
-    elif year is not None:
-        total_count = await db.count_tracks_by_year(year)
-        rows = await db.list_tracks_by_year(
-            year=year,
-            offset=start,
-            limit=items,
-        )
-    elif compilation is not None:
-        total_count = await db.count_tracks_by_compilation(compilation)
-        rows = await db.list_tracks_by_compilation(
-            compilation=compilation,
-            offset=start,
-            limit=items,
-        )
-    elif search_term:
+    if search_term:
+        # Search — uses dedicated FTS/LIKE search (not filter-based)
         rows = await db.search_tracks(
             term=search_term,
             offset=start,
@@ -427,10 +239,22 @@ async def cmd_titles(
         )
         total_count = len(rows)
     else:
-        total_count = await db.count_tracks()
-        rows = await db.list_tracks(
+        # Build composable filter
+        f = TrackFilter(
+            genre_id=genre_id,
+            artist_id=artist_id,
+            album_id=album_id,
+            year=year,
+            compilation=compilation,
+            role_id=role_id,
+        )
+
+        total_count = await db.count_tracks_filtered(f)
+        rows = await db.list_tracks_filtered(
+            f,
             offset=start,
             limit=items,
+            order_by=sort_key,
         )
 
     # Build response items
@@ -449,7 +273,7 @@ async def cmd_genres(
     """
     Handle 'genres' command.
 
-    Lists all genres with optional pagination.
+    Lists all genres with track counts.
     """
     start, items = parse_start_items(params)
     tagged_params = parse_tagged_params(params)
@@ -462,7 +286,6 @@ async def cmd_genres(
     total_count = await db.count_genres()
     rows = await db.list_genres(offset=start, limit=items)
 
-    # Build response items
     genres_loop = []
     for row in rows:
         item = build_genre_item(row, tags)
@@ -478,8 +301,7 @@ async def cmd_roles(
     """
     Handle 'roles' command.
 
-    Lists all contributor roles (for role_id: filter discovery).
-    Standard roles: artist, albumartist, composer, conductor, band
+    Lists all contributor roles (artist, albumartist, composer, conductor, band).
     """
     start, items = parse_start_items(params)
     tagged_params = parse_tagged_params(params)
@@ -492,7 +314,6 @@ async def cmd_roles(
     total_count = await db.count_roles()
     rows = await db.list_roles(offset=start, limit=items)
 
-    # Build response items
     roles_loop = []
     for row in rows:
         item = build_role_item(row, tags)
@@ -509,54 +330,55 @@ async def cmd_search(
     Handle 'search' command.
 
     Performs a full-text search across artists, albums, and tracks.
-    Returns combined results.
+    Returns combined results from all three categories.
+
+    Parameters:
+    - term:<query> : The search query string
     """
     tagged_params = parse_tagged_params(params)
-    search_term = get_filter_str(tagged_params, "term")
+    start, items = parse_start_items(params)
 
-    if not search_term:
-        # Try to get term from positional params
-        for param in params[1:]:
-            if isinstance(param, str) and ":" not in param:
-                search_term = param
-                break
+    tags_str = tagged_params.get("tags", "")
+    tags = parse_tags_string(tags_str) if tags_str else None
 
+    search_term = tagged_params.get("term", "")
     if not search_term:
-        return {
-            "artists_count": 0,
-            "albums_count": 0,
-            "tracks_count": 0,
-            "artists_loop": [],
-            "albums_loop": [],
-            "titles_loop": [],
-        }
+        return {"count": 0}
 
     db = ctx.music_library._db
     server_url = f"http://{ctx.server_host}:{ctx.server_port}"
 
-    # Search all entity types
-    artists = await db.list_artists(search=search_term, offset=0, limit=10)
-    albums = await db.list_albums(search=search_term, offset=0, limit=10)
-    tracks = await db.search_tracks(term=search_term, offset=0, limit=10)
+    # Search tracks
+    tracks = await db.search_tracks(query=search_term, limit=items, offset=start)
+    tracks_loop = [build_track_item(t, tags, server_url=server_url) for t in tracks]
 
-    # Build response
+    # Search artists
+    artists = await db.list_artists(search=search_term, limit=items, offset=start)
     artists_loop = []
-    for row in artists:
-        artists_loop.append(build_artist_item(row))
+    for a in artists:
+        if isinstance(a, dict):
+            artists_loop.append(build_artist_item(a, tags))
+        else:
+            artists_loop.append({"artist": str(a)})
 
+    # Search albums
+    albums = await db.list_albums(search=search_term, limit=items, offset=start)
     albums_loop = []
-    for row in albums:
-        albums_loop.append(build_album_item(row, server_url=server_url))
+    for al in albums:
+        if isinstance(al, dict):
+            albums_loop.append(build_album_item(al, tags, server_url=server_url))
+        else:
+            albums_loop.append({"album": str(al)})
 
-    titles_loop = []
-    for row in tracks:
-        titles_loop.append(build_track_item(row, server_url=server_url))
+    result: dict[str, Any] = {"count": len(tracks_loop) + len(artists_loop) + len(albums_loop)}
+    if tracks_loop:
+        result["tracks_loop"] = tracks_loop
+        result["tracks_count"] = len(tracks_loop)
+    if artists_loop:
+        result["artists_loop"] = artists_loop
+        result["artists_count"] = len(artists_loop)
+    if albums_loop:
+        result["albums_loop"] = albums_loop
+        result["albums_count"] = len(albums_loop)
 
-    return {
-        "artists_count": len(artists),
-        "albums_count": len(albums),
-        "tracks_count": len(tracks),
-        "artists_loop": artists_loop,
-        "albums_loop": albums_loop,
-        "titles_loop": titles_loop,
-    }
+    return result

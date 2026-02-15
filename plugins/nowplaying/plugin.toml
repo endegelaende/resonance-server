@@ -1,0 +1,6 @@
+[plugin]
+name = "nowplaying"
+version = "0.1.0"
+description = "Tracks recently played songs and provides play statistics"
+author = "Tutorial"
+min_resonance_version = "0.1.0"

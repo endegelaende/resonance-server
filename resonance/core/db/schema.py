@@ -24,7 +24,7 @@ from typing import Final
 import aiosqlite
 
 # Bump when you change the schema and add a migration in `migrate()`.
-SCHEMA_VERSION: Final[int] = 8
+SCHEMA_VERSION: Final[int] = 9
 
 
 async def ensure_schema(conn: aiosqlite.Connection) -> None:
@@ -363,6 +363,61 @@ async def migrate(conn: aiosqlite.Connection, *, from_version: int, to_version: 
 
         await conn.commit()
         from_version = 8
+
+    # v8 -> v9
+    if from_version == 8 and to_version >= 9:
+        # FTS5 full-text search virtual table for tracks.
+        # `content='tracks'` makes this a content-sync table (external content FTS);
+        # triggers keep it in sync automatically.
+        # `unicode61 remove_diacritics 2` normalises accented characters so that
+        # e.g. "Ärger" matches a query for "arger".
+        await conn.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS tracks_fts USING fts5(
+                title, artist, album, album_artist,
+                content='tracks', content_rowid='id',
+                tokenize='unicode61 remove_diacritics 2'
+            )
+            """
+        )
+
+        # Triggers: keep FTS index in sync with the tracks table.
+        await conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS tracks_fts_insert AFTER INSERT ON tracks BEGIN
+                INSERT INTO tracks_fts(rowid, title, artist, album, album_artist)
+                VALUES (new.id, new.title, new.artist, new.album, new.album_artist);
+            END
+            """
+        )
+
+        await conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS tracks_fts_delete AFTER DELETE ON tracks BEGIN
+                INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, album_artist)
+                VALUES ('delete', old.id, old.title, old.artist, old.album, old.album_artist);
+            END
+            """
+        )
+
+        await conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS tracks_fts_update AFTER UPDATE ON tracks BEGIN
+                INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, album_artist)
+                VALUES ('delete', old.id, old.title, old.artist, old.album, old.album_artist);
+                INSERT INTO tracks_fts(rowid, title, artist, album, album_artist)
+                VALUES (new.id, new.title, new.artist, new.album, new.album_artist);
+            END
+            """
+        )
+
+        # Populate FTS table from existing tracks (initial rebuild).
+        await conn.execute(
+            "INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild');"
+        )
+
+        await conn.commit()
+        from_version = 9
 
     if from_version != to_version:
         raise RuntimeError(f"No migration path from {from_version} to {to_version}.")

@@ -6,6 +6,13 @@ Provides the /stream.mp3 endpoint for audio streaming to Squeezebox players.
 Decision logic for transcoding vs. direct streaming is centralized in
 resonance.streaming.policy to ensure consistency between the HTTP route
 and the player's format expectations (strm command).
+
+Remote URL proxy:
+    When a content-provider plugin queues a remote URL (via
+    ``StreamingServer.queue_url``), the streaming route fetches the URL
+    on behalf of the player and relays audio chunks.  This is necessary
+    because Squeezebox hardware cannot handle HTTPS and has limited HTTP
+    capabilities.
 """
 
 from __future__ import annotations
@@ -16,17 +23,20 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from resonance.core.events import LiveStreamDroppedEvent, event_bus
 from resonance.streaming.crossfade import (
     PreparedCrossfadePlan,
     build_crossfade_command,
     media_type_for_output_format,
 )
 from resonance.streaming.policy import needs_transcoding
+from resonance.streaming.server import RemoteStreamInfo
 from resonance.streaming.transcoder import get_transcode_config, transcode_stream
 
 if TYPE_CHECKING:
@@ -45,6 +55,14 @@ router = APIRouter(tags=["streaming"])
 # length, so we avoid warning in that case.
 _SUSPICIOUS_TRANSCODE_EOF_BYTES = 2 * 1024 * 1024  # 2MB
 _SUSPICIOUS_TRANSCODE_EOF_SECONDS = 1.0            # 1s
+
+# Timeout / buffer settings for remote URL proxy streaming.
+_REMOTE_CONNECT_TIMEOUT = 10.0   # seconds
+_REMOTE_READ_TIMEOUT = 30.0      # seconds
+_REMOTE_CHUNK_SIZE = 65536       # 64 KB — matches STREAM_BUFFER_SIZE
+
+# Shared httpx.AsyncClient for remote proxy streaming (created lazily).
+_httpx_client: httpx.AsyncClient | None = None
 
 # References set during route registration
 _streaming_server: StreamingServer | None = None
@@ -88,6 +106,7 @@ async def stream_audio(
 
     Decision logic (shared policy):
     - Uses `resonance.streaming.policy.needs_transcoding()` as the single source of truth.
+    - Remote URLs are proxy-streamed via ``_stream_remote_proxy()``.
 
     Args:
         request: The FastAPI request.
@@ -106,12 +125,34 @@ async def stream_audio(
     if player is None:
         raise HTTPException(status_code=400, detail="Missing player parameter")
 
-    # Resolve the file to stream
-    file_path = _streaming_server.resolve_file(player)
+    # ── Diagnostic: log every incoming stream request ──
+    _diag_gen = _streaming_server.get_stream_generation(player) if _streaming_server else None
+    logger.info(
+        "[DIAG-STREAM] >>> stream_audio called player=%s gen=%s user-agent=%s",
+        player,
+        _diag_gen,
+        request.headers.get("user-agent", "?")[:80],
+    )
+
+    # Unified resolution — returns either a local Path or a RemoteStreamInfo.
+    resolved = _streaming_server.resolve_stream(player)
+
+    # ---- Remote URL proxy path ----
+    if resolved.remote is not None:
+        logger.info(
+            "[DIAG-STREAM] player=%s gen=%s -> REMOTE PROXY: %s",
+            player, _diag_gen, resolved.remote.title or resolved.remote.url,
+        )
+        return await _stream_remote_proxy(request, player, resolved.remote)
+
+    # ---- Local file path (existing logic) ----
+    file_path = resolved.file_path
     if file_path is None:
+        logger.warning("[DIAG-STREAM] player=%s gen=%s -> NO FILE QUEUED (404)", player, _diag_gen)
         raise HTTPException(status_code=404, detail="No track queued for player")
 
     if not file_path.exists():
+        logger.warning("[DIAG-STREAM] player=%s gen=%s -> FILE NOT FOUND: %s", player, _diag_gen, file_path)
         raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
 
     file_size = file_path.stat().st_size
@@ -120,6 +161,12 @@ async def stream_audio(
     # Server-side crossfade plan (if pending for this generation).
     crossfade_plan = _streaming_server.pop_crossfade_plan(player, file_path=file_path)
     if crossfade_plan is not None:
+        logger.info(
+            "[DIAG-STREAM] player=%s gen=%s -> CROSSFADE path: prev=%s next=%s overlap=%.2fs output=%s",
+            player, _diag_gen,
+            crossfade_plan.previous_path.name, crossfade_plan.next_path.name,
+            crossfade_plan.overlap_seconds, crossfade_plan.output_format_hint,
+        )
         return await _stream_with_crossfade(request, player, crossfade_plan)
 
     # Get Range header from request
@@ -132,10 +179,21 @@ async def stream_audio(
         if player_client is not None and getattr(player_client, "info", None) is not None:
             device_type = player_client.info.device_type
 
+    # Check for seek position (diagnostic)
+    _diag_seek = _streaming_server.get_seek_position(player) if _streaming_server else None
+
     # Check if we need to transcode
     if needs_transcoding(suffix, device_type=device_type):
+        logger.info(
+            "[DIAG-STREAM] player=%s gen=%s -> TRANSCODE path: file=%s suffix=%s device=%s seek=%s",
+            player, _diag_gen, file_path.name, suffix, device_type, _diag_seek,
+        )
         return await _stream_with_transcoding(request, player, file_path)
     else:
+        logger.info(
+            "[DIAG-STREAM] player=%s gen=%s -> DIRECT path: file=%s suffix=%s size=%d range=%s device=%s",
+            player, _diag_gen, file_path.name, suffix, file_size, range_header, device_type,
+        )
         return await _stream_direct(request, player, file_path, file_size, range_header)
 
 
@@ -550,6 +608,313 @@ async def _stream_direct(
                 "Accept-Ranges": "bytes",
             },
         )
+
+
+# =============================================================================
+# Remote URL proxy streaming
+# =============================================================================
+
+
+def _get_httpx_client() -> httpx.AsyncClient:
+    """Return (and lazily create) the shared httpx client for remote proxying."""
+    global _httpx_client
+    if _httpx_client is None or _httpx_client.is_closed:
+        _httpx_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                connect=_REMOTE_CONNECT_TIMEOUT,
+                read=_REMOTE_READ_TIMEOUT,
+                write=None,
+                pool=None,
+            ),
+            follow_redirects=True,
+            # Request ICY metadata from Shoutcast/Icecast servers.
+            headers={"Icy-MetaData": "1"},
+        )
+    return _httpx_client
+
+
+async def _stream_remote_proxy(
+    request: Request,
+    player_mac: str,
+    remote: RemoteStreamInfo,
+) -> StreamingResponse:
+    """Proxy a remote HTTP(S) audio stream to the player.
+
+    The server fetches the remote URL and relays audio chunks so that
+    Squeezebox hardware (which cannot handle HTTPS) can play the stream.
+
+    ICY metadata (title changes) is stripped from the byte stream and
+    logged.  In a future iteration the parsed metadata will be forwarded
+    via Slimproto META frames.
+    """
+    if _streaming_server is None:
+        raise HTTPException(status_code=503, detail="Streaming server not initialized")
+
+    cancel_token = _streaming_server.get_cancellation_token(player_mac)
+    token_generation = getattr(cancel_token, "generation", None)
+
+    client = _get_httpx_client()
+
+    async def generate() -> AsyncIterator[bytes]:
+        started_at = time.time()
+        bytes_sent = 0
+        chunk_count = 0
+        abort_reason: str | None = None
+        resp: httpx.Response | None = None
+
+        try:
+            # Use streaming request so we can iterate chunks without
+            # buffering the entire (potentially infinite) response.
+            resp = await client.send(
+                client.build_request("GET", remote.url),
+                stream=True,
+            )
+            resp.raise_for_status()
+
+            # Parse ICY metadata interval if server advertises one.
+            icy_metaint_str = resp.headers.get("icy-metaint", "")
+            icy_metaint: int = int(icy_metaint_str) if icy_metaint_str.isdigit() else 0
+
+            # Determine actual content type from response if available.
+            _actual_ct = resp.headers.get("content-type", remote.content_type)
+
+            logger.info(
+                "[REMOTE] Proxy stream started player=%s gen=%s url=%s ct=%s icy_metaint=%d",
+                player_mac,
+                token_generation,
+                remote.title or remote.url,
+                _actual_ct,
+                icy_metaint,
+            )
+
+            if icy_metaint > 0:
+                # ICY-aware relay: strip inline metadata blocks.
+                async for chunk in _icy_strip_relay(
+                    resp.aiter_bytes(chunk_size=_REMOTE_CHUNK_SIZE),
+                    icy_metaint,
+                    player_mac,
+                    cancel_token,
+                    request,
+                ):
+                    yield chunk
+                    bytes_sent += len(chunk)
+                    chunk_count += 1
+            else:
+                # Simple relay — just forward chunks.
+                async for chunk in resp.aiter_bytes(chunk_size=_REMOTE_CHUNK_SIZE):
+                    if chunk_count % 4 == 0 and await request.is_disconnected():
+                        abort_reason = "disconnected"
+                        return
+                    if chunk_count % 4 == 0 and cancel_token and cancel_token.cancelled:
+                        abort_reason = "cancelled"
+                        return
+
+                    yield chunk
+                    bytes_sent += len(chunk)
+                    chunk_count += 1
+
+        except httpx.HTTPStatusError as exc:
+            abort_reason = f"http_{exc.response.status_code}"
+            logger.error(
+                "[REMOTE] HTTP error proxying for player %s: %s %s",
+                player_mac,
+                exc.response.status_code,
+                remote.url,
+            )
+        except httpx.RequestError as exc:
+            abort_reason = "request_error"
+            logger.error(
+                "[REMOTE] Request error proxying for player %s: %s",
+                player_mac,
+                exc,
+            )
+        except asyncio.CancelledError:
+            abort_reason = abort_reason or "cancelled_error"
+            raise
+        except Exception as exc:
+            abort_reason = abort_reason or "error"
+            logger.exception(
+                "[REMOTE] Unexpected error proxying for player %s: %s",
+                player_mac,
+                exc,
+            )
+        finally:
+            # Always close the upstream response to release the connection.
+            if resp is not None:
+                await resp.aclose()
+            elapsed = time.time() - started_at
+            final_reason = abort_reason or "eof"
+            logger.info(
+                "[REMOTE] Proxy stream finished player=%s gen=%s reason=%s chunks=%d bytes=%d elapsed=%.3fs url=%s",
+                player_mac,
+                token_generation,
+                final_reason,
+                chunk_count,
+                bytes_sent,
+                elapsed,
+                remote.title or remote.url,
+            )
+
+            # ── LMS _RetryOrNext equivalent: signal re-stream candidate ──
+            #
+            # For live streams that ended unexpectedly (not intentionally
+            # cancelled by the server, and not because the player
+            # disconnected), fire an event so the server can attempt to
+            # reconnect — mirroring LMS StreamingController.pm L920-927.
+            #
+            # Intentional endings that must NOT trigger re-stream:
+            #   "cancelled"       — server cancelled (track change / seek)
+            #   "cancelled_error" — asyncio.CancelledError (same cause)
+            #   "disconnected"    — player closed its HTTP connection
+            if remote.is_live and final_reason not in (
+                "cancelled", "cancelled_error", "disconnected",
+            ):
+                logger.info(
+                    "[REMOTE] Live stream dropped for player %s gen=%s reason=%s — firing re-stream event",
+                    player_mac,
+                    token_generation,
+                    final_reason,
+                )
+                event_bus.publish_sync(
+                    LiveStreamDroppedEvent(
+                        player_id=player_mac,
+                        stream_generation=token_generation,
+                        remote_url=remote.url,
+                        content_type=remote.content_type,
+                        title=remote.title,
+                    )
+                )
+
+    # Use the content type advertised by the provider; the player will
+    # rely on the format hint in the strm command for decoding.
+    return StreamingResponse(
+        generate(),
+        media_type=remote.content_type,
+        headers={
+            "Accept-Ranges": "none",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+async def _icy_strip_relay(
+    byte_stream: AsyncIterator[bytes],
+    metaint: int,
+    player_mac: str,
+    cancel_token: Any,
+    request: Request,
+) -> AsyncIterator[bytes]:
+    """Relay audio bytes from an ICY stream, stripping inline metadata.
+
+    Shoutcast/Icecast servers interleave metadata blocks every *metaint*
+    audio bytes.  The metadata block is preceded by a single length byte
+    (actual length = value * 16).  We strip these blocks and yield only
+    the audio data.
+
+    Parsed metadata (e.g. ``StreamTitle``) is logged; in a future version
+    it will be forwarded to the player via Slimproto META frames.
+    """
+    buf = bytearray()
+    audio_remaining = metaint  # bytes of audio until next metadata block
+    chunk_idx = 0
+
+    async for raw_chunk in byte_stream:
+        if chunk_idx % 4 == 0 and await request.is_disconnected():
+            return
+        if chunk_idx % 4 == 0 and cancel_token and cancel_token.cancelled:
+            return
+
+        buf.extend(raw_chunk)
+        chunk_idx += 1
+
+        while buf:
+            if audio_remaining > 0:
+                # Yield up to audio_remaining bytes of audio data.
+                take = min(len(buf), audio_remaining)
+                yield bytes(buf[:take])
+                del buf[:take]
+                audio_remaining -= take
+            else:
+                # Next byte is the ICY metadata length indicator.
+                if len(buf) < 1:
+                    break  # need more data
+                meta_len = buf[0] * 16
+                total_meta = 1 + meta_len
+                if len(buf) < total_meta:
+                    break  # need more data
+                if meta_len > 0:
+                    meta_bytes = bytes(buf[1:total_meta])
+                    _log_icy_metadata(meta_bytes, player_mac)
+                del buf[:total_meta]
+                audio_remaining = metaint
+
+
+def _log_icy_metadata(meta_bytes: bytes, player_mac: str) -> None:
+    """Parse an ICY metadata block, log it, and store the StreamTitle.
+
+    The extracted ``StreamTitle`` is saved on the module-level
+    ``_streaming_server`` so that ``cmd_status`` can read it via
+    ``streaming_server.get_icy_title(player_mac)`` and expose it as
+    ``current_title`` for radio streams.
+
+    When the title actually changes (not a repeat of the same ICY block),
+    a ``PlayerPlaylistEvent(action="newmetadata")`` is fired so that
+    Cometd subscribers receive a fresh ``status`` response immediately.
+    This mirrors LMS ``setCurrentTitle()`` (Info.pm L535-540) which fires
+    ``['playlist', 'newsong', $title]`` on title change.
+    """
+    import re
+
+    try:
+        text = meta_bytes.rstrip(b"\x00").decode("utf-8", errors="replace")
+        if not text:
+            return
+
+        logger.info("[ICY] player=%s metadata: %s", player_mac, text)
+
+        # Extract StreamTitle='Artist - Song'; from the ICY block.
+        match = re.search(r"StreamTitle='([^']*)'", text)
+        if match and _streaming_server is not None:
+            title = match.group(1).strip()
+            if title:
+                changed = _streaming_server.set_icy_title(player_mac, title)
+                logger.info(
+                    "[ICY] player=%s StreamTitle stored: %s", player_mac, title,
+                )
+
+                # ── Push notification on title change (LMS-equivalent) ──
+                # LMS fires `['playlist', 'newsong', $title]` when the
+                # ICY title changes, which triggers Cometd subscription
+                # re-execution so hardware players update Now Playing
+                # immediately instead of waiting for the next poll.
+                if changed:
+                    try:
+                        from resonance.core.events import (
+                            PlayerPlaylistEvent,
+                            event_bus,
+                        )
+
+                        event_bus.publish_sync(
+                            PlayerPlaylistEvent(
+                                player_id=player_mac,
+                                action="newmetadata",
+                                count=0,
+                            )
+                        )
+                        logger.debug(
+                            "[ICY] player=%s fired newmetadata event for title change",
+                            player_mac,
+                        )
+                    except Exception:
+                        # Non-critical — polling still works as fallback
+                        pass
+    except Exception:
+        pass
+
+
+# =============================================================================
+# Local file helpers
+# =============================================================================
 
 
 def _get_content_type(file_path: Path) -> str:

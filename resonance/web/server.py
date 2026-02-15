@@ -19,18 +19,22 @@ import logging
 import socket
 from contextlib import suppress
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
+from resonance.config.settings import get_settings, settings_loaded
 from resonance.web.cometd import CometdManager
 from resonance.web.jsonrpc import JsonRpcHandler
 from resonance.web.routes.api import register_api_routes
 from resonance.web.routes.artwork import register_artwork_routes
 from resonance.web.routes.cometd import register_cometd_routes
 from resonance.web.routes.streaming import register_streaming_routes
+from resonance.web.security import AuthMiddleware, RateLimitMiddleware
 
 if TYPE_CHECKING:
     from resonance.core.artwork import ArtworkManager
@@ -90,6 +94,7 @@ class WebServer:
         artwork_manager: ArtworkManager | None = None,
         slimproto: SlimprotoServer | None = None,
         server_uuid: str = "resonance",
+        cors_origins: str | list[str] = "*",
     ) -> None:
         """
         Initialize the WebServer.
@@ -102,6 +107,8 @@ class WebServer:
             artwork_manager: Optional artwork extraction/caching
             slimproto: Optional Slimproto server for player control
             server_uuid: Server UUID for identification (full UUID v4, 36 chars with dashes)
+            cors_origins: Allowed CORS origins. ``"*"`` permits all origins (default).
+                A comma-separated string or list of origin URLs restricts access.
         """
         self.player_registry = player_registry
         self.music_library = music_library
@@ -118,13 +125,39 @@ class WebServer:
         )
 
         # Add CORS middleware
+        if isinstance(cors_origins, str):
+            if cors_origins.strip() == "*":
+                origins: list[str] = ["*"]
+            else:
+                origins = [o.strip() for o in cors_origins.split(",") if o.strip()]
+        else:
+            origins = list(cors_origins)
+
         self.app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],  # TODO: Make configurable
+            allow_origins=origins,
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+        # Add security middleware (reads from ServerSettings if available).
+        # Middleware execution order is LIFO — last added runs first.
+        # We add rate-limit first, then auth, so auth checks run before
+        # rate-limit accounting (rejected auth requests don't count).
+        if settings_loaded():
+            _settings = get_settings()
+            self.app.add_middleware(
+                RateLimitMiddleware,
+                enabled=_settings.rate_limit_enabled,
+                requests_per_second=_settings.rate_limit_per_second,
+            )
+            self.app.add_middleware(
+                AuthMiddleware,
+                enabled=_settings.auth_enabled,
+                username=_settings.auth_username,
+                password_hash=_settings.auth_password_hash,
+            )
 
         # Create Cometd manager
         self.cometd_manager = CometdManager()
@@ -148,6 +181,8 @@ class WebServer:
 
         # Register routes
         self._register_routes()
+
+
 
     def _register_routes(self) -> None:
         """Register all routes with the FastAPI app."""
@@ -200,6 +235,14 @@ class WebServer:
             jsonrpc_handler=self.jsonrpc_handler,
         )
 
+        # Serve Svelte static build at / (must be last — catch-all)
+        _ui_build = Path(__file__).resolve().parent.parent.parent / "web-ui" / "build"
+        if _ui_build.is_dir() and any(_ui_build.iterdir()):
+            self.app.mount("/", StaticFiles(directory=str(_ui_build), html=True), name="webui")
+            logger.info("Svelte UI mounted from %s", _ui_build)
+        else:
+            logger.info("Svelte UI build not found at %s — skipping static mount", _ui_build)
+
     async def start(self, host: str = "0.0.0.0", port: int = 9000) -> None:
         """
         Start the web server.
@@ -246,6 +289,8 @@ class WebServer:
 
         logger.info("Web server started on http://%s:%d", host, port)
 
+
+
     async def stop(self) -> None:
         """Stop the web server."""
         # Stop Cometd manager
@@ -262,7 +307,10 @@ class WebServer:
             raise RuntimeError("Web server start requested without uvicorn task")
 
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout_s
+        start_time = loop.time()
+        deadline = start_time + timeout_s
+        attempt = 0
+        last_log_time = start_time
 
         while True:
             if self._serve_task.done():
@@ -275,15 +323,31 @@ class WebServer:
                     f"Web server exited during startup on {self._host}:{self._port}"
                 )
 
+            attempt += 1
             if await self._probe_healthcheck():
+                elapsed = loop.time() - start_time
+                logger.info(
+                    "Web server reachable after %.1fs (%d probes)",
+                    elapsed,
+                    attempt,
+                )
                 return
 
-            if loop.time() >= deadline:
+            now = loop.time()
+            if now - last_log_time >= 3.0:
+                logger.info(
+                    "Still waiting for web server startup… (%.0fs / %.0fs)",
+                    now - start_time,
+                    timeout_s,
+                )
+                last_log_time = now
+
+            if now >= deadline:
                 raise TimeoutError(
                     f"Timed out waiting for reachable web API on {self._host}:{self._port}"
                 )
 
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.25)
 
     async def _probe_healthcheck(self) -> bool:
         """Return True when this process serves /health on the configured host/port."""
@@ -294,9 +358,10 @@ class WebServer:
         try:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(probe_host, self._port),
-                timeout=0.2,
+                timeout=0.5,
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug("Health probe: connect failed: %s", exc)
             return False
 
         try:
@@ -307,19 +372,44 @@ class WebServer:
             ).encode("ascii")
             writer.write(request)
             await writer.drain()
-            response = await asyncio.wait_for(reader.read(2048), timeout=0.3)
-        except Exception:
+
+            # Read until EOF (connection close).  A single read() may only
+            # return HTTP headers on Windows where headers and body arrive
+            # in separate TCP segments.
+            chunks: list[bytes] = []
+            try:
+                async with asyncio.timeout(1.0):
+                    while True:
+                        chunk = await reader.read(4096)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        if sum(len(c) for c in chunks) > 8192:
+                            break
+            except TimeoutError:
+                pass
+            response = b"".join(chunks)
+        except Exception as exc:
+            logger.debug("Health probe: request/read failed: %s", exc)
             return False
         finally:
             writer.close()
             with suppress(Exception):
                 await writer.wait_closed()
 
-        return (
+        ok = (
             b"200 OK" in response
             and b'"status":"ok"' in response
             and b'"server":"resonance"' in response
         )
+        if not ok:
+            # Log first 300 bytes to diagnose unexpected responses
+            logger.debug(
+                "Health probe: unexpected response (%d bytes): %s",
+                len(response),
+                response[:300],
+            )
+        return ok
 
     async def _stop_uvicorn_task(self, *, force_cancel: bool = False) -> None:
         """Stop and await the uvicorn serve task if one is running."""

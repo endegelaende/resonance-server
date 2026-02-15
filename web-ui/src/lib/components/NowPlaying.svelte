@@ -8,7 +8,8 @@
 		SkipForward,
 		Volume2,
 		VolumeX,
-		Maximize2
+		Maximize2,
+		Radio
 	} from 'lucide-svelte';
 	import QualityBadge from './QualityBadge.svelte';
 	import CoverArt from './CoverArt.svelte';
@@ -19,6 +20,33 @@
 		colorStore.setFromImage(coverArt);
 	});
 
+	// ── Radio / Live stream detection ────────────────────────────
+	// A track is "radio" when the backend flags it as a remote live
+	// stream (source === "radio" or isLive === true).
+	const isRadio = $derived(
+		playerStore.currentTrack?.source === 'radio' ||
+		playerStore.currentTrack?.source === 'podcast'
+	);
+	const isLive = $derived(
+		Boolean(playerStore.currentTrack?.isLive)
+	);
+
+	// Display strings for radio mode (ICY metadata)
+	// - stationName: static title (= station/show name)
+	// - icyNowPlaying: full ICY StreamTitle ("Artist - Title" or freeform)
+	// - icyArtist / icyTitle: parsed from ICY when exactly one " - " separator
+	const stationName = $derived(playerStore.currentTrack?.title ?? '');
+	const icyNowPlaying = $derived(playerStore.currentTrack?.currentTitle ?? '');
+	const icyArtist = $derived(playerStore.currentTrack?.icyArtist ?? '');
+	const icyTitle = $derived(playerStore.currentTrack?.icyTitle ?? '');
+
+	// Has parsed ICY data (artist + title split)?
+	const hasIcyParsed = $derived(Boolean(icyArtist && icyTitle));
+	// Has any ICY data at all?
+	const hasIcyData = $derived(
+		Boolean(icyNowPlaying) && icyNowPlaying !== stationName
+	);
+
 	// Format seconds to mm:ss
 	function formatTime(seconds: number): string {
 		if (!seconds || seconds < 0) return '0:00';
@@ -27,13 +55,29 @@
 		return `${mins}:${secs.toString().padStart(2, '0')}`;
 	}
 
-	// Handle progress bar click
+	// Handle progress bar click (disabled for live streams)
 	function handleSeek(event: MouseEvent) {
+		if (isLive) return;
 		const target = event.currentTarget as HTMLDivElement;
 		const rect = target.getBoundingClientRect();
 		const percent = (event.clientX - rect.left) / rect.width;
 		const newTime = percent * playerStore.status.duration;
 		playerStore.seek(newTime);
+	}
+
+	// Map content_type to a human-readable format string for radio
+	function getRadioFormat(contentType?: string): string {
+		if (!contentType) return '';
+		const map: Record<string, string> = {
+			'audio/mpeg': 'MP3',
+			'audio/mp3': 'MP3',
+			'audio/aac': 'AAC',
+			'audio/aacp': 'AAC+',
+			'audio/ogg': 'OGG',
+			'audio/flac': 'FLAC',
+			'audio/x-flac': 'FLAC',
+		};
+		return map[contentType.toLowerCase()] || contentType.split('/').pop()?.toUpperCase() || '';
 	}
 
 	// Volume preview state
@@ -133,27 +177,70 @@
 			<!-- Track Info -->
 			<div class="flex flex-col gap-1 min-w-0 flex-1">
 				{#if playerStore.currentTrack}
-					<h2 class="text-xl font-semibold text-text truncate drop-shadow-sm">
-						{playerStore.currentTrack.title}
-					</h2>
-					<p class="text-subtext-0 truncate">
-						{playerStore.currentTrack.artist}
-					</p>
-					<p class="text-overlay-1 text-sm truncate">
-						{playerStore.currentTrack.album}
-					</p>
+					{#if isRadio || isLive}
+						<!-- ── Radio / Live Stream Mode ──────────────── -->
+						<!-- Station name as primary heading -->
+						<div class="flex items-center gap-2">
+							<h2 class="text-xl font-semibold text-text truncate drop-shadow-sm">
+								{stationName}
+							</h2>
+							{#if isLive}
+								<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-red-500/90 text-white shadow-sm shadow-red-500/30 shrink-0 animate-pulse">
+									<Radio size={12} />
+									LIVE
+								</span>
+							{/if}
+						</div>
 
-					<!-- Quality Badge -->
-					{#if playerStore.currentTrack.path}
+						<!-- ICY "Now Playing" — parsed artist + title or raw string -->
+						{#if hasIcyParsed}
+							<p class="text-subtext-0 truncate" title={icyNowPlaying}>
+								{icyArtist}
+							</p>
+							<p class="text-overlay-1 text-sm truncate" title={icyNowPlaying}>
+								{icyTitle}
+							</p>
+						{:else if hasIcyData}
+							<p class="text-subtext-0 truncate" title={icyNowPlaying}>
+								{icyNowPlaying}
+							</p>
+						{:else}
+							<p class="text-overlay-1 text-sm truncate italic">
+								Listening…
+							</p>
+						{/if}
+
+						<!-- Quality Badge for radio — use contentType + bitrate -->
 						<div class="mt-2">
 							<QualityBadge
-								format={getFormat(playerStore.currentTrack.path)}
-								sampleRate={playerStore.currentTrack.sampleRate}
-								bitDepth={playerStore.currentTrack.bitDepth}
+								format={getRadioFormat(playerStore.currentTrack.contentType)}
 								bitrate={playerStore.currentTrack.bitrate}
-								channels={playerStore.currentTrack.channels}
 							/>
 						</div>
+					{:else}
+						<!-- ── Local / Normal Track Mode ─────────────── -->
+						<h2 class="text-xl font-semibold text-text truncate drop-shadow-sm">
+							{playerStore.currentTrack.title}
+						</h2>
+						<p class="text-subtext-0 truncate">
+							{playerStore.currentTrack.artist}
+						</p>
+						<p class="text-overlay-1 text-sm truncate">
+							{playerStore.currentTrack.album}
+						</p>
+
+						<!-- Quality Badge -->
+						{#if playerStore.currentTrack.path}
+							<div class="mt-2">
+								<QualityBadge
+									format={getFormat(playerStore.currentTrack.path)}
+									sampleRate={playerStore.currentTrack.sampleRate}
+									bitDepth={playerStore.currentTrack.bitDepth}
+									bitrate={playerStore.currentTrack.bitrate}
+									channels={playerStore.currentTrack.channels}
+								/>
+							</div>
+						{/if}
 					{/if}
 				{:else}
 					<h2 class="text-xl font-semibold text-overlay-0">No track playing</h2>
@@ -162,24 +249,53 @@
 			</div>
 		</div>
 
-		<!-- Progress Bar -->
-		<div class="flex flex-col gap-2">
-			<button
-				class="w-full h-2 bg-surface-1/50 rounded-full cursor-pointer overflow-hidden group backdrop-blur-sm"
-				onclick={handleSeek}
-				aria-label="Seek"
-			>
-				<!-- Progress fill with dynamic gradient -->
-				<div
-					class="h-full rounded-full transition-all duration-150 dynamic-progress group-hover:shadow-[0_0_12px_rgba(var(--dynamic-accent-rgb),0.5)]"
-					style="width: {playerStore.progress}%"
-				></div>
-			</button>
-			<div class="flex justify-between text-sm text-overlay-1">
-				<span class="font-mono text-xs">{formatTime(playerStore.elapsedTime)}</span>
-				<span class="font-mono text-xs">{formatTime(playerStore.status.duration)}</span>
+		<!-- Progress Bar / Live Indicator -->
+		{#if isLive}
+			<!-- Live stream: no seekable progress, show elapsed listening time -->
+			<div class="flex flex-col gap-2">
+				<div class="w-full h-2 bg-surface-1/50 rounded-full overflow-hidden backdrop-blur-sm">
+					<!-- Animated "streaming" bar -->
+					<div
+						class="h-full rounded-full dynamic-progress animate-live-bar"
+						style="width: 100%; opacity: 0.6;"
+					></div>
+				</div>
+
+				<style>
+					/* Subtle pulsing animation for the live streaming bar */
+					@keyframes live-bar-pulse {
+						0%, 100% { opacity: 0.4; }
+						50% { opacity: 0.7; }
+					}
+					:global(.animate-live-bar) {
+						animation: live-bar-pulse 2s ease-in-out infinite;
+					}
+				</style>
+				<div class="flex justify-between text-sm text-overlay-1">
+					<span class="font-mono text-xs">{formatTime(playerStore.elapsedTime)}</span>
+					<span class="font-mono text-xs uppercase tracking-wide text-red-400/80">Live</span>
+				</div>
 			</div>
-		</div>
+		{:else}
+			<!-- Normal track: seekable progress bar -->
+			<div class="flex flex-col gap-2">
+				<button
+					class="w-full h-2 bg-surface-1/50 rounded-full cursor-pointer overflow-hidden group backdrop-blur-sm"
+					onclick={handleSeek}
+					aria-label="Seek"
+				>
+					<!-- Progress fill with dynamic gradient -->
+					<div
+						class="h-full rounded-full transition-all duration-150 dynamic-progress group-hover:shadow-[0_0_12px_rgba(var(--dynamic-accent-rgb),0.5)]"
+						style="width: {playerStore.progress}%"
+					></div>
+				</button>
+				<div class="flex justify-between text-sm text-overlay-1">
+					<span class="font-mono text-xs">{formatTime(playerStore.elapsedTime)}</span>
+					<span class="font-mono text-xs">{formatTime(playerStore.status.duration)}</span>
+				</div>
+			</div>
+		{/if}
 
 		<!-- Controls -->
 		<div class="flex items-center justify-between">

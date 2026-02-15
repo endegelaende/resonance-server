@@ -33,6 +33,8 @@ DEFAULT_AUDIO_EXTENSIONS: frozenset[str] = frozenset(
         ".wv",
         ".ape",
         ".mpc",
+        ".dsf",
+        ".dff",
     }
 )
 
@@ -318,13 +320,20 @@ def _tags_get(tags: dict[str, Any] | None, keys: Iterable[str]) -> Any:
 
 def _extract_metadata(path: Path) -> TrackMetadata:
     """
-    Extract metadata using mutagen.
+    Extract metadata using mutagen, with DSD fallback parser.
 
     Important: This function is intentionally synchronous; scanning can run it in a thread
     to keep the asyncio event loop responsive.
+
+    DSD files (DSF/DFF) are not supported by mutagen, so we fall back to our
+    custom binary header parser (resonance.core.dsd_parser).
     """
     audio = mutagen_file(path)
     if audio is None:
+        # mutagen doesn't support this format — try DSD parser for .dsf/.dff
+        suffix = path.suffix.lower()
+        if suffix in (".dsf", ".dff"):
+            return _extract_dsd_metadata(path)
         raise ValueError("unsupported or unreadable audio file")
 
     tags: dict[str, Any] | None = None
@@ -488,6 +497,81 @@ def _extract_metadata(path: Path) -> TrackMetadata:
         bit_depth=bit_depth,
         bitrate=bitrate,
         channels=channels,
+    )
+
+
+def _extract_dsd_metadata(path: Path) -> TrackMetadata:
+    """
+    Extract metadata from a DSD file (DSF or DFF) using our custom parser.
+
+    This is called as a fallback when mutagen returns None for DSD files.
+    Tag handling mirrors the main _extract_metadata path where possible.
+
+    LMS reference: Slim::Formats::DSD::getTag() — maps DIAR→ARTIST,
+    DITI→TITLE, and delegates to MP3::doTagMapping for embedded ID3v2.
+    """
+    from resonance.core.dsd_parser import DSDParseError, parse_dsd_file
+
+    try:
+        info = parse_dsd_file(path)
+    except DSDParseError as exc:
+        raise ValueError(f"DSD parse error: {exc}") from exc
+
+    title = info.title or path.stem
+    artist = _clean_str(info.artist)
+    album = _clean_str(info.album)
+    album_artist = _clean_str(info.album_artist)
+
+    # Build contributors from available DSD tags (mirrors main path logic)
+    contributors_pairs: list[tuple[str, str]] = []
+    if album_artist:
+        contributors_pairs.append(("albumartist", album_artist))
+    if artist:
+        contributors_pairs.append(("artist", artist))
+
+    # If we have ID3v2 tags (DSF), try to extract composer/conductor
+    if info.id3_tags:
+        for name in _parse_people_tag(_tags_get(info.id3_tags, ("TCOM", "composer", "COMPOSER"))):
+            contributors_pairs.append(("composer", name))
+        for name in _parse_people_tag(_tags_get(info.id3_tags, ("TPE3", "conductor", "CONDUCTOR"))):
+            contributors_pairs.append(("conductor", name))
+
+    # Dedupe (role, name), preserve order
+    seen_pairs: set[tuple[str, str]] = set()
+    contributors: list[tuple[str, str]] = []
+    for role, name in contributors_pairs:
+        r = (role or "").strip().lower()
+        n = (name or "").strip()
+        if not r or not n:
+            continue
+        key = (r, n)
+        if key not in seen_pairs:
+            seen_pairs.add(key)
+            contributors.append(key)
+
+    # Genres from ID3v2 (DSF only)
+    genres: tuple[str, ...] = ()
+    if info.id3_tags:
+        genres = _parse_genres(_tags_get(info.id3_tags, ("TCON", "genre", "GENRE")))
+
+    return TrackMetadata(
+        path=path,
+        title=title,
+        artist=artist,
+        album=album,
+        album_artist=album_artist,
+        genres=genres,
+        contributors=tuple(contributors),
+        compilation=False,
+        track_number=info.track_number,
+        disc_number=info.disc_number,
+        year=info.year,
+        duration_ms=info.duration_ms,
+        has_artwork=info.has_artwork,
+        sample_rate=info.sample_rate if info.sample_rate > 0 else None,
+        bit_depth=info.bits_per_sample if info.bits_per_sample > 0 else None,
+        bitrate=None,  # DSD bitrate = sample_rate * channels (calculable, not stored)
+        channels=info.channels if info.channels > 0 else None,
     )
 
 

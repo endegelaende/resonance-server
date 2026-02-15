@@ -68,24 +68,12 @@ web-ui/.env.*
 
 # === Audio Test Files ===
 audiotest/
-audiotest/*.mp3
-audiotest/*.flac
-audiotest/*.wav
-audiotest/*.ogg
-audiotest/*.m4b
-audiotest/*.m4a
-audiotest/*.aac
-audiotest/*.wma
-audiotest/*.opus
-
-# === Project Folders (local only) ===
-docs/
-scripts/
-tests/
 
 # === Local Dev/Repo Metadata ===
 .git_/
 artifacts/
+docs/dev/
+data/
 
 # === Misc ===
 *.bak
@@ -93,6 +81,7 @@ artifacts/
 *.temp
 .env
 .env.local
+nul
 
 # === Design Scratch Files ===
 assets/logos/logo-gallery*.html

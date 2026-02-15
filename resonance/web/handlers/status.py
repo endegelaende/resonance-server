@@ -11,7 +11,7 @@ Handles server and player status commands:
 - wipecache: Clear library cache
 
 PERF / RELIABILITY NOTE:
-`status` is polled frequently by clients (e.g. Cadence ~1 Hz). It MUST remain fast.
+`status` is polled frequently by clients (~1 Hz). It MUST remain fast.
 
 In particular, generating BlurHash placeholders on-demand can be expensive (artwork extraction,
 image decoding, hashing) and must NOT block the status response, otherwise clients will hit
@@ -37,11 +37,39 @@ from resonance.web.jsonrpc_helpers import (
     parse_tags_string,
 )
 
-# Match LMS version to avoid "update required" messages on hardware players
-# NOTE: Must be 7.x for firmware compatibility - see Research_gold.md
-# SqueezePlay firmware 7.7.3 and earlier has a version comparison bug
-# that rejects servers reporting version 8.0.0 or higher.
+# Match LMS version to avoid "update required" messages on hardware players.
+# Must be 7.x — SqueezePlay firmware <=7.7.3 rejects version 8.0.0+.
 VERSION = "7.999.999"
+
+def _parse_icy_title(icy_title: str) -> tuple[str, str]:
+    """Parse an ICY StreamTitle into ``(artist, title)``.
+
+    Mirrors LMS ``HTTP.pm`` ``getMetadataFor()`` L1085-1092::
+
+        my @dashes = $currentTitle =~ /( - )/g;
+        if ( scalar @dashes == 1 ) {
+            ($artist, $title) = split /\\s+-\\s+/, $currentTitle;
+        } else {
+            $title = $currentTitle;
+        }
+
+    When the ICY string contains exactly one ``" - "`` separator, it is
+    split into *artist* (before) and *title* (after).  Otherwise the
+    whole string is returned as *title* with an empty *artist*.
+
+    Returns:
+        A ``(artist, title)`` tuple.  Both strings are stripped of
+        leading/trailing whitespace.
+    """
+    if not icy_title:
+        return ("", "")
+
+    parts = icy_title.split(" - ")
+    if len(parts) == 2:
+        return (parts[0].strip(), parts[1].strip())
+    # More than one " - " or none at all → entire string is the title
+    return ("", icy_title.strip())
+
 
 def _lms_song_elapsed_seconds(*, status: Any, mode: str) -> float:
     """Compute song elapsed like LMS Squeezebox2::songElapsedSeconds().
@@ -392,6 +420,56 @@ async def cmd_status(
                     result["time"] = result["duration"]
                 current_server_url = f"http://{ctx.server_host}:{ctx.server_port}"
 
+                # ── Remote/Radio stream metadata (LMS-compatible) ────
+                # LMS Queries.pm L4088-4091: adds `remote: 1` and
+                # `current_title` for remote streams.
+                # Tag 'N' (remote_title) carries the station name.
+                # `live_edge`: 0 = at live edge, -1 = not live
+                #   (Queries.pm L5909-5912).
+                _is_remote = bool(getattr(current, "is_remote", False))
+                _is_live = bool(getattr(current, "is_live", False))
+                _source = getattr(current, "source", "local") or "local"
+
+                if _is_remote:
+                    result["remote"] = 1
+
+                    # current_title: LMS uses getCurrentTitle() which
+                    # returns ICY metadata when available, else the
+                    # track title.  Priority order:
+                    #   1. StreamingServer._icy_titles (parsed from proxied
+                    #      upstream ICY metadata in _icy_strip_relay)
+                    #   2. PlayerClient.icy_title (from Slimproto META
+                    #      messages sent by the player)
+                    #   3. Static track title (station name for radio)
+                    _icy_title: str | None = None
+                    if ctx.streaming_server is not None:
+                        _icy_title = ctx.streaming_server.get_icy_title(ctx.player_id)
+                    if not _icy_title and player is not None:
+                        _icy_title = getattr(player, "icy_title", None)
+                    _static_title = getattr(current, "title", "") or ""
+                    result["current_title"] = _icy_title or _static_title
+
+                    # ── ICY "Artist - Title" parsing (LMS HTTP.pm L1085-1092) ─
+                    # LMS splits the ICY StreamTitle on exactly one " - "
+                    # separator to extract artist and title.  When no ICY
+                    # data is available the static track fields are used.
+                    _icy_artist: str = ""
+                    _icy_parsed_title: str = ""
+                    if _icy_title:
+                        _icy_artist, _icy_parsed_title = _parse_icy_title(_icy_title)
+
+                if _is_live:
+                    # LMS: live_edge 0 means "at live edge"
+                    result["live_edge"] = 0
+
+                # For radio streams, expose station name as remote_title.
+                # LMS Queries.pm L5572-5578: when remote_title exists and
+                # differs from the track title, the station name is shown
+                # as the "album" line in Now Playing.
+                if _source == "radio":
+                    # The track title IS the station name for radio.
+                    result["remote_title"] = getattr(current, "title", "") or ""
+
                 # Expose current track in a stable shape so the UI can highlight correctly.
                 # Note: keep keys aligned with the Track shape used by the web-ui.
                 track_id = getattr(current, "id", getattr(current, "track_id", None))
@@ -400,10 +478,20 @@ async def cmd_status(
                 album = getattr(current, "album_title", getattr(current, "album", ""))
                 duration_ms = getattr(current, "duration_ms", 0)
                 path = getattr(current, "path", "")
+                _artwork_url = getattr(current, "artwork_url", None)
 
                 # Also expose a top-level track id so polling clients can detect
                 # track changes even if `currentTrack` is missing/partial temporarily.
                 result["track_id"] = track_id
+
+                # Determine cover art URL — prefer local album art, fall
+                # back to remote artwork_url (e.g. station favicon).
+                if album_id:
+                    _cover_art = f"{current_server_url}/artwork/{album_id}"
+                elif _artwork_url:
+                    _cover_art = _artwork_url
+                else:
+                    _cover_art = ""
 
                 result["currentTrack"] = {
                     "id": track_id,
@@ -412,14 +500,106 @@ async def cmd_status(
                     "album": album or "",
                     "duration": (duration_ms or 0) / 1000.0,
                     "path": path,
-                    "coverArt": f"{current_server_url}/artwork/{album_id}" if album_id else "",
+                    "coverArt": _cover_art,
                 }
+
+                # Expose remote-specific fields in currentTrack for the
+                # Web-UI (source, is_live, content_type, bitrate,
+                # current_title, icy_artist, icy_title).
+                if _is_remote:
+                    result["currentTrack"]["remote"] = 1
+                    result["currentTrack"]["source"] = _source
+                    # Expose current_title in currentTrack so the Web-UI
+                    # can display the currently-playing song on a radio
+                    # station (from ICY StreamTitle metadata) separately
+                    # from the static station name in "title".
+                    _ct_title = result.get("current_title", "")
+                    if _ct_title:
+                        result["currentTrack"]["current_title"] = _ct_title
+                    # Parsed ICY artist/title (LMS HTTP.pm "Artist - Title"
+                    # splitting).  Only set when the split was successful
+                    # (both artist AND title non-empty).  When only one
+                    # part is available the raw ``current_title`` already
+                    # carries the full ICY string for the UI's fallback.
+                    if _icy_artist and _icy_parsed_title:
+                        result["currentTrack"]["icy_artist"] = _icy_artist
+                        result["currentTrack"]["icy_title"] = _icy_parsed_title
+                if _is_live:
+                    result["currentTrack"]["is_live"] = True
+                _ct = getattr(current, "content_type", None)
+                if _ct:
+                    result["currentTrack"]["content_type"] = _ct
+                _br = getattr(current, "bitrate", 0)
+                if _br:
+                    result["currentTrack"]["bitrate"] = _br
+
+                # ── remoteMeta (LMS Queries.pm L4357-4361) ───────────
+                # LMS adds a top-level ``remoteMeta`` dict for remote
+                # tracks, built by ``_songData()``.  It contains the
+                # same tag-based fields as playlist_loop entries but
+                # enriched with live metadata from
+                # ``getMetadataFor()`` (artist/title parsed from ICY,
+                # cover art, bitrate, etc.).
+                #
+                # Jive/SqueezePlay hardware players read this to display
+                # Now Playing info for radio streams.
+                if _is_remote:
+                    _remote_meta: dict[str, Any] = {
+                        "id": track_id or 0,
+                        "title": (_icy_parsed_title or _icy_title
+                                  or getattr(current, "title", "")),
+                    }
+
+                    # Artist: prefer parsed ICY, fall back to static
+                    _rm_artist = (_icy_artist
+                                  or getattr(current, "artist_name",
+                                             getattr(current, "artist", "")))
+                    if _rm_artist:
+                        _remote_meta["artist"] = _rm_artist
+
+                    # Album: static field (usually empty for radio)
+                    _rm_album = (getattr(current, "album_title",
+                                         getattr(current, "album", ""))
+                                 or "")
+                    if _rm_album:
+                        _remote_meta["album"] = _rm_album
+
+                    # remote_title (tag N) — station name
+                    if _source == "radio":
+                        _remote_meta["remote_title"] = _static_title
+
+                    # Duration (tag d) — 0 for live streams
+                    _remote_meta["duration"] = (duration_ms or 0) / 1000.0
+
+                    # Bitrate (tag r)
+                    if _br:
+                        _remote_meta["bitrate"] = _br
+
+                    # Content type (tag o)
+                    if _ct:
+                        _remote_meta["type"] = _ct
+
+                    # Artwork (tag K)
+                    if _cover_art:
+                        _remote_meta["artwork_url"] = _cover_art
+
+                    # Remote flag (tag x)
+                    _remote_meta["remote"] = 1
+
+                    # live_edge (tag V) — 0 at live edge, -1 not live
+                    _remote_meta["live_edge"] = 0 if _is_live else -1
+
+                    result["remoteMeta"] = _remote_meta
 
                 # JiveLite/SqueezePlay compatibility (Squeezebox Radio, Touch, etc.)
                 if album_id:
                     result["currentTrack"]["icon-id"] = f"/music/{album_id}/cover"
                     result["currentTrack"]["icon"] = f"{current_server_url}/artwork/{album_id}"
                     result["currentTrack"]["artwork_track_id"] = album_id
+                elif _artwork_url:
+                    # Remote artwork (e.g. station favicon) — use icon
+                    # (full URL) rather than icon-id (server-relative).
+                    result["currentTrack"]["icon"] = _artwork_url
 
                 # Add BlurHash if available — MUST NOT BLOCK status polling.
                 #
@@ -536,6 +716,12 @@ async def cmd_status(
                     second_line = " - ".join(second_line_parts)
                     text = f"{title}\n{second_line}" if second_line else title
 
+                    # Determine trackType from PlaylistTrack.source
+                    # (LMS uses "radio" for radio streams, "local" for
+                    # library tracks, etc.)
+                    _trk_source = getattr(track, "source", "local") or "local"
+                    _trk_type = _trk_source if _trk_source != "external" else "local"
+
                     track_dict: dict[str, Any] = {
                         "text": text,
                         "track": title,
@@ -546,14 +732,29 @@ async def cmd_status(
                             "playlist_index": playlist_idx,
                         },
                         "style": "itemplay",
-                        "trackType": "local",
+                        "trackType": _trk_type,
                     }
+                    _trk_artwork = getattr(track, "artwork_url", None)
                     if album_id:
                         track_dict["icon-id"] = album_id
                         track_dict["icon"] = f"{server_url}/artwork/{album_id}"
+                    elif _trk_artwork:
+                        track_dict["icon"] = _trk_artwork
 
                 else:
                     # ── Standard playlist_loop format ─────────────────
+                    _loop_artwork_url = getattr(track, "artwork_url", None)
+                    _loop_is_remote = bool(getattr(track, "is_remote", False))
+                    _loop_source = getattr(track, "source", "local") or "local"
+
+                    # Determine cover art + stream URL for this track.
+                    if album_id:
+                        _loop_cover = f"{server_url}/artwork/{album_id}"
+                    elif _loop_artwork_url:
+                        _loop_cover = _loop_artwork_url
+                    else:
+                        _loop_cover = ""
+
                     track_dict = {
                         "id": track_id,
                         "title": title,
@@ -561,9 +762,16 @@ async def cmd_status(
                         "album": album or "",
                         "duration": (duration_ms or 0) / 1000.0,
                         "url": f"{server_url}/stream.mp3?track_id={track_id}",
-                        "coverArt": f"{server_url}/artwork/{album_id}" if album_id else "",
+                        "coverArt": _loop_cover,
                         "playlist index": playlist_idx,
                     }
+
+                    # Remote stream flags (LMS Queries.pm: `remote`,
+                    # `remote_title`, trackType).
+                    if _loop_is_remote:
+                        track_dict["remote"] = 1
+                    if _loop_source != "local":
+                        track_dict["trackType"] = _loop_source
 
                     # JiveLite/SqueezePlay compatibility (Squeezebox Radio, Touch, etc.)
                     # These players expect icon-id or icon for cover art display
@@ -571,6 +779,8 @@ async def cmd_status(
                         track_dict["icon-id"] = f"/music/{album_id}/cover"
                         track_dict["icon"] = f"{server_url}/artwork/{album_id}"
                         track_dict["artwork_track_id"] = album_id
+                    elif _loop_artwork_url:
+                        track_dict["icon"] = _loop_artwork_url
 
                     # JiveLite expects track/album/artist as separate fields + text
                     track_dict["track"] = title
@@ -588,16 +798,22 @@ async def cmd_status(
                         except Exception:
                             pass
 
-                    # Add optional fields based on tags
+                    # Add optional fields based on tags.
+                    # Use getattr() because PlaylistTrack (remote streams like
+                    # radio/podcast) does not carry library.Track fields such
+                    # as track_no, disc_no, year.
                     if tags is None or "n" in tags:
-                        if track.track_no:
-                            track_dict["tracknum"] = track.track_no
+                        _track_no = getattr(track, "track_no", None)
+                        if _track_no:
+                            track_dict["tracknum"] = _track_no
                     if tags is None or "i" in tags:
-                        if track.disc_no:
-                            track_dict["disc"] = track.disc_no
+                        _disc_no = getattr(track, "disc_no", None)
+                        if _disc_no:
+                            track_dict["disc"] = _disc_no
                     if tags is None or "y" in tags:
-                        if track.year:
-                            track_dict["year"] = track.year
+                        _year = getattr(track, "year", None)
+                        if _year:
+                            track_dict["year"] = _year
 
                 loop_items.append(track_dict)
 

@@ -1,0 +1,6 @@
+[plugin]
+name = "radio"
+version = "2.0.0"
+description = "Internet Radio via radio-browser.info — browse by country/genre/language, search stations, stream live radio with full Jive menu integration. Free community API, no partner ID required."
+author = "Resonance"
+min_resonance_version = "0.1.0"

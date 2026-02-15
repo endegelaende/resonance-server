@@ -5,6 +5,10 @@ These devices use a special JSON-RPC "menu" query to build their
 touch-screen UI. This module provides an implementation that allows
 these devices to connect and display menus for browsing music.
 
+Plugins can register additional menu nodes and items via
+:meth:`PluginContext.register_menu_node` / :meth:`PluginContext.register_menu_item`.
+Those entries are appended automatically by :func:`_build_main_menu`.
+
 Reference: Slim::Control::Jive and Slim::Menu::BrowseLibrary in the LMS codebase.
 """
 
@@ -14,6 +18,23 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
+from resonance.plugin import get_plugin_menu_items, get_plugin_menu_nodes
+from resonance.web.handlers.menu_helpers import (
+    BROWSELIBRARY,
+    browse_actions,
+    browse_go,
+    browse_menu_item,
+    choice_item,
+    context_menu_item,
+    do_action,
+    go_action,
+    menu_item,
+    menu_node,
+    paginated,
+    playlist_add,
+    playlist_play,
+    slider_item,
+)
 from resonance.web.jsonrpc_helpers import parse_start_items
 
 if TYPE_CHECKING:
@@ -21,8 +42,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Constants matching LMS
-BROWSELIBRARY = "browselibrary"
 _ALARM_DAY_NAMES = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 
 
@@ -113,154 +132,42 @@ async def _build_main_menu(ctx: CommandContext) -> list[dict[str, Any]]:
     """
     menu: list[dict[str, Any]] = []
 
-    # ========================================
-    # My Music node - main music browsing entry
-    # ========================================
-    menu.append(
-        {
-            "text": "My Music",
-            "id": "myMusic",
-            "node": "home",
-            "weight": 11,
-            "isANode": 1,
-        }
-    )
+    # ── My Music node ────────────────────────────────────────────
+    menu.append(menu_node("My Music", id="myMusic", node="home", weight=11))
 
-    # ========================================
-    # My Music children (from BrowseLibrary)
-    # ========================================
+    # ── My Music children (from BrowseLibrary) ───────────────────
+    menu.extend([
+        browse_menu_item("Artists",   id="myMusicArtists",  node="myMusic", weight=10, mode="artists"),
+        browse_menu_item("Albums",    id="myMusicAlbums",   node="myMusic", weight=20, mode="albums"),
+        browse_menu_item("Genres",    id="myMusicGenres",   node="myMusic", weight=30, mode="genres"),
+        browse_menu_item("Years",     id="myMusicYears",    node="myMusic", weight=40, mode="years"),
+        browse_menu_item("New Music", id="myMusicNewMusic", node="myMusic", weight=50, mode="albums", extra_params={"sort": "new"}),
+    ])
 
-    # Artists
+    # Search (has input + special go action — not a simple browse_menu_item)
     menu.append(
-        {
-            "text": "Artists",
-            "id": "myMusicArtists",
-            "node": "myMusic",
-            "weight": 10,
-            "actions": {
+        menu_item(
+            "Search",
+            id="myMusicSearch",
+            node="myMusic",
+            weight=90,
+            actions={
                 "go": {
                     "cmd": [BROWSELIBRARY, "items"],
-                    "params": {
-                        "menu": 1,
-                        "mode": "artists",
-                    },
-                },
-            },
-        }
-    )
-
-    # Albums
-    menu.append(
-        {
-            "text": "Albums",
-            "id": "myMusicAlbums",
-            "node": "myMusic",
-            "weight": 20,
-            "actions": {
-                "go": {
-                    "cmd": [BROWSELIBRARY, "items"],
-                    "params": {
-                        "menu": 1,
-                        "mode": "albums",
-                    },
-                },
-            },
-        }
-    )
-
-    # Genres
-    menu.append(
-        {
-            "text": "Genres",
-            "id": "myMusicGenres",
-            "node": "myMusic",
-            "weight": 30,
-            "actions": {
-                "go": {
-                    "cmd": [BROWSELIBRARY, "items"],
-                    "params": {
-                        "menu": 1,
-                        "mode": "genres",
-                    },
-                },
-            },
-        }
-    )
-
-    # Years
-    menu.append(
-        {
-            "text": "Years",
-            "id": "myMusicYears",
-            "node": "myMusic",
-            "weight": 40,
-            "actions": {
-                "go": {
-                    "cmd": [BROWSELIBRARY, "items"],
-                    "params": {
-                        "menu": 1,
-                        "mode": "years",
-                    },
-                },
-            },
-        }
-    )
-
-    # New Music
-    menu.append(
-        {
-            "text": "New Music",
-            "id": "myMusicNewMusic",
-            "node": "myMusic",
-            "weight": 50,
-            "actions": {
-                "go": {
-                    "cmd": [BROWSELIBRARY, "items"],
-                    "params": {
-                        "menu": 1,
-                        "mode": "albums",
-                        "sort": "new",
-                    },
-                },
-            },
-        }
-    )
-
-    # Search
-    menu.append(
-        {
-            "text": "Search",
-            "id": "myMusicSearch",
-            "node": "myMusic",
-            "weight": 90,
-            "input": {
-                "len": 1,
-                "processingPopup": {
-                    "text": "Searching...",
-                },
-                "help": {
-                    "text": "Enter search text",
-                },
-            },
-            "actions": {
-                "go": {
-                    "cmd": [BROWSELIBRARY, "items"],
-                    "params": {
-                        "menu": 1,
-                        "mode": "search",
-                    },
+                    "params": {"menu": 1, "mode": "search"},
                     "itemsParams": "params",
                 },
             },
-            "window": {
-                "isContextMenu": 1,
+            input={
+                "len": 1,
+                "processingPopup": {"text": "Searching..."},
+                "help": {"text": "Enter search text"},
             },
-        }
+            window={"isContextMenu": 1},
+        )
     )
 
-    # ========================================
-    # Player Power (like LMS playerPower)
-    # ========================================
+    # ── Player Power ─────────────────────────────────────────────
     # Only show if the device supports power off (Boom does not).
     # Reference: Slim::Control::Jive::playerPower()
     player = (
@@ -270,133 +177,63 @@ async def _build_main_menu(ctx: CommandContext) -> list[dict[str, Any]]:
     )
     if player is None or player.device_capabilities.can_power_off:
         menu.append(
-            {
-                "text": "Turn Player Off",
-                "id": "playerpower",
-                "node": "home",
-                "weight": 100,
-                "actions": {
-                    "do": {
-                        "player": 0,
-                        "cmd": ["power", "0"],
-                    },
-                },
-            }
+            menu_item(
+                "Turn Player Off",
+                id="playerpower",
+                node="home",
+                weight=100,
+                actions=do_action(["power", "0"]),
+            )
         )
 
-    # ========================================
-    # Settings node
-    # ========================================
-    menu.append(
-        {
-            "text": "Settings",
-            "id": "settings",
-            "node": "home",
-            "weight": 1005,
-            "isANode": 1,
-        }
-    )
+    # ── Settings node ────────────────────────────────────────────
+    menu.append(menu_node("Settings", id="settings", node="home", weight=1005))
 
-    # ========================================
-    # Player Settings children
-    # ========================================
-
-    # Repeat setting
-    menu.append(
-        {
-            "text": "Repeat",
-            "id": "settingsRepeat",
-            "node": "settings",
-            "weight": 10,
-            "choiceStrings": ["Off", "Song", "Playlist"],
-            "actions": {
-                "do": {
-                    "player": 0,
-                    "cmd": ["playlist", "repeat"],
-                    "params": {"valtag": "value"},
-                },
-            },
-        }
-    )
-
-    # Shuffle setting
-    menu.append(
-        {
-            "text": "Shuffle",
-            "id": "settingsShuffle",
-            "node": "settings",
-            "weight": 20,
-            "choiceStrings": ["Off", "Songs", "Albums"],
-            "actions": {
-                "do": {
-                    "player": 0,
-                    "cmd": ["playlist", "shuffle"],
-                    "params": {"valtag": "value"},
-                },
-            },
-        }
-    )
+    # ── Player Settings children ─────────────────────────────────
+    menu.extend([
+        choice_item("Repeat",  id="settingsRepeat",  node="settings", weight=10, cmd=["playlist", "repeat"],  choices=["Off", "Song", "Playlist"]),
+        choice_item("Shuffle", id="settingsShuffle", node="settings", weight=20, cmd=["playlist", "shuffle"], choices=["Off", "Songs", "Albums"]),
+    ])
 
     # Sleep setting
     menu.append(
-        {
-            "text": "Sleep",
-            "id": "settingsSleep",
-            "node": "settings",
-            "weight": 65,
-            "actions": {
-                "go": {
-                    "cmd": ["sleepsettings"],
-                    "player": 0,
-                },
-            },
-        }
+        menu_item(
+            "Sleep",
+            id="settingsSleep",
+            node="settings",
+            weight=65,
+            actions=go_action(["sleepsettings"], player=0),
+        )
     )
 
     # Audio Settings node
-    menu.append(
-        {
-            "text": "Audio Settings",
-            "id": "settingsAudio",
-            "node": "settings",
-            "weight": 35,
-            "isANode": 1,
-        }
-    )
+    menu.append(menu_node("Audio Settings", id="settingsAudio", node="settings", weight=35))
 
-    # ========================================
     # Capability-based Audio Settings
-    # ========================================
     # Only show settings the device actually supports.
     # Reference: Slim::Control::Jive::playerSettingsMenu()
     await _add_audio_settings(menu, ctx)
 
     # Advanced Settings node
-    menu.append(
-        {
-            "text": "Advanced Settings",
-            "id": "advancedSettings",
-            "node": "settings",
-            "weight": 105,
-            "isANode": 1,
-        }
-    )
+    menu.append(menu_node("Advanced Settings", id="advancedSettings", node="settings", weight=105))
 
     # Player Information
     menu.append(
-        {
-            "text": "Player Information",
-            "id": "settingsInformation",
-            "node": "advancedSettings",
-            "weight": 100,
-            "actions": {
-                "go": {
-                    "cmd": ["playerinfo"],
-                    "player": 0,
-                },
-            },
-        }
+        menu_item(
+            "Player Information",
+            id="settingsInformation",
+            node="advancedSettings",
+            weight=100,
+            actions=go_action(["playerinfo"], player=0),
+        )
     )
+
+    # ── Plugin-registered menu entries ────────────────────────────
+    # Plugins add nodes/items via PluginContext.register_menu_node/item.
+    # We append them here so they appear alongside the built-in entries
+    # and respect the weight-based ordering on the device.
+    menu.extend(get_plugin_menu_nodes())
+    menu.extend(get_plugin_menu_items())
 
     return menu
 
@@ -421,131 +258,31 @@ async def _add_audio_settings(menu: list[dict[str, Any]], ctx: CommandContext) -
     else:
         caps = get_device_capabilities(DeviceType.UNKNOWN)
 
+    _NODE = "settingsAudio"
+
     # Bass (only if device supports adjustment)
     if caps.has_bass:
-        menu.append(
-            {
-                "text": "Bass",
-                "id": "settingsBass",
-                "node": "settingsAudio",
-                "weight": 10,
-                "slider": 1,
-                "min": caps.min_bass,
-                "max": caps.max_bass,
-                "adjust": 1,
-                "actions": {
-                    "do": {
-                        "player": 0,
-                        "cmd": ["mixer", "bass"],
-                        "params": {"valtag": "value"},
-                    },
-                },
-            }
-        )
+        menu.append(slider_item("Bass",      id="settingsBass",      node=_NODE, weight=10, cmd=["mixer", "bass"],     min_val=caps.min_bass,   max_val=caps.max_bass))
 
     # Treble (only if device supports adjustment)
     if caps.has_treble:
-        menu.append(
-            {
-                "text": "Treble",
-                "id": "settingsTreble",
-                "node": "settingsAudio",
-                "weight": 20,
-                "slider": 1,
-                "min": caps.min_treble,
-                "max": caps.max_treble,
-                "adjust": 1,
-                "actions": {
-                    "do": {
-                        "player": 0,
-                        "cmd": ["mixer", "treble"],
-                        "params": {"valtag": "value"},
-                    },
-                },
-            }
-        )
+        menu.append(slider_item("Treble",    id="settingsTreble",    node=_NODE, weight=20, cmd=["mixer", "treble"],   min_val=caps.min_treble, max_val=caps.max_treble))
 
     # StereoXL (only Boom)
     if caps.has_stereo_xl:
-        menu.append(
-            {
-                "text": "Stereo XL",
-                "id": "settingsStereoXL",
-                "node": "settingsAudio",
-                "weight": 25,
-                "slider": 1,
-                "min": caps.min_xl,
-                "max": caps.max_xl,
-                "adjust": 1,
-                "actions": {
-                    "do": {
-                        "player": 0,
-                        "cmd": ["mixer", "stereoxl"],
-                        "params": {"valtag": "value"},
-                    },
-                },
-            }
-        )
+        menu.append(slider_item("Stereo XL", id="settingsStereoXL",  node=_NODE, weight=25, cmd=["mixer", "stereoxl"], min_val=caps.min_xl,     max_val=caps.max_xl))
 
     # Balance (SB2, Transporter, SqueezePlay — NOT Boom)
     if caps.has_balance:
-        menu.append(
-            {
-                "text": "Balance",
-                "id": "settingsBalance",
-                "node": "settingsAudio",
-                "weight": 30,
-                "slider": 1,
-                "min": -100,
-                "max": 100,
-                "adjust": 1,
-                "actions": {
-                    "do": {
-                        "player": 0,
-                        "cmd": ["mixer", "balance"],
-                        "params": {"valtag": "value"},
-                    },
-                },
-            }
-        )
+        menu.append(slider_item("Balance",   id="settingsBalance",   node=_NODE, weight=30, cmd=["mixer", "balance"],  min_val=-100,            max_val=100))
 
     # Fixed Volume / Digital Output (only if device has digital out)
     if caps.has_digital_out:
-        menu.append(
-            {
-                "text": "Fixed Volume",
-                "id": "settingsFixedVolume",
-                "node": "settingsAudio",
-                "weight": 40,
-                "choiceStrings": ["Off", "On"],
-                "actions": {
-                    "do": {
-                        "player": 0,
-                        "cmd": ["mixer", "fixedvolume"],
-                        "params": {"valtag": "value"},
-                    },
-                },
-            }
-        )
+        menu.append(choice_item("Fixed Volume", id="settingsFixedVolume", node=_NODE, weight=40, cmd=["mixer", "fixedvolume"], choices=["Off", "On"]))
 
     # Line Out Mode (only if device has headphone/sub out)
     if caps.has_head_sub_out:
-        menu.append(
-            {
-                "text": "Line Out",
-                "id": "settingsLineOut",
-                "node": "settingsAudio",
-                "weight": 50,
-                "choiceStrings": ["Headphone", "Sub Out"],
-                "actions": {
-                    "do": {
-                        "player": 0,
-                        "cmd": ["mixer", "lineout"],
-                        "params": {"valtag": "value"},
-                    },
-                },
-            }
-        )
+        menu.append(choice_item("Line Out",     id="settingsLineOut",     node=_NODE, weight=50, cmd=["mixer", "lineout"],     choices=["Headphone", "Sub Out"]))
 
 
 async def cmd_browselibrary(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
@@ -623,57 +360,29 @@ async def _browse_artists(
     ctx: CommandContext, start: int, count: int, params: dict[str, Any]
 ) -> dict[str, Any]:
     """Browse artists in Jive menu format."""
-    # Use the existing artists handler but format for Jive
     from resonance.web.handlers.library import cmd_artists
 
-    # Build command for existing handler
     cmd = ["artists", start, count]
     result = await cmd_artists(ctx, cmd)
 
-    # Convert to Jive menu format
     items = []
     for artist in result.get("artists_loop", []):
         artist_id = artist.get("id", "")
         artist_name = artist.get("artist", "Unknown Artist")
 
         items.append(
-            {
-                "text": artist_name,
-                "id": f"artist_{artist_id}",
-                "actions": {
-                    "go": {
-                        "cmd": [BROWSELIBRARY, "items"],
-                        "params": {
-                            "menu": 1,
-                            "mode": "albums",
-                            "artist_id": artist_id,
-                        },
-                    },
-                    "play": {
-                        "player": 0,
-                        "cmd": ["playlistcontrol"],
-                        "params": {
-                            "cmd": "load",
-                            "artist_id": artist_id,
-                        },
-                    },
-                    "add": {
-                        "player": 0,
-                        "cmd": ["playlistcontrol"],
-                        "params": {
-                            "cmd": "add",
-                            "artist_id": artist_id,
-                        },
-                    },
-                },
-            }
+            menu_item(
+                artist_name,
+                id=f"artist_{artist_id}",
+                actions=browse_actions(
+                    "artist_id", artist_id,
+                    go_mode="albums",
+                    go_params={"artist_id": artist_id},
+                ),
+            )
         )
 
-    return {
-        "count": result.get("count", len(items)),
-        "offset": start,
-        "item_loop": items,
-    }
+    return paginated(items, count=result.get("count", len(items)), offset=start)
 
 
 async def _browse_albums(
@@ -682,61 +391,33 @@ async def _browse_albums(
     """Browse albums in Jive menu format."""
     from resonance.web.handlers.library import cmd_albums
 
-    # Build command for existing handler
     cmd: list[Any] = ["albums", start, count]
 
     # Add filters
-    if params.get("artist_id"):
-        cmd.append(f"artist_id:{params['artist_id']}")
-    if params.get("genre_id"):
-        cmd.append(f"genre_id:{params['genre_id']}")
-    if params.get("year"):
-        cmd.append(f"year:{params['year']}")
-    if params.get("sort"):
-        cmd.append(f"sort:{params['sort']}")
+    for key in ("artist_id", "genre_id", "year", "sort"):
+        if params.get(key):
+            cmd.append(f"{key}:{params[key]}")
 
     # Always request artwork
     cmd.append("tags:aljJ")
 
     result = await cmd_albums(ctx, cmd)
 
-    # Convert to Jive menu format
     items = []
     for album in result.get("albums_loop", []):
         album_id = album.get("id", "")
         album_title = album.get("album", "Unknown Album")
         artist_name = album.get("artist", "")
 
-        item: dict[str, Any] = {
-            "text": album_title,
-            "id": f"album_{album_id}",
-            "actions": {
-                "go": {
-                    "cmd": [BROWSELIBRARY, "items"],
-                    "params": {
-                        "menu": 1,
-                        "mode": "tracks",
-                        "album_id": album_id,
-                    },
-                },
-                "play": {
-                    "player": 0,
-                    "cmd": ["playlistcontrol"],
-                    "params": {
-                        "cmd": "load",
-                        "album_id": album_id,
-                    },
-                },
-                "add": {
-                    "player": 0,
-                    "cmd": ["playlistcontrol"],
-                    "params": {
-                        "cmd": "add",
-                        "album_id": album_id,
-                    },
-                },
-            },
-        }
+        item = menu_item(
+            album_title,
+            id=f"album_{album_id}",
+            actions=browse_actions(
+                "album_id", album_id,
+                go_mode="tracks",
+                go_params={"album_id": album_id},
+            ),
+        )
 
         # Add artist as second line
         if artist_name:
@@ -752,11 +433,7 @@ async def _browse_albums(
 
         items.append(item)
 
-    return {
-        "count": result.get("count", len(items)),
-        "offset": start,
-        "item_loop": items,
-    }
+    return paginated(items, count=result.get("count", len(items)), offset=start)
 
 
 async def _browse_genres(
@@ -774,83 +451,48 @@ async def _browse_genres(
         genre_name = genre.get("genre", "Unknown Genre")
 
         items.append(
-            {
-                "text": genre_name,
-                "id": f"genre_{genre_id}",
-                "actions": {
-                    "go": {
-                        "cmd": [BROWSELIBRARY, "items"],
-                        "params": {
-                            "menu": 1,
-                            "mode": "albums",
-                            "genre_id": genre_id,
-                        },
-                    },
-                    "play": {
-                        "player": 0,
-                        "cmd": ["playlistcontrol"],
-                        "params": {
-                            "cmd": "load",
-                            "genre_id": genre_id,
-                        },
-                    },
-                },
-            }
+            menu_item(
+                genre_name,
+                id=f"genre_{genre_id}",
+                actions=browse_actions(
+                    "genre_id", genre_id,
+                    go_mode="albums",
+                    go_params={"genre_id": genre_id},
+                    include_add=False,
+                ),
+            )
         )
 
-    return {
-        "count": result.get("count", len(items)),
-        "offset": start,
-        "item_loop": items,
-    }
+    return paginated(items, count=result.get("count", len(items)), offset=start)
 
 
 async def _browse_years(
     ctx: CommandContext, start: int, count: int, params: dict[str, Any]
 ) -> dict[str, Any]:
     """Browse years in Jive menu format."""
-    # Get unique years from the library
     years = await ctx.music_library.get_years()
-
-    # Sort descending (newest first)
     years = sorted(years, reverse=True)
 
     total = len(years)
-    paginated = years[start : start + count]
+    page = years[start : start + count]
 
     items = []
-    for year in paginated:
+    for year in page:
         year_str = str(year) if year else "Unknown"
         items.append(
-            {
-                "text": year_str,
-                "id": f"year_{year}",
-                "actions": {
-                    "go": {
-                        "cmd": [BROWSELIBRARY, "items"],
-                        "params": {
-                            "menu": 1,
-                            "mode": "albums",
-                            "year": year,
-                        },
-                    },
-                    "play": {
-                        "player": 0,
-                        "cmd": ["playlistcontrol"],
-                        "params": {
-                            "cmd": "load",
-                            "year": year,
-                        },
-                    },
-                },
-            }
+            menu_item(
+                year_str,
+                id=f"year_{year}",
+                actions=browse_actions(
+                    "year", year,
+                    go_mode="albums",
+                    go_params={"year": year},
+                    include_add=False,
+                ),
+            )
         )
 
-    return {
-        "count": total,
-        "offset": start,
-        "item_loop": items,
-    }
+    return paginated(items, count=total, offset=start)
 
 
 async def _play_control_context_menu(
@@ -889,75 +531,41 @@ async def _play_control_context_menu(
     items: list[dict[str, Any]] = []
 
     if track_id is not None:
-        # 1. Add to end
-        items.append({
-            "text": "Add to end",
-            "style": "item_add",
-            "actions": {
-                "go": {
-                    "player": 0,
-                    "cmd": ["playlistcontrol"],
-                    "params": {"cmd": "add", "track_id": track_id, "menu": 1},
-                    "nextWindow": "parentNoRefresh",
-                },
-            },
-        })
+        items.append(context_menu_item(
+            "Add to end", style="item_add",
+            cmd=["playlistcontrol"],
+            params={"cmd": "add", "track_id": track_id, "menu": 1},
+            next_window="parentNoRefresh",
+        ))
+        items.append(context_menu_item(
+            "Play next", style="itemNoAction",
+            cmd=["playlistcontrol"],
+            params={"cmd": "insert", "track_id": track_id, "menu": 1},
+            next_window="parentNoRefresh",
+        ))
+        items.append(context_menu_item(
+            "Play this song", style="item_play",
+            cmd=["playlistcontrol"],
+            params={"cmd": "load", "track_id": track_id, "menu": 1},
+            next_window="nowPlaying",
+        ))
 
-        # 2. Play next
-        items.append({
-            "text": "Play next",
-            "style": "itemNoAction",
-            "actions": {
-                "go": {
-                    "player": 0,
-                    "cmd": ["playlistcontrol"],
-                    "params": {"cmd": "insert", "track_id": track_id, "menu": 1},
-                    "nextWindow": "parentNoRefresh",
-                },
-            },
-        })
-
-        # 3. Play this song
-        items.append({
-            "text": "Play this song",
-            "style": "item_play",
-            "actions": {
-                "go": {
-                    "player": 0,
-                    "cmd": ["playlistcontrol"],
-                    "params": {"cmd": "load", "track_id": track_id, "menu": 1},
-                    "nextWindow": "nowPlaying",
-                },
-            },
-        })
-
-    # 4. Play all songs (always available when album_id is known)
+    # Play all songs (always available when album_id is known)
     if album_id:
-        items.append({
-            "text": "Play all songs",
-            "style": "itemNoAction",
-            "actions": {
-                "go": {
-                    "player": 0,
-                    "cmd": ["playlistcontrol"],
-                    "params": {
-                        "cmd": "load",
-                        "album_id": str(album_id),
-                        "sort": "albumtrack",
-                        "play_index": play_index,
-                        "menu": 1,
-                    },
-                    "nextWindow": "nowPlaying",
-                },
+        items.append(context_menu_item(
+            "Play all songs", style="itemNoAction",
+            cmd=["playlistcontrol"],
+            params={
+                "cmd": "load",
+                "album_id": str(album_id),
+                "sort": "albumtrack",
+                "play_index": play_index,
+                "menu": 1,
             },
-        })
+            next_window="nowPlaying",
+        ))
 
-    return {
-        "count": len(items),
-        "offset": 0,
-        "item_loop": items,
-        "window": {"windowStyle": "text_list"},
-    }
+    return paginated(items, window={"windowStyle": "text_list"})
 
 
 async def _browse_tracks(
@@ -1184,74 +792,45 @@ async def _browse_search(
     for artist in result.get("artists_loop", [])[:5]:
         artist_id = artist.get("id", "")
         artist_name = artist.get("artist", "")
-        items.append(
-            {
-                "text": artist_name,
-                "id": f"search_artist_{artist_id}",
-                "textkey": "A",
-                "actions": {
-                    "go": {
-                        "cmd": [BROWSELIBRARY, "items"],
-                        "params": {"menu": 1, "mode": "albums", "artist_id": artist_id},
-                    },
-                },
-            }
-        )
+        items.append(menu_item(
+            artist_name,
+            id=f"search_artist_{artist_id}",
+            textkey="A",
+            actions=browse_go("albums", {"artist_id": artist_id}),
+        ))
 
     # Add albums found
     for album in result.get("albums_loop", [])[:5]:
         album_id = album.get("id", "")
         album_title = album.get("album", "")
-        items.append(
-            {
-                "text": album_title,
-                "id": f"search_album_{album_id}",
-                "textkey": "B",
-                "icon-id": f"/music/{album_id}/cover",
-                "actions": {
-                    "go": {
-                        "cmd": [BROWSELIBRARY, "items"],
-                        "params": {"menu": 1, "mode": "tracks", "album_id": album_id},
-                    },
-                    "play": {
-                        "player": 0,
-                        "cmd": ["playlistcontrol"],
-                        "params": {"cmd": "load", "album_id": album_id},
-                    },
-                },
-            }
-        )
+        actions: dict[str, Any] = {
+            **browse_go("tracks", {"album_id": album_id}),
+            **playlist_play("album_id", album_id),
+        }
+        items.append(menu_item(
+            album_title,
+            id=f"search_album_{album_id}",
+            icon_id=f"/music/{album_id}/cover",
+            textkey="B",
+            actions=actions,
+        ))
 
     # Add tracks found
     for track in result.get("titles_loop", [])[:10]:
         track_id = track.get("id", "")
         track_title = track.get("title", "")
-        items.append(
-            {
-                "text": track_title,
-                "id": f"search_track_{track_id}",
-                "textkey": "C",
-                "type": "audio",
-                "actions": {
-                    "play": {
-                        "player": 0,
-                        "cmd": ["playlistcontrol"],
-                        "params": {"cmd": "load", "track_id": track_id},
-                    },
-                    "add": {
-                        "player": 0,
-                        "cmd": ["playlistcontrol"],
-                        "params": {"cmd": "add", "track_id": track_id},
-                    },
-                },
-            }
-        )
+        items.append(menu_item(
+            track_title,
+            id=f"search_track_{track_id}",
+            item_type="audio",
+            textkey="C",
+            actions={
+                **playlist_play("track_id", track_id),
+                **playlist_add("track_id", track_id),
+            },
+        ))
 
-    return {
-        "count": len(items),
-        "offset": 0,
-        "item_loop": items,
-    }
+    return paginated(items)
 
 
 def _trackinfo_library_menu(
@@ -1265,78 +844,34 @@ def _trackinfo_library_menu(
     if track_id is not None:
         track_id_str = str(track_id)
 
-        items.append(
-            {
-                "text": "Add to end",
-                "style": "item_add",
-                "actions": {
-                    "go": {
-                        "player": 0,
-                        "cmd": ["playlist", "add", track_id_str],
-                        "nextWindow": "parentNoRefresh",
-                    },
-                },
-            }
-        )
-
-        items.append(
-            {
-                "text": "Play next",
-                "style": "itemNoAction",
-                "actions": {
-                    "go": {
-                        "player": 0,
-                        "cmd": ["playlist", "insert", track_id_str],
-                        "nextWindow": "parentNoRefresh",
-                    },
-                },
-            }
-        )
-
-        items.append(
-            {
-                "text": "Play this song",
-                "style": "item_play",
-                "actions": {
-                    "go": {
-                        "player": 0,
-                        "cmd": ["playlist", "loadtracks", f"track_id:{track_id_str}"],
-                        "nextWindow": "nowPlaying",
-                    },
-                },
-            }
-        )
+        items.append(context_menu_item(
+            "Add to end", style="item_add",
+            cmd=["playlist", "add", track_id_str],
+            next_window="parentNoRefresh",
+        ))
+        items.append(context_menu_item(
+            "Play next", style="itemNoAction",
+            cmd=["playlist", "insert", track_id_str],
+            next_window="parentNoRefresh",
+        ))
+        items.append(context_menu_item(
+            "Play this song", style="item_play",
+            cmd=["playlist", "loadtracks", f"track_id:{track_id_str}"],
+            next_window="nowPlaying",
+        ))
 
     if album_id is not None:
         album_id_str = str(album_id)
         if play_index is None or play_index < 0:
             play_index = 0
 
-        items.append(
-            {
-                "text": "Play all songs",
-                "style": "itemNoAction",
-                "actions": {
-                    "go": {
-                        "player": 0,
-                        "cmd": [
-                            "playlist",
-                            "loadtracks",
-                            f"album_id:{album_id_str}",
-                            f"play_index:{play_index}",
-                        ],
-                        "nextWindow": "nowPlaying",
-                    },
-                },
-            }
-        )
+        items.append(context_menu_item(
+            "Play all songs", style="itemNoAction",
+            cmd=["playlist", "loadtracks", f"album_id:{album_id_str}", f"play_index:{play_index}"],
+            next_window="nowPlaying",
+        ))
 
-    return {
-        "count": len(items),
-        "offset": 0,
-        "item_loop": items,
-        "window": {"windowStyle": "text_list"},
-    }
+    return paginated(items, window={"windowStyle": "text_list"})
 
 
 
@@ -1348,19 +883,11 @@ def _trackinfo_playlist_menu(
     """Build playlist-context actions (jump/move/delete) for trackinfo."""
     items: list[dict[str, Any]] = []
 
-    items.append(
-        {
-            "text": "Play this song",
-            "style": "item_play",
-            "actions": {
-                "go": {
-                    "player": 0,
-                    "cmd": ["playlist", "jump", str(playlist_index)],
-                    "nextWindow": "parent",
-                },
-            },
-        }
-    )
+    items.append(context_menu_item(
+        "Play this song", style="item_play",
+        cmd=["playlist", "jump", str(playlist_index)],
+        next_window="parent",
+    ))
 
     # Mimic LMS playlist context behavior: move selected item to "next" slot.
     if playlist_index not in (current_index, current_index + 1):
@@ -1368,40 +895,19 @@ def _trackinfo_playlist_menu(
         if playlist_index <= current_index:
             move_to = current_index
 
-        items.append(
-            {
-                "text": "Play next",
-                "style": "itemNoAction",
-                "actions": {
-                    "go": {
-                        "player": 0,
-                        "cmd": ["playlist", "move", str(playlist_index), str(move_to)],
-                        "nextWindow": "parent",
-                    },
-                },
-            }
-        )
+        items.append(context_menu_item(
+            "Play next", style="itemNoAction",
+            cmd=["playlist", "move", str(playlist_index), str(move_to)],
+            next_window="parent",
+        ))
 
-    items.append(
-        {
-            "text": "Remove from playlist",
-            "style": "itemNoAction",
-            "actions": {
-                "go": {
-                    "player": 0,
-                    "cmd": ["playlist", "delete", str(playlist_index)],
-                    "nextWindow": "parent",
-                },
-            },
-        }
-    )
+    items.append(context_menu_item(
+        "Remove from playlist", style="itemNoAction",
+        cmd=["playlist", "delete", str(playlist_index)],
+        next_window="parent",
+    ))
 
-    return {
-        "count": len(items),
-        "offset": 0,
-        "item_loop": items,
-        "window": {"windowStyle": "text_list"},
-    }
+    return paginated(items, window={"windowStyle": "text_list"})
 
 
 async def cmd_trackinfo(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
@@ -1616,6 +1122,17 @@ async def cmd_alarm_settings(
     return {"count": len(menu_items), "offset": start, "item_loop": menu_items[start : start + items]}
 
 
+# (label, seconds, is_current_default)
+_SLEEP_OPTIONS: list[tuple[str, str]] = [
+    ("Off", "0"),
+    ("15 minutes", "900"),
+    ("30 minutes", "1800"),
+    ("45 minutes", "2700"),
+    ("1 hour", "3600"),
+    ("2 hours", "7200"),
+]
+
+
 async def cmd_sleep_settings(
     ctx: CommandContext, command: list[Any]
 ) -> dict[str, Any]:
@@ -1626,48 +1143,15 @@ async def cmd_sleep_settings(
     """
     sleep_options = [
         {
-            "text": "Off",
-            "radio": 1,
-            "actions": {"do": {"player": 0, "cmd": ["sleep", "0"]}},
+            "text": label,
+            "radio": 1 if idx == 0 else 0,
             "nextWindow": "parent",
-        },
-        {
-            "text": "15 minutes",
-            "radio": 0,
-            "actions": {"do": {"player": 0, "cmd": ["sleep", "900"]}},
-            "nextWindow": "parent",
-        },
-        {
-            "text": "30 minutes",
-            "radio": 0,
-            "actions": {"do": {"player": 0, "cmd": ["sleep", "1800"]}},
-            "nextWindow": "parent",
-        },
-        {
-            "text": "45 minutes",
-            "radio": 0,
-            "actions": {"do": {"player": 0, "cmd": ["sleep", "2700"]}},
-            "nextWindow": "parent",
-        },
-        {
-            "text": "1 hour",
-            "radio": 0,
-            "actions": {"do": {"player": 0, "cmd": ["sleep", "3600"]}},
-            "nextWindow": "parent",
-        },
-        {
-            "text": "2 hours",
-            "radio": 0,
-            "actions": {"do": {"player": 0, "cmd": ["sleep", "7200"]}},
-            "nextWindow": "parent",
-        },
+            **do_action(["sleep", seconds]),
+        }
+        for idx, (label, seconds) in enumerate(_SLEEP_OPTIONS)
     ]
 
-    return {
-        "count": len(sleep_options),
-        "offset": 0,
-        "item_loop": sleep_options,
-    }
+    return paginated(sleep_options)
 
 
 async def cmd_sync_settings(
@@ -1770,25 +1254,21 @@ async def cmd_firmwareupgrade(
         "firmwareUpgrade": 0,
     }
 async def _playlistcontrol_query_tracks(ctx: CommandContext, params: dict[str, Any]) -> list[Any]:
-    """Resolve playlistcontrol filters to a list of Track objects."""
-    from resonance.core.library import Track
+    """Resolve playlistcontrol filters to a list of PlaylistTrack objects."""
+    from resonance.core.playlist import PlaylistTrack
 
     db = ctx.music_library._db
 
-    def _to_track(row: Any) -> Track:
-        return Track(
-            id=getattr(row, "id", None),
+    def _to_track(row: Any) -> PlaylistTrack:
+        return PlaylistTrack(
+            track_id=getattr(row, "id", None),
             path=getattr(row, "path", ""),
             title=getattr(row, "title", "") or "",
+            artist=getattr(row, "artist", "") or "",
+            album=getattr(row, "album", "") or "",
             artist_id=getattr(row, "artist_id", None),
             album_id=getattr(row, "album_id", None),
-            artist_name=getattr(row, "artist", None),
-            album_title=getattr(row, "album", None),
-            year=getattr(row, "year", None),
-            duration_ms=getattr(row, "duration_ms", None),
-            disc_no=getattr(row, "disc_no", None),
-            track_no=getattr(row, "track_no", None),
-            compilation=getattr(row, "compilation", 0) or 0,
+            duration_ms=getattr(row, "duration_ms", 0) or 0,
         )
 
     track_id = int(params["track_id"]) if params.get("track_id") else None
@@ -1904,22 +1384,14 @@ async def cmd_playerinfo(ctx: CommandContext, command: list[Any]) -> dict[str, A
     player = await ctx.player_registry.get_by_mac(ctx.player_id)
 
     if not player:
-        return {
-            "count": 1,
-            "offset": 0,
-            "item_loop": [{"text": "Player not found", "style": "item_no_arrow"}],
-        }
+        return paginated([menu_item("Player not found", style="item_no_arrow")])
 
     items = [
-        {"text": f"Name: {player.name}", "style": "item_no_arrow"},
-        {"text": f"Model: {player.info.model}", "style": "item_no_arrow"},
-        {"text": f"MAC: {player.info.mac_address}", "style": "item_no_arrow"},
-        {"text": f"Firmware: {player.info.firmware_version}", "style": "item_no_arrow"},
-        {"text": f"Server: Resonance", "style": "item_no_arrow"},
+        menu_item(f"Name: {player.name}", style="item_no_arrow"),
+        menu_item(f"Model: {player.info.model}", style="item_no_arrow"),
+        menu_item(f"MAC: {player.info.mac_address}", style="item_no_arrow"),
+        menu_item(f"Firmware: {player.info.firmware_version}", style="item_no_arrow"),
+        menu_item("Server: Resonance", style="item_no_arrow"),
     ]
 
-    return {
-        "count": len(items),
-        "offset": 0,
-        "item_loop": items,
-    }
+    return paginated(items)

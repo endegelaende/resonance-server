@@ -29,17 +29,12 @@
 > **Disclaimer** — Resonance is a hobby project, **not affiliated with or endorsed by** the
 > Lyrion / LMS project. It is under active development, **not finished**, and will contain bugs.
 > When protocol behavior is unclear, the LMS source code is the reference.
+> LLMs are used extensively as a coding partner throughout development.
 > The developer only owns a single Squeezebox Radio — other hardware
 > (Touch, Boom, Transporter, Classic, Controller) has **not been tested**.
 > Feedback and bug reports are very welcome!
 
 ---
-
-<!-- Screenshots — drop your images into docs/screenshots/ and uncomment:
-<p align="center">
-  <img src="docs/screenshots/now-playing.png" alt="Now Playing" width="800" />
-</p>
--->
 
 ## Table of Contents
 
@@ -110,7 +105,7 @@ Options:
 │  Web-UI /   │      │             │      │ Squeezebox  │
 │  iPeng /    │◄────►│  Resonance  │◄────►│ Radio/Touch │──► ))
 │  Squeezer   │ HTTP │   Server    │Slim- │ Squeezelite │
-│  Cadence    │      │  (Python)   │proto │             │
+│             │      │  (Python)   │proto │             │
 └─────────────┘      └──────┬──────┘      └─────────────┘
                             │
                      ┌──────┴──────┐
@@ -144,14 +139,17 @@ Resonance speaks the same protocols as LMS. The server gives commands, players e
 
 ### Audio
 
-| Feature                                      | Status |
-| -------------------------------------------- | ------ |
-| HTTP Streaming (MP3, FLAC, OGG, WAV)         | Yes    |
-| On-the-fly Transcoding (M4A, M4B, AAC, ALAC) | Yes    |
-| Gapless Playback                             | Yes    |
-| Crossfade (configurable overlap)             | Yes    |
-| ReplayGain (track & album mode)              | Yes    |
-| Seeking (byte-accurate & time-based)         | Yes    |
+| Feature                                       | Status |
+| --------------------------------------------- | ------ |
+| HTTP Streaming (MP3, FLAC, OGG, WAV)          | Yes    |
+| On-the-fly Transcoding (M4A, M4B, AAC, ALAC)  | Yes    |
+| Internet Radio (TuneIn via plugin)             | Yes    |
+| Remote URL Proxy (HTTPS → HTTP for hardware)   | Yes    |
+| Gapless Playback                               | Yes    |
+| Crossfade (configurable overlap)               | Yes    |
+| ReplayGain (track & album mode)                | Yes    |
+| Seeking (byte-accurate & time-based)           | Yes    |
+| DSD/DoP (DSF/DFF, native + transcode)          | Yes    |
 
 ### Library & Playback
 
@@ -160,17 +158,18 @@ Resonance speaks the same protocols as LMS. The server gives commands, players e
 | Music Library (scanner, SQLite, full-text search)      | Yes    |
 | Cover Art (extraction, caching, BlurHash placeholders) | Yes    |
 | Playlist / Queue (shuffle, repeat, insert, move)       | Yes    |
+| Favorites (hierarchical folders, LMS-compatible)       | Yes    |
 | Alarm Scheduling (per-player)                          | Yes    |
 | Device Capabilities (volume curves, hardware flags)    | Yes    |
+| Plugin System (commands, menus, content providers)     | Yes    |
 
 ### Frontends
 
-| Frontend                                                   | Status         |
-| ---------------------------------------------------------- | -------------- |
-| **Web UI** — Svelte 5 + Tailwind v4 (see [below](#web-ui)) | Yes            |
-| **iPeng** (iOS)                                            | Not verified   |
-| **Squeezer** (Android)                                     | Not verified   |
-| **Cadence** — Flutter desktop app                          | In development |
+| Frontend                                                    | Status         |
+| ----------------------------------------------------------- | -------------- |
+| **Web UI** — Svelte 5 + Tailwind v4 (see [below](#web-ui))  | Yes            |
+| **iPeng** (iOS)                                              | Verified       |
+| **Squeezer** (Android)                                       | Verified       |
 
 ---
 
@@ -290,9 +289,8 @@ faad -h
 
 ## Web UI
 
-Resonance ships with a modern web interface built with **Svelte 5**, **SvelteKit**, and
-**Tailwind CSS v4**. It covers basic library browsing, playback control, and queue
-management.
+Resonance ships with a web interface built with **Svelte 5**, **SvelteKit**, and
+**Tailwind CSS v4**.
 
 <!-- Uncomment when you add screenshots:
 <p align="center">
@@ -336,10 +334,14 @@ web-ui/
 │   │   │   ├── AlarmSettings.svelte      # Per-player alarm management
 │   │   │   ├── BlurHashPlaceholder.svelte# Blurred artwork placeholder
 │   │   │   ├── CoverArt.svelte           # Album art with BlurHash + glow
+│   │   │   ├── FavoritesView.svelte      # Favorites browse + manage
 │   │   │   ├── NowPlaying.svelte         # Playback controls + progress
 │   │   │   ├── PlayerSelector.svelte     # Multi-player dropdown
+│   │   │   ├── PlaylistsView.svelte      # Saved playlists manage
+│   │   │   ├── PodcastView.svelte        # Podcast browse + subscribe
 │   │   │   ├── QualityBadge.svelte       # Lossless / Hi-Res indicators
 │   │   │   ├── Queue.svelte              # Playlist sidebar
+│   │   │   ├── RadioView.svelte          # TuneIn browse + search
 │   │   │   ├── ResizeHandle.svelte       # Drag-to-resize panels
 │   │   │   ├── SearchBar.svelte          # Search with debounce + Ctrl+K
 │   │   │   ├── SettingsPanel.svelte      # Player settings
@@ -389,6 +391,9 @@ resonance-server/
 ├── resonance/                    # Main Python package
 │   ├── __main__.py               # Entry point (python -m resonance)
 │   ├── server.py                 # Main server, starts all components
+│   ├── content_provider.py       # ContentProvider ABC + Registry
+│   ├── plugin.py                 # PluginContext (DI for plugins)
+│   ├── plugin_manager.py         # Plugin discovery, loading, lifecycle
 │   ├── config/                   # Configuration
 │   │   ├── devices.toml          #   Device tiers (Modern/Legacy)
 │   │   └── legacy.conf           #   Transcoding rules (LMS-style)
@@ -409,7 +414,7 @@ resonance-server/
 │   │   ├── discovery.py          #   UDP discovery
 │   │   └── commands.py           #   Binary command builder
 │   ├── streaming/                # Audio streaming
-│   │   ├── server.py             #   Streaming server
+│   │   ├── server.py             #   Streaming server + URL proxy
 │   │   ├── transcoder.py         #   Transcoding pipeline
 │   │   ├── crossfade.py          #   Server-side crossfade (SoX)
 │   │   ├── seek_coordinator.py   #   Latest-wins seek coordination
@@ -426,20 +431,27 @@ resonance-server/
 │       │   └── library.py        #     Library queries
 │       └── routes/               #   FastAPI routes
 │           ├── api.py            #     REST API
-│           ├── streaming.py      #     /stream.mp3
+│           ├── streaming.py      #     /stream.mp3 (local + remote proxy)
 │           ├── artwork.py        #     Cover art endpoints
 │           └── cometd.py         #     /cometd
+├── plugins/                      # Plugin directory (auto-discovered)
+│   ├── example/                  #   Hello World template
+│   ├── favorites/                #   Favorites (LMS-compatible)
+│   ├── nowplaying/               #   Now Playing tutorial plugin
+│   ├── radio/                    #   Internet Radio (TuneIn)
+│   └── podcast/                  #   Podcast (RSS + PodcastIndex)
 ├── web-ui/                       # Svelte 5 frontend
-├── tests/                        # pytest suite
+├── tests/                        # pytest suite (2041 tests)
 ├── scripts/                      # Dev & test scripts
 ├── third_party/                  # External binaries
 │   ├── bin/                      #   faad, flac, lame, sox (Windows)
 │   └── squeezelite/              #   Squeezelite binary
 ├── docs/                         # Documentation
 │   ├── ARCHITECTURE.md           #   System architecture
-│   ├── PROTOCOL_REFERENCE.md     #   Protocol deep-dive
-│   ├── OPERATIONS.md             #   Test & operations guide
-│   └── CHANGELOG.md              #   Change log
+│   ├── CHANGELOG.md              #   Change log
+│   ├── PLUGINS.md                #   Plugin system overview
+│   ├── PLUGIN_API.md             #   Plugin API reference
+│   └── PLUGIN_TUTORIAL.md        #   Plugin tutorial (step by step)
 ├── pyproject.toml                # Python project config
 └── LICENSE                       # GPL-2.0
 ```
@@ -457,6 +469,9 @@ pytest
 
 # Run with coverage report
 pytest --cov
+
+# Run a specific test module
+pytest tests/test_radio_plugin.py -v
 ```
 
 ---

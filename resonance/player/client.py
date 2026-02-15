@@ -534,6 +534,8 @@ class PlayerClient:
                 "alc": AudioFormat.ALAC,
                 "alac": AudioFormat.ALAC,
                 "dsd": AudioFormat.DSD,
+                "dsf": AudioFormat.DSD,
+                "dff": AudioFormat.DSD,
             }
             audio_format = format_map.get(hint_lower, AudioFormat.MP3)
             autostart = AutostartMode.AUTO
@@ -541,6 +543,20 @@ class PlayerClient:
             pcm_sample_rate = PCMSampleRate.SELF_DESCRIBING
             pcm_channels = PCMChannels.SELF_DESCRIBING
             pcm_endianness = PCMEndianness.SELF_DESCRIBING
+
+            # DSD sub-format: pcmsamplesize distinguishes DSF (0) vs DFF (1)
+            # on the wire. LMS reference: Slim/Player/Squeezebox.pm stream_s()
+            #   $pcmsamplesize = $format eq 'dsf' ? 0 : 1;
+            if hint_lower == "dsf":
+                pcm_sample_size = PCMSampleSize.DSD_DSF
+                pcm_sample_rate = PCMSampleRate.SELF_DESCRIBING
+                pcm_endianness = PCMEndianness.SELF_DESCRIBING
+                pcm_channels = PCMChannels.SELF_DESCRIBING
+            elif hint_lower == "dff":
+                pcm_sample_size = PCMSampleSize.DSD_DFF
+                pcm_sample_rate = PCMSampleRate.SELF_DESCRIBING
+                pcm_endianness = PCMEndianness.SELF_DESCRIBING
+                pcm_channels = PCMChannels.SELF_DESCRIBING
 
         try:
             transition_index = int(transition_type)

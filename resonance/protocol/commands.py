@@ -55,7 +55,17 @@ class AudioFormat(Enum):
 
 
 class PCMSampleSize(Enum):
-    """PCM sample size options."""
+    """PCM sample size options.
+
+    This field is overloaded depending on the audio format:
+    - PCM: bits per sample ('0'=8, '1'=16, '2'=24, '3'=32)
+    - AAC: container type ('1'=adif, '2'=adts, ... '5'=mp4ff, '6'=latm)
+    - DSD: container sub-format (0=DSF, 1=DFF) — raw bytes, NOT ASCII!
+    - Other: '?' = self-describing / don't care
+
+    LMS reference: Slim/Player/Squeezebox.pm stream_s() sets pcmsamplesize
+    per format. For DSD, it uses raw numeric 0/1 (not ord('0')/ord('1')).
+    """
 
     BITS_8 = ord("0")
     BITS_16 = ord("1")
@@ -71,6 +81,12 @@ class PCMSampleSize(Enum):
     AAC_RAWPKTS = ord("4")
     AAC_MP4FF = ord("5")
     AAC_LATM_RAWPKTS = ord("6")
+
+    # DSD container sub-format (raw byte values, NOT ASCII characters).
+    # LMS: $pcmsamplesize = $format eq 'dsf' ? 0 : 1;
+    # These distinguish DSF vs DFF when format byte is 'd' (AudioFormat.DSD).
+    DSD_DSF = 0  # DSF container (DSD Stream File)
+    DSD_DFF = 1  # DFF container (DSDIFF)
 
     SELF_DESCRIBING = ord("?")  # Let decoder figure it out
 
@@ -284,8 +300,7 @@ def build_stream_start(
     Returns:
         Complete strm frame bytes.
     """
-    # Build the HTTP request the player will make to get the stream
-    # The player connects back to the server to receive audio data
+    # HTTP request the player will make back to us for the audio stream
     request_string = f"GET /stream.mp3?player={player_mac} HTTP/1.0\r\n\r\n"
 
     params = StreamParams(
@@ -758,4 +773,3 @@ def build_display_framebuffer_clear(
         raise ValueError(f"Bitmap size must be non-negative: {bitmap_size}")
 
     return build_display_framebuffer(b"\x00" * bitmap_size, offset=offset)
-

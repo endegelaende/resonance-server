@@ -4,17 +4,27 @@ Alarm command handlers (LMS compatibility subset).
 Implements:
 - alarm add/delete/update/enableall/disableall/defaultvolume
 - alarms <start> <items> [filter:<enabled|all|defined>] [dow:<0-6>]
+
+Persistence:
+- ``save_alarms(path)`` / ``load_alarms(path)`` serialize alarm state to JSON.
+- ``cmd_alarm()`` calls ``_auto_save()`` after every mutation so data survives
+  server restarts.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from resonance.web.handlers import CommandContext
 from resonance.web.jsonrpc_helpers import parse_start_items, parse_tagged_params
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -32,6 +42,128 @@ class AlarmEntry:
 _ALARM_LOCK = asyncio.Lock()
 _PLAYER_ALARMS: dict[str, list[AlarmEntry]] = {}
 _PLAYER_DEFAULT_VOLUME: dict[str, int] = {}
+
+# Path set by ``configure_persistence()``; ``None`` disables auto-save.
+_ALARM_PERSISTENCE_PATH: Path | None = None
+
+
+# ---------------------------------------------------------------------------
+# Persistence helpers
+# ---------------------------------------------------------------------------
+
+
+def configure_persistence(path: Path | None) -> None:
+    """Set the file path used for alarm persistence.
+
+    Call once during server startup **before** ``load_alarms()``.
+    Passing ``None`` disables persistence (pure in-memory).
+    """
+    global _ALARM_PERSISTENCE_PATH  # noqa: PLW0603
+    _ALARM_PERSISTENCE_PATH = path
+
+
+def save_alarms(path: Path | None = None) -> None:
+    """Persist current alarm state to a JSON file (synchronous).
+
+    Must be called while **not** holding ``_ALARM_LOCK`` (reads the dicts
+    directly — safe because CPython's GIL protects dict reads and this
+    function only writes to disk).
+
+    Args:
+        path: Explicit target path.  Falls back to the module-level
+              ``_ALARM_PERSISTENCE_PATH`` when ``None``.
+    """
+    target = path or _ALARM_PERSISTENCE_PATH
+    if target is None:
+        return
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    payload: dict[str, Any] = {
+        "version": 1,
+        "players": {},
+        "default_volumes": dict(_PLAYER_DEFAULT_VOLUME),
+    }
+
+    for player_id, alarms in _PLAYER_ALARMS.items():
+        payload["players"][player_id] = [
+            {
+                "id": a.id,
+                "time": a.time,
+                "dow": sorted(a.dow),
+                "enabled": a.enabled,
+                "repeat": a.repeat,
+                "volume": a.volume,
+                "shufflemode": a.shufflemode,
+                "url": a.url,
+            }
+            for a in alarms
+        ]
+
+    try:
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp.replace(target)
+    except Exception:
+        logger.exception("Failed to save alarms to %s", target)
+
+
+def load_alarms(path: Path | None = None) -> int:
+    """Load alarm state from a JSON file (synchronous).
+
+    Populates ``_PLAYER_ALARMS`` and ``_PLAYER_DEFAULT_VOLUME`` from disk.
+    Existing in-memory data is **replaced**.
+
+    Args:
+        path: Explicit source path.  Falls back to the module-level
+              ``_ALARM_PERSISTENCE_PATH`` when ``None``.
+
+    Returns:
+        Number of players whose alarms were loaded.
+    """
+    target = path or _ALARM_PERSISTENCE_PATH
+    if target is None:
+        return 0
+    if not target.is_file():
+        return 0
+
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except Exception:
+        logger.exception("Skipping corrupt alarms file: %s", target)
+        return 0
+
+    loaded = 0
+    players: dict[str, list[dict[str, Any]]] = data.get("players", {})
+    for player_id, alarm_list in players.items():
+        entries: list[AlarmEntry] = []
+        for ad in alarm_list:
+            entries.append(AlarmEntry(
+                id=ad.get("id", uuid.uuid4().hex),
+                time=ad.get("time", 0),
+                dow=set(ad.get("dow", [])),
+                enabled=ad.get("enabled", True),
+                repeat=ad.get("repeat", True),
+                volume=ad.get("volume", 50),
+                shufflemode=ad.get("shufflemode", 0),
+                url=ad.get("url"),
+            ))
+        _PLAYER_ALARMS[player_id] = entries
+        loaded += 1
+
+    default_volumes: dict[str, int] = data.get("default_volumes", {})
+    for pid, vol in default_volumes.items():
+        _PLAYER_DEFAULT_VOLUME[pid] = int(vol)
+
+    if loaded:
+        logger.info("Loaded alarms for %d player(s) from %s", loaded, target)
+    return loaded
+
+
+def _auto_save() -> None:
+    """Save alarms if persistence is configured (fire-and-forget)."""
+    if _ALARM_PERSISTENCE_PATH is not None:
+        save_alarms()
 
 
 def _parse_int(value: Any) -> int | None:
@@ -216,6 +348,7 @@ async def cmd_alarm(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
                 return {"error": "Invalid alarm parameters"}
 
             alarms.append(alarm)
+            _auto_save()
             return {"id": alarm.id}
 
         if cmd == "delete":
@@ -224,6 +357,8 @@ async def cmd_alarm(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
                 return {"error": "Missing alarm id"}
 
             removed = _remove_alarm(alarms, alarm_id)
+            if removed:
+                _auto_save()
             return {"id": alarm_id} if removed else {}
 
         if cmd == "update":
@@ -237,16 +372,19 @@ async def cmd_alarm(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
 
             if not _apply_alarm_updates(alarm, params):
                 return {"error": "Invalid alarm parameters"}
+            _auto_save()
             return {"id": alarm.id}
 
         if cmd == "enableall":
             for alarm in alarms:
                 alarm.enabled = True
+            _auto_save()
             return {}
 
         if cmd == "disableall":
             for alarm in alarms:
                 alarm.enabled = False
+            _auto_save()
             return {}
 
         # defaultvolume
@@ -255,6 +393,7 @@ async def cmd_alarm(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
             return {"error": "Missing or invalid alarm volume"}
 
         _PLAYER_DEFAULT_VOLUME[ctx.player_id] = parsed_volume
+        _auto_save()
         return {"volume": parsed_volume}
 
 

@@ -136,6 +136,18 @@ SLIMPROTO_PORT = 3483
 # Time after which a client is considered dead if no heartbeat received.
 CLIENT_TIMEOUT_SECONDS = 60
 
+# ---------------------------------------------------------------------------
+# IR timing constants (derived from LMS Slim::Hardware::IR)
+# ---------------------------------------------------------------------------
+# If time between identical IR codes is less than this, it's a repeat.
+# LMS uses 140ms ($IRMINTIME); we use 300ms to match our existing gate and
+# account for jitter from wireless remotes / Bluetooth bridges.
+IR_REPEAT_WINDOW_MS = 300
+
+# After this many ms of continuous repeating, the press is promoted to "hold".
+# LMS uses 900ms ($IRHOLDTIME).
+IR_HOLD_THRESHOLD_MS = 900
+
 # Interval for sending server heartbeats (strm t) to players
 SERVER_HEARTBEAT_INTERVAL_SECONDS = 10
 
@@ -446,7 +458,6 @@ class SlimprotoServer:
             except Exception as e:
                 logger.debug("Could not set TCP keepalive for %s: %s", remote_addr, e)
 
-        # Create a temporary client object for the connection
         client = PlayerClient(reader, writer)
 
         try:
@@ -629,7 +640,7 @@ class SlimprotoServer:
         # 1. Send 'vers' - Server version (LMS sends this first!)
         # This is critical for SqueezePlay/Jive devices (Radio, Boom, Touch)
         # Without this, they show "Connection not possible"
-        # NOTE: Must be 7.x for firmware compatibility - see Research_gold.md
+        # Must be 7.x — SqueezePlay firmware <=7.7.3 rejects version 8.0.0+.
         # LMS uses "7.999.999" (RADIO_COMPATIBLE_VERSION) to bypass this.
         version = "7.999.999"
         await self._send_message(client, "vers", version.encode("utf-8"))
@@ -1173,7 +1184,7 @@ class SlimprotoServer:
         # Publish status event for Cometd subscribers.
         # State changes (STMp/r/s) always publish immediately.
         # STMt heartbeats publish throttled elapsed-time updates during playback
-        # so that JiveLite / Web-UI / Cadence receive periodic time corrections.
+        # so that JiveLite / Web UI receive periodic time corrections.
         should_publish = False
         if event_code.startswith("STM"):
             state_code = event_code[3:4]
@@ -1430,75 +1441,225 @@ class SlimprotoServer:
     # IR / Button Dispatch
     # -------------------------------------------------------------------------
 
+    # Per-player IR state for hold/repeat detection.
+    # Stored as a dict keyed by player MAC address.
+    # Values are [last_code, first_press_ms, last_press_ms, press_count, is_held]
+    # Using a list for lightweight mutable storage (no dataclass import needed).
+    _ir_state: dict[str, list[Any]]  # populated lazily
+
     # IR/button code mapping for LMS-compatible playback controls.
     #
-    # Sources:
+    # Sources (LMS reference):
     # - IR/Slim_Devices_Remote.ir
     # - IR/jvc_dvd.ir
     # - IR/Front_Panel.ir (down events only; up events are intentionally ignored)
-    #
-    # This remains focused on transport/power/volume/mute controls.
+    # - IR/Default.map (button → function mapping)
     _IR_CODE_MAP: dict[str, str] = {
-        # Slim Devices remote (JVC)
+        # =================================================================
+        # Slim Devices Remote (Slim_Devices_Remote.ir)
+        # =================================================================
+        # Transport
         "768910ef": "play",
         "768920df": "pause",
-        "7689a05f": "playlist_next",
-        "7689c03f": "playlist_prev",
+        "7689a05f": "playlist_next",   # fwd
+        "7689c03f": "playlist_prev",   # rew
+        # Volume
         "7689807f": "volume_up",
         "768900ff": "volume_down",
+        "7689c43b": "mute_toggle",
+        # Power
         "768940bf": "power_toggle",
         "76898f70": "power_on",
         "76898778": "power_off",
-        "7689c43b": "mute_toggle",
+        # Number keys
+        "76899867": "number_0",
+        "7689f00f": "number_1",
+        "768908f7": "number_2",
+        "76898877": "number_3",
+        "768948b7": "number_4",
+        "7689c837": "number_5",
+        "768928d7": "number_6",
+        "7689a857": "number_7",
+        "76896897": "number_8",
+        "7689e817": "number_9",
+        # Arrow keys
+        "7689e01f": "arrow_up",
+        "7689b04f": "arrow_down",
+        "7689906f": "arrow_left",
+        "7689d02f": "arrow_right",
+        # Shuffle / Repeat
+        "7689d827": "shuffle_toggle",
+        "768938c7": "repeat_toggle",
+        # Navigation
+        "768922dd": "home",
+        "768918e7": "favorites",
+        "7689708f": "browse",
+        # Presets
+        "76898a75": "preset_1",
+        "76894ab5": "preset_2",
+        "7689ca35": "preset_3",
+        "76892ad5": "preset_4",
+        "7689aa55": "preset_5",
+        "76896a95": "preset_6",
+        # Sleep
+        "7689b847": "sleep",
 
-        # JVC DVD remote profile used by LMS
+        # =================================================================
+        # JVC DVD Remote (jvc_dvd.ir)
+        # =================================================================
+        # Transport
         "0000f732": "play",
         "0000f7d6": "play",
         "0000f7b2": "pause",
         "0000f7c2": "stop",
-        "0000f76e": "playlist_next",
-        "0000f70e": "playlist_prev",
+        "0000f76e": "playlist_next",   # fwd
+        "0000f70e": "playlist_prev",   # rew
+        # Volume
         "0000c078": "volume_up",
         "0000c578": "volume_up",
         "0000f778": "volume_up",
         "0000c0f8": "volume_down",
         "0000c5f8": "volume_down",
         "0000f7f8": "volume_down",
+        "0000c038": "mute_toggle",
+        "0000c538": "mute_toggle",
+        # Power
         "0000f702": "power_toggle",
         "0000f701": "power_on",
         "0000f700": "power_off",
-        "0000c038": "mute_toggle",
-        "0000c538": "mute_toggle",
+        # Number keys
+        "0000f776": "number_0",
+        "0000f786": "number_1",
+        "0000f746": "number_2",
+        "0000f7c6": "number_3",
+        "0000f726": "number_4",
+        "0000f7a6": "number_5",
+        "0000f766": "number_6",
+        "0000f7e6": "number_7",
+        "0000f716": "number_8",
+        "0000f796": "number_9",
+        # Arrows
+        "0000f70b": "arrow_up",
+        "0000f78b": "arrow_down",
+        "0000f74b": "arrow_left",
+        "0000f7cb": "arrow_right",
+        # Shuffle / Repeat
+        "0000f72b": "shuffle_toggle",
+        "0000f7ab": "repeat_toggle",
+        # Navigation
+        "0000f783": "home",
 
-        # Front panel buttons (".down" events only)
+        # =================================================================
+        # Front Panel buttons (Front_Panel.ir — .down events only)
+        # =================================================================
+        # Transport
         "00010012": "play",
         "00010017": "pause",
-        "00010010": "playlist_prev",
-        "00010011": "playlist_next",
-        "00010019": "volume_up",
-        "0001001a": "volume_down",
-        "0001000a": "power_toggle",
+        "00010010": "playlist_prev",   # rew.down
+        "00010011": "playlist_next",   # fwd.down
+        # Volume
+        "00010019": "volume_up",       # volup_front.down
+        "0001001a": "volume_down",     # voldown_front.down
+        # Power
+        "0001000a": "power_toggle",    # power_front.down
+        # Number keys (front panel)
+        "00010000": "number_0",
+        "00010001": "number_1",
+        "00010002": "number_2",
+        "00010003": "number_3",
+        "00010004": "number_4",
+        "00010005": "number_5",
+        "00010006": "number_6",
+        "00010007": "number_7",
+        "00010008": "number_8",
+        "00010009": "number_9",
+        # Arrows (front panel)
+        "0001000b": "arrow_up",
+        "0001000c": "arrow_down",
+        "0001000d": "arrow_left",
+        "0001000e": "arrow_right",     # knob_push.down
+        # Navigation
+        "00010018": "browse",
+        "00010015": "now_playing",
+        "00010013": "add",
+        "00010014": "brightness_toggle",
+        # Boom presets (front panel)
+        "00010023": "preset_1",
+        "00010024": "preset_2",
+        "00010025": "preset_3",
+        "00010026": "preset_4",
+        "00010027": "preset_5",
+        "00010028": "preset_6",
 
+        # =================================================================
         # Boom hardware buttons (observed BUTN codes)
+        # =================================================================
         "0000f501": "volume_up",
         "0000f502": "volume_down",
         "0000f508": "pause",
         "0000f509": "power_toggle",
     }
 
+    # Primary action for each logical button (first/single press).
     _IR_ACTION_COMMANDS: dict[str, tuple[str, ...]] = {
+        # Transport
         "play": ("play",),
         "pause": ("pause",),
         "stop": ("stop",),
         "playlist_next": ("playlist", "index", "+1"),
         "playlist_prev": ("playlist", "index", "-1"),
+        # Volume
         "volume_up": ("mixer", "volume", "+5"),
         "volume_down": ("mixer", "volume", "-5"),
+        "mute_toggle": ("mixer", "muting", "toggle"),
+        # Power
         "power_toggle": ("power",),
         "power_on": ("power", "1"),
         "power_off": ("power", "0"),
-        "mute_toggle": ("mixer", "muting", "toggle"),
+        # Numbers → jump to track N in playlist (0-indexed)
+        "number_0": ("playlist", "index", "0"),
+        "number_1": ("playlist", "index", "1"),
+        "number_2": ("playlist", "index", "2"),
+        "number_3": ("playlist", "index", "3"),
+        "number_4": ("playlist", "index", "4"),
+        "number_5": ("playlist", "index", "5"),
+        "number_6": ("playlist", "index", "6"),
+        "number_7": ("playlist", "index", "7"),
+        "number_8": ("playlist", "index", "8"),
+        "number_9": ("playlist", "index", "9"),
+        # Shuffle / Repeat (toggle cycles through modes, like LMS)
+        "shuffle_toggle": ("playlist", "shuffle"),
+        "repeat_toggle": ("playlist", "repeat"),
     }
+
+    # Actions fired on hold (same code repeated past IR_HOLD_THRESHOLD_MS).
+    # LMS reference: Default.map [common] section.
+    _IR_HOLD_ACTIONS: dict[str, tuple[str, ...]] = {
+        # Volume: finer steps during hold for smooth ramping
+        "volume_up": ("mixer", "volume", "+2"),
+        "volume_down": ("mixer", "volume", "-2"),
+        # Fwd/Rew hold: seek within track (LMS: fwd.hold = song_scanner)
+        "playlist_next": ("time", "+10"),
+        "playlist_prev": ("time", "-10"),
+        # Pause hold: stop (LMS: pause.hold = stop)
+        "pause": ("stop",),
+    }
+
+    # Actions fired on repeat BEFORE hold threshold (within first 900ms).
+    # Only volume uses this — other actions suppress repeats until hold.
+    _IR_REPEAT_ACTIONS: dict[str, tuple[str, ...]] = {
+        "volume_up": ("mixer", "volume", "+2"),
+        "volume_down": ("mixer", "volume", "-2"),
+    }
+
+    # Actions that are purely informational (logged but not dispatched).
+    # These need a menu/display system to be useful.
+    _IR_LOG_ONLY_ACTIONS: frozenset[str] = frozenset({
+        "arrow_up", "arrow_down", "arrow_left", "arrow_right",
+        "home", "favorites", "browse", "now_playing", "add",
+        "brightness_toggle", "sleep",
+        "preset_1", "preset_2", "preset_3", "preset_4", "preset_5", "preset_6",
+    })
 
     async def _dispatch_ir(
         self,
@@ -1508,10 +1669,16 @@ class SlimprotoServer:
     ) -> None:
         """Map an IR/button code to a playback command and execute it.
 
-        This is a simplified version of LMS ``Slim::Hardware::IR`` which
-        maintains a full IR queue with timing-based repeat/hold detection.
-        For now we map known codes directly to commands; repeat-suppression
-        uses a simple time-gate per player.
+        Implements per-player state tracking with hold/repeat detection,
+        inspired by LMS ``Slim::Hardware::IR``:
+
+        - **First press**: fire the primary action immediately.
+        - **Repeat** (same code within ``IR_REPEAT_WINDOW_MS``):
+          - Before hold threshold: fire repeat action (volume only),
+            otherwise suppress.
+          - After hold threshold (``IR_HOLD_THRESHOLD_MS``): fire hold
+            action (seek, stop, fine volume).
+        - **New code or timeout**: reset state, fire primary action.
         """
         action = self._IR_CODE_MAP.get(ir_code)
         if action is None:
@@ -1521,29 +1688,104 @@ class SlimprotoServer:
             )
             return
 
-        # Simple repeat-gate: ignore identical codes within 300 ms
+        # Log-only actions (navigation, presets, brightness) — no dispatch.
+        if action in self._IR_LOG_ONLY_ACTIONS:
+            logger.info(
+                "IR from %s: code=%s → %s (log-only, no handler yet)",
+                client.id, ir_code, action,
+            )
+            return
+
+        # --- Per-player IR state ---
+        # State list: [last_code, first_press_ms, last_press_ms, press_count, is_held]
+        #              0           1               2              3            4
+        ir_states: dict[str, list[Any]] = getattr(self, "_ir_state", {})
+        if not hasattr(self, "_ir_state"):
+            self._ir_state = ir_states
+
         gate_key = client.mac_address
         now_ms = ir_time  # player ticks @ 1 kHz
-        last = getattr(self, "_ir_last", {})
-        if gate_key in last:
-            prev_code, prev_time = last[gate_key]
-            if prev_code == ir_code and abs(now_ms - prev_time) < 300:
-                logger.debug("IR from %s: repeat-suppressed %s", client.id, ir_code)
-                return
-        last[gate_key] = (ir_code, now_ms)
-        self._ir_last = last
 
-        logger.info("IR from %s: code=%s → action=%s", client.id, ir_code, action)
+        state = ir_states.get(gate_key)
+        if state is None:
+            state = ["", 0, 0, 0, False]
+            ir_states[gate_key] = state
+
+        prev_code = state[0]
+        first_press_ms = state[1]
+        last_press_ms = state[2]
+        press_count: int = state[3]
+        is_held: bool = state[4]
+
+        # Detect repeat vs new press.
+        # Handle 32-bit timer wrap-around (player ticks are unsigned 32-bit).
+        delta_ms = (now_ms - last_press_ms) & 0xFFFFFFFF
+        is_repeat = (
+            ir_code == prev_code
+            and delta_ms < IR_REPEAT_WINDOW_MS
+            and press_count > 0
+        )
+
+        if is_repeat:
+            # --- Repeat / Hold path ---
+            press_count += 1
+            hold_duration_ms = (now_ms - first_press_ms) & 0xFFFFFFFF
+
+            if hold_duration_ms >= IR_HOLD_THRESHOLD_MS or is_held:
+                # In hold zone — fire hold action if available
+                is_held = True
+                command = self._IR_HOLD_ACTIONS.get(action)
+                if command is not None:
+                    logger.debug(
+                        "IR from %s: %s HOLD (count=%d, held=%dms)",
+                        client.id, action, press_count, hold_duration_ms,
+                    )
+                else:
+                    # No hold action defined — suppress
+                    logger.debug(
+                        "IR from %s: %s repeat-suppressed (hold, no hold action)",
+                        client.id, action,
+                    )
+            else:
+                # Pre-hold repeat — only volume passes through
+                command = self._IR_REPEAT_ACTIONS.get(action)
+                if command is not None:
+                    logger.debug(
+                        "IR from %s: %s REPEAT (count=%d, %dms)",
+                        client.id, action, press_count, hold_duration_ms,
+                    )
+                else:
+                    logger.debug(
+                        "IR from %s: repeat-suppressed %s (%dms)",
+                        client.id, action, delta_ms,
+                    )
+
+            # Update state
+            state[2] = now_ms
+            state[3] = press_count
+            state[4] = is_held
+
+            if command is None:
+                return
+        else:
+            # --- New press path ---
+            state[0] = ir_code
+            state[1] = now_ms
+            state[2] = now_ms
+            state[3] = 1
+            state[4] = False
+
+            command = self._IR_ACTION_COMMANDS.get(action)
+            logger.info("IR from %s: code=%s → action=%s", client.id, ir_code, action)
+
+        if command is None:
+            logger.warning("IR dispatch: no handler for action '%s'", action)
+            return
 
         # Execute the mapped command through JSON-RPC handler
         jsonrpc_handler = getattr(self, "jsonrpc_handler", None)
         if jsonrpc_handler is None:
             logger.warning("IR dispatch: no jsonrpc_handler wired — cannot execute '%s'", action)
-            return
-
-        command = self._IR_ACTION_COMMANDS.get(action)
-        if command is None:
-            logger.warning("IR dispatch: no handler for action '%s'", action)
             return
 
         try:

@@ -31,6 +31,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 from resonance.protocol.commands import FLAG_NO_RESTART_DECODER
 from resonance.streaming.crossfade import PreparedCrossfadePlan
@@ -79,6 +80,41 @@ class PendingCrossfade:
     generation: int
     plan: PreparedCrossfadePlan
 
+
+@dataclass(frozen=True, slots=True)
+class RemoteStreamInfo:
+    """Metadata for a queued remote URL stream.
+
+    Stored by :meth:`StreamingServer.queue_url` and consumed by the
+    streaming route to proxy the remote audio to the player.
+    """
+
+    url: str
+    """The URL to fetch audio data from (may be HTTP or HTTPS)."""
+
+    content_type: str = "audio/mpeg"
+    """Expected MIME type of the remote stream."""
+
+    is_live: bool = False
+    """``True`` for infinite live streams (Internet Radio)."""
+
+    title: str = ""
+    """Display title (for logging / ICY metadata)."""
+
+
+class ResolvedStream(NamedTuple):
+    """Result of :meth:`StreamingServer.resolve_stream`.
+
+    Exactly one of *file_path* or *remote* is set.
+    """
+
+    file_path: Path | None
+    """Local file path (for direct / transcoded streaming)."""
+
+    remote: RemoteStreamInfo | None
+    """Remote URL info (for proxy streaming)."""
+
+
 # Buffer size for streaming
 STREAM_BUFFER_SIZE = 65536  # 64KB chunks
 
@@ -119,6 +155,11 @@ class StreamingServer:
 
         # Queue of files to stream, keyed by player MAC
         self._stream_queue: dict[str, Path] = {}
+
+        # Queue of remote URLs to proxy-stream, keyed by player MAC.
+        # When a remote URL is queued, ``_stream_queue`` is cleared for that
+        # player and vice-versa — only one source type is active at a time.
+        self._remote_urls: dict[str, RemoteStreamInfo] = {}
 
         # Seek positions for transcoded streams, keyed by player MAC
         # Values are (start_seconds, end_seconds or None)
@@ -168,6 +209,24 @@ class StreamingServer:
         # Pending server-side crossfade plan keyed by player MAC.
         # A plan is consumed by the next /stream.mp3 request for that generation.
         self._crossfade_plans: dict[str, PendingCrossfade] = {}
+
+        # Per-player ICY metadata (StreamTitle) parsed from proxied radio
+        # streams.  Updated by the streaming route's ``_log_icy_metadata()``
+        # callback and read by ``cmd_status`` to populate ``current_title``.
+        self._icy_titles: dict[str, str] = {}
+
+        # ── Re-stream retry tracking (LMS _RetryOrNext equivalent) ──
+        #
+        # When a live radio stream drops unexpectedly, we attempt to
+        # reconnect (like LMS StreamingController.pm L920-927).  To
+        # prevent infinite reconnect loops on dead URLs, we track retry
+        # count and timing per player.
+        #
+        # Format: {player_mac: (retry_count, last_retry_monotonic)}
+        # Reset when: a genuinely new track is queued (queue_file / normal
+        #   queue_url), or when enough time passes between drops (the
+        #   stream was working fine in between → self-healing).
+        self._restream_state: dict[str, tuple[int, float]] = {}
 
         # NOTE: We previously had per-player locks (_stream_locks) to serialize
         # transcoded streams. This was REMOVED because it caused blocking during
@@ -455,6 +514,11 @@ class StreamingServer:
         self._stream_tokens[player_mac] = CancellationToken(gen)
 
         self._stream_queue[player_mac] = file_path
+        # Clear stale ICY title — local file playback should not show
+        # a leftover radio station's StreamTitle.
+        self._icy_titles.pop(player_mac, None)
+        # A local file replaces any pending remote URL.
+        self._remote_urls.pop(player_mac, None)
         # Clear any previous seek position
         self._seek_positions.pop(player_mac, None)
         self._byte_offsets.pop(player_mac, None)
@@ -467,7 +531,209 @@ class StreamingServer:
         # set_track_duration() once the track metadata is known.
         self._track_duration.pop(player_mac, None)
 
+        # New local track → reset re-stream retry state.
+        self._restream_state.pop(player_mac, None)
+
         logger.info("Queued %s for player %s (generation %d)", file_path.name, player_mac, gen)
+
+    def queue_url(
+        self,
+        player_mac: str,
+        url: str,
+        *,
+        content_type: str = "audio/mpeg",
+        is_live: bool = False,
+        title: str = "",
+        is_restream: bool = False,
+    ) -> None:
+        """Queue a remote URL to be proxy-streamed to a player.
+
+        The server will fetch the URL on behalf of the player and relay
+        audio data via ``/stream.mp3``.  This is required because
+        Squeezebox hardware cannot handle HTTPS and has limited HTTP
+        capabilities.
+
+        Args:
+            player_mac: MAC address of the player.
+            url: Remote audio URL (HTTP or HTTPS).
+            content_type: MIME type of the remote stream.
+            is_live: ``True`` for infinite live streams (Internet Radio).
+            title: Human-readable title for logging.
+            is_restream: ``True`` when re-queuing after a live stream drop.
+                Preserves the retry counter so the limit is enforced.
+        """
+        # Cancel any existing stream first (LMS-style closeStream)
+        self.cancel_stream(player_mac)
+
+        # Increment generation and create new token
+        gen = self._stream_generation.get(player_mac, 0) + 1
+        self._stream_generation[player_mac] = gen
+        self._stream_generation_started_at[player_mac] = time.monotonic()
+        self._stream_tokens[player_mac] = CancellationToken(gen)
+
+        self._remote_urls[player_mac] = RemoteStreamInfo(
+            url=url,
+            content_type=content_type,
+            is_live=is_live,
+            title=title,
+        )
+        # A remote URL replaces any pending local file.
+        self._stream_queue.pop(player_mac, None)
+        # Clear seek/offset state — not applicable for remote streams.
+        self._seek_positions.pop(player_mac, None)
+        self._byte_offsets.pop(player_mac, None)
+        self._crossfade_plans.pop(player_mac, None)
+        self._start_offset.pop(player_mac, None)
+        self._track_duration.pop(player_mac, None)
+
+        # New user-initiated URL → reset retry state.
+        # Re-stream attempts preserve the counter (is_restream=True).
+        if not is_restream:
+            self._restream_state.pop(player_mac, None)
+
+        logger.info(
+            "Queued remote URL for player %s (generation %d%s): %s",
+            player_mac,
+            gen,
+            " [restream]" if is_restream else "",
+            title or url,
+        )
+
+    # ------------------------------------------------------------------
+    # ICY metadata (StreamTitle) per player
+    # ------------------------------------------------------------------
+
+    def set_icy_title(self, player_mac: str, title: str) -> bool:
+        """Store the latest ICY StreamTitle parsed from a proxied radio stream.
+
+        Called by the streaming route when ICY metadata is stripped from
+        the upstream byte stream.  The value is read by ``cmd_status``
+        to populate ``current_title`` for remote/radio tracks.
+
+        Mirrors LMS ``setCurrentTitle()`` (Info.pm L516) change detection:
+        only updates (and returns ``True``) when the title actually differs
+        from the previously stored value.  This prevents firing spurious
+        ``playlist newmetadata`` events when the same ICY block is repeated
+        (which happens every ~16 KB of audio data).
+
+        Returns:
+            ``True`` if the title changed, ``False`` if it was identical
+            to the previously stored value.
+        """
+        previous = self._icy_titles.get(player_mac)
+        if previous == title:
+            return False
+        self._icy_titles[player_mac] = title
+        return True
+
+    def get_icy_title(self, player_mac: str) -> str | None:
+        """Return the last ICY StreamTitle for *player_mac*, or ``None``."""
+        return self._icy_titles.get(player_mac)
+
+    def clear_icy_title(self, player_mac: str) -> None:
+        """Remove any stored ICY title for *player_mac*.
+
+        Called when a new (non-radio) stream is queued so stale radio
+        metadata does not bleed into a local-library track's status.
+        """
+        self._icy_titles.pop(player_mac, None)
+
+    # ------------------------------------------------------------------
+    # Live-stream re-stream retry tracking (LMS _RetryOrNext equivalent)
+    # ------------------------------------------------------------------
+
+    #: Maximum consecutive re-stream attempts before giving up.
+    #: LMS uses retryData with count but has no hard-coded max —
+    #: we add a safety limit to prevent infinite loops on dead URLs.
+    MAX_RESTREAM_RETRIES: int = 3
+
+    #: If more than this many seconds pass between drops, reset the
+    #: retry counter (the stream was working fine in between).
+    RESTREAM_RETRY_RESET_WINDOW: float = 120.0
+
+    #: Minimum elapsed playback (seconds) before re-stream is attempted.
+    #: Matches LMS ``$elapsed > 10`` check in ``_RetryOrNext``.
+    MIN_ELAPSED_FOR_RESTREAM: float = 10.0
+
+    def record_restream_attempt(self, player_mac: str) -> bool:
+        """Record a re-stream attempt and return whether it is allowed.
+
+        Returns ``True`` if the attempt is within limits, ``False`` if
+        the retry budget is exhausted (caller should let normal
+        track-finished / playlist-advance logic proceed).
+
+        The counter self-heals: if the last drop was more than
+        :attr:`RESTREAM_RETRY_RESET_WINDOW` seconds ago, the counter
+        resets — the stream was working fine in the meantime.
+        """
+        now = time.monotonic()
+        prev = self._restream_state.get(player_mac)
+
+        if prev is not None:
+            count, last_time = prev
+            if now - last_time > self.RESTREAM_RETRY_RESET_WINDOW:
+                # Long gap since last drop — stream was healthy, reset.
+                count = 0
+        else:
+            count = 0
+
+        if count >= self.MAX_RESTREAM_RETRIES:
+            logger.warning(
+                "Re-stream retry limit reached for player %s (%d/%d) — giving up",
+                player_mac, count, self.MAX_RESTREAM_RETRIES,
+            )
+            return False
+
+        count += 1
+        self._restream_state[player_mac] = (count, now)
+        logger.info(
+            "Re-stream attempt %d/%d for player %s",
+            count, self.MAX_RESTREAM_RETRIES, player_mac,
+        )
+        return True
+
+    def clear_restream_state(self, player_mac: str) -> None:
+        """Reset re-stream retry state for a player.
+
+        Called when a genuinely new track starts (not a re-stream).
+        """
+        self._restream_state.pop(player_mac, None)
+
+    def get_restream_retry_count(self, player_mac: str) -> int:
+        """Return current retry count (0 if no retries recorded)."""
+        state = self._restream_state.get(player_mac)
+        return state[0] if state is not None else 0
+
+    def is_remote_stream(self, player_mac: str) -> bool:
+        """Return ``True`` if the pending stream for *player_mac* is a remote URL."""
+        return player_mac in self._remote_urls
+
+    def resolve_stream(self, player_mac: str | None) -> ResolvedStream:
+        """Resolve what to stream for a player — local file **or** remote URL.
+
+        This is the unified successor to :meth:`resolve_file`.  The streaming
+        route should call this instead and branch on the result.
+
+        Returns:
+            A :class:`ResolvedStream` tuple.  Exactly one of its fields is
+            populated; both may be ``None`` if nothing is queued.
+        """
+        if not player_mac:
+            return ResolvedStream(file_path=None, remote=None)
+
+        # Remote URL takes priority (set by queue_url).
+        if player_mac in self._remote_urls:
+            info = self._remote_urls[player_mac]
+            logger.info(
+                "resolve_stream: player=%s -> REMOTE URL: %s",
+                player_mac,
+                info.title or info.url,
+            )
+            return ResolvedStream(file_path=None, remote=info)
+
+        # Fall back to local file resolution (existing logic).
+        local = self.resolve_file(player_mac)
+        return ResolvedStream(file_path=local, remote=None)
 
     def queue_file_with_crossfade_plan(
         self,
@@ -749,6 +1015,7 @@ class StreamingServer:
             self.cancel_stream(player_mac)
 
         self._stream_queue.clear()
+        self._remote_urls.clear()
         self._seek_positions.clear()
         self._byte_offsets.clear()
         self._stream_tokens.clear()
@@ -817,6 +1084,9 @@ class StreamingServer:
             ".aif": "audio/aiff",
             ".aiff": "audio/aiff",
             ".opus": "audio/opus",
+            ".wv": "audio/x-wavpack",
+            ".ape": "audio/x-monkeys-audio",
+            ".mpc": "audio/x-musepack",
         }
 
         if suffix in audio_types:

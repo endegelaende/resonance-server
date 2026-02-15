@@ -13,6 +13,8 @@
   import AddFolderModal from "$lib/components/AddFolderModal.svelte";
   import SettingsPanel from "$lib/components/SettingsPanel.svelte";
   import ResizeHandle from "$lib/components/ResizeHandle.svelte";
+  import RadioView from "$lib/components/RadioView.svelte";
+  import PlaylistsView from "$lib/components/PlaylistsView.svelte";
   import {
     Library,
     Users,
@@ -564,7 +566,7 @@
       <!-- Library Browser -->
       <main class="flex-1 flex flex-col min-w-0 overflow-hidden relative">
         <!-- Library Header (Breadcrumbs & Actions) -->
-        {#if uiStore.currentView !== "settings" && uiStore.currentView !== "playlists"}
+        {#if uiStore.currentView !== "settings" && uiStore.currentView !== "playlists" && uiStore.currentView !== "radio"}
           <div
             class="flex items-center justify-between px-6 py-4 border-b border-border bg-base/50 backdrop-blur-sm z-10"
           >
@@ -920,16 +922,9 @@
               {/if}
             </div>
           {:else if uiStore.currentView === "playlists"}
-            <div
-              class="flex flex-col items-center justify-center h-full text-overlay-1"
-            >
-              <div
-                class="w-16 h-16 rounded-full bg-surface-0 flex items-center justify-center mb-4"
-              >
-                <Users size={32} class="opacity-50" />
-              </div>
-              <p>Playlists coming soon</p>
-            </div>
+            <PlaylistsView />
+          {:else if uiStore.currentView === "radio"}
+            <RadioView />
           {:else if uiStore.currentView === "settings"}
             <SettingsPanel />
           {/if}

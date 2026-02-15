@@ -6,6 +6,7 @@ export type View =
   | "tracks"
   | "search"
   | "playlists"
+  | "radio"
   | "settings";
 export type ModalType = "none" | "add-folder";
 
@@ -31,6 +32,7 @@ class UIStore {
       view === "artists" ||
       view === "albums" ||
       view === "playlists" ||
+      view === "radio" ||
       view === "settings"
     ) {
       this.selectedArtist = null;

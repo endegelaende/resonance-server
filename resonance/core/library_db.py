@@ -32,6 +32,19 @@ from resonance.core.db.models import (
     normalize_int,
     normalize_text,
 )
+from resonance.core.db.query_builder import (
+    AlbumFilter,
+    ArtistFilter,
+    TrackFilter,
+    album_row_to_dict,
+    artist_row_to_dict,
+    build_albums_count_query,
+    build_albums_query,
+    build_artists_count_query,
+    build_artists_query,
+    build_tracks_count_query,
+    build_tracks_query,
+)
 from resonance.core.db.schema import ensure_schema as ensure_schema_sql
 
 
@@ -124,12 +137,10 @@ class LibraryDb:
             g for g in ((normalize_text(x) for x in track.genres) if track.genres else ()) if g
         )
 
-        # Ensure artist exists and get ID
         artist_id: int | None = None
         if artist:
             artist_id = await self._ensure_artist(artist)
 
-        # Ensure album exists and get ID
         album_id: int | None = None
         if album:
             album_artist_name = album_artist or artist
@@ -447,7 +458,6 @@ class LibraryDb:
         tracks_deleted = await queries_tracks.delete_tracks_by_album_id(conn, album_id)
         result["tracks_deleted"] = tracks_deleted
 
-        # Delete the album itself
         cursor = await conn.execute("DELETE FROM albums WHERE id = ?;", (album_id,))
         result["album_deleted"] = cursor.rowcount
 
@@ -897,6 +907,79 @@ class LibraryDb:
             offset=offset,
             order_by=order_by,
         )
+
+    # ===========================================================================
+    # Generic filtered queries (query_builder-based)
+    # ===========================================================================
+
+    async def list_tracks_filtered(
+        self,
+        f: TrackFilter,
+        *,
+        limit: int = 500,
+        offset: int = 0,
+        order_by: str = "title",
+    ) -> list[TrackRow]:
+        """List tracks matching the given filter using the dynamic query builder."""
+        conn = self._require_conn()
+        sql, params = build_tracks_query(f, order_by=order_by, limit=limit, offset=offset)
+        cursor = await conn.execute(sql, params)
+        rows = await cursor.fetchall()
+        return [queries_tracks._row_to_track(r) for r in rows]
+
+    async def count_tracks_filtered(self, f: TrackFilter) -> int:
+        """Count tracks matching the given filter using the dynamic query builder."""
+        conn = self._require_conn()
+        sql, params = build_tracks_count_query(f)
+        cursor = await conn.execute(sql, params)
+        row = await cursor.fetchone()
+        return int(row["c"]) if row else 0
+
+    async def list_albums_filtered(
+        self,
+        f: AlbumFilter,
+        *,
+        limit: int = 500,
+        offset: int = 0,
+        order_by: str = "album",
+    ) -> list[dict[str, Any]]:
+        """List albums (with track_count) matching the given filter."""
+        conn = self._require_conn()
+        sql, params = build_albums_query(f, order_by=order_by, limit=limit, offset=offset)
+        cursor = await conn.execute(sql, params)
+        rows = await cursor.fetchall()
+        return [album_row_to_dict(r) for r in rows]
+
+    async def count_albums_filtered(self, f: AlbumFilter) -> int:
+        """Count albums matching the given filter."""
+        conn = self._require_conn()
+        sql, params = build_albums_count_query(f)
+        cursor = await conn.execute(sql, params)
+        row = await cursor.fetchone()
+        return int(row["c"]) if row else 0
+
+    async def list_artists_filtered(
+        self,
+        f: ArtistFilter,
+        *,
+        limit: int = 500,
+        offset: int = 0,
+        order_by: str = "artist",
+    ) -> list[dict[str, Any]]:
+        """List artists (with album_count) matching the given filter."""
+        conn = self._require_conn()
+        sql, params = build_artists_query(f, order_by=order_by, limit=limit, offset=offset)
+        cursor = await conn.execute(sql, params)
+        rows = await cursor.fetchall()
+        return [artist_row_to_dict(r) for r in rows]
+
+    async def count_artists_filtered(self, f: ArtistFilter) -> int:
+        """Count artists matching the given filter."""
+        conn = self._require_conn()
+        sql, params = build_artists_count_query(f)
+        cursor = await conn.execute(sql, params)
+        row = await cursor.fetchone()
+        return int(row["c"]) if row else 0
 
     # ===========================================================================
     # Artist queries (delegated to queries_artists module)
@@ -1619,3 +1702,92 @@ class LibraryDb:
         )
         row = await cursor.fetchone()
         return int(row["c"]) if row else 0
+
+    # ===========================================================================
+    # FTS5 full-text search helpers
+    # ===========================================================================
+
+    async def rebuild_fts(self) -> None:
+        """Rebuild the FTS5 index from the tracks table.
+
+        Should be called after a full rescan (``force=True``) or after bulk
+        deletions to ensure the FTS index is consistent.  This is a no-op if
+        the ``tracks_fts`` virtual table does not exist (schema < v9).
+        """
+        conn = self._require_conn()
+        # Check whether the FTS table exists before issuing the rebuild command.
+        cursor = await conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tracks_fts' LIMIT 1;"
+        )
+        if await cursor.fetchone() is None:
+            return
+        await conn.execute("INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild');")
+        await conn.commit()
+
+    # ===========================================================================
+    # Incremental rescan helpers
+    # ===========================================================================
+
+    async def get_track_mtime_index(self) -> dict[str, tuple[int, int]]:
+        """Return a mapping of ``path → (mtime_ns, file_size)`` for all tracks.
+
+        Used by the scanner to skip files whose mtime and size have not changed
+        since the last scan (incremental rescan).
+        """
+        conn = self._require_conn()
+        cursor = await conn.execute(
+            "SELECT path, mtime_ns, file_size FROM tracks WHERE mtime_ns IS NOT NULL AND file_size IS NOT NULL;"
+        )
+        rows = await cursor.fetchall()
+        return {
+            str(row["path"]): (int(row["mtime_ns"]), int(row["file_size"]))
+            for row in rows
+        }
+
+    async def delete_tracks_not_in_paths(
+        self, valid_paths: set[str], scan_root: str
+    ) -> int:
+        """Delete tracks whose path starts with *scan_root* but is not in *valid_paths*.
+
+        This removes "orphaned" DB entries for files that have been deleted from
+        disk since the last scan.
+
+        Args:
+            valid_paths: Set of absolute path strings that were found during the
+                current scan.
+            scan_root: Only tracks whose ``path`` starts with this prefix are
+                considered for deletion (so tracks from other scan roots are
+                left untouched).
+
+        Returns:
+            Number of deleted tracks.
+        """
+        conn = self._require_conn()
+
+        # Fetch all DB paths under this scan root.
+        prefix = scan_root.rstrip("/").rstrip("\\")
+        cursor = await conn.execute(
+            "SELECT path FROM tracks WHERE path LIKE ? || '%';",
+            (prefix,),
+        )
+        rows = await cursor.fetchall()
+
+        to_delete = [str(row["path"]) for row in rows if str(row["path"]) not in valid_paths]
+
+        if not to_delete:
+            return 0
+
+        # Delete in batches to stay within SQLite's variable limit.
+        deleted = 0
+        batch_size = 500
+        for i in range(0, len(to_delete), batch_size):
+            batch = to_delete[i : i + batch_size]
+            placeholders = ",".join("?" for _ in batch)
+            cursor = await conn.execute(
+                f"DELETE FROM tracks WHERE path IN ({placeholders});",
+                batch,
+            )
+            deleted += cursor.rowcount
+
+        await conn.commit()
+        return deleted

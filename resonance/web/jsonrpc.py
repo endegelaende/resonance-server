@@ -90,7 +90,6 @@ from resonance.web.handlers.playback import (
 )
 from resonance.web.handlers.playlist import cmd_playlist
 from resonance.web.handlers.seeking import cmd_time
-from resonance.web.handlers.sync import cmd_sync, cmd_syncgroups
 from resonance.web.handlers.status import (
     cmd_displaystatus,
     cmd_player,
@@ -101,14 +100,14 @@ from resonance.web.handlers.status import (
     cmd_status,
     cmd_wipecache,
 )
-
+from resonance.web.handlers.sync import cmd_sync, cmd_syncgroups
 from resonance.web.jsonrpc_helpers import (
     ERROR_INTERNAL_ERROR,
     ERROR_INVALID_PARAMS,
     ERROR_METHOD_NOT_FOUND,
     build_error_response,
 )
-
+from resonance.web.security import is_valid_mac
 
 if TYPE_CHECKING:
     from resonance.core.artwork import ArtworkManager
@@ -124,6 +123,7 @@ logger = logging.getLogger(__name__)
 CommandHandler = Callable[[CommandContext, list[Any]], Coroutine[Any, Any, dict[str, Any]]]
 
 # Command dispatch table
+# NOTE: This dict is extended at runtime by plugins via register_command().
 COMMAND_HANDLERS: dict[str, CommandHandler] = {
     # Status commands
     "serverstatus": cmd_serverstatus,
@@ -220,6 +220,42 @@ COMMAND_HANDLERS: dict[str, CommandHandler] = {
     "playerinfo": cmd_playerinfo,
     "jiveblankcommand": cmd_jiveblankcommand,
 }
+
+
+# ---------------------------------------------------------------------------
+# Dynamic command registration (used by PluginManager / PluginContext)
+# ---------------------------------------------------------------------------
+
+
+def register_command(name: str, handler: CommandHandler) -> None:
+    """Register a JSON-RPC command handler at runtime.
+
+    Called by plugins during ``setup()`` to add new commands.
+
+    Args:
+        name: Command name (e.g. ``"favorites"``).
+        handler: Async handler matching the ``CommandHandler`` signature.
+
+    Raises:
+        RuntimeError: If a handler is already registered under *name*.
+    """
+    if name in COMMAND_HANDLERS:
+        raise RuntimeError(
+            f"Command '{name}' is already registered — cannot overwrite"
+        )
+    COMMAND_HANDLERS[name] = handler
+    logger.info("Registered plugin command: %s", name)
+
+
+def unregister_command(name: str) -> None:
+    """Remove a dynamically registered command.
+
+    Called by :class:`PluginContext._cleanup` during plugin teardown.
+    Silently ignores names that are not registered.
+    """
+    removed = COMMAND_HANDLERS.pop(name, None)
+    if removed is not None:
+        logger.info("Unregistered plugin command: %s", name)
 
 
 class JsonRpcHandler:
@@ -330,6 +366,11 @@ class JsonRpcHandler:
         if not command:
             return {"error": "Empty command"}
 
+        # Validate player_id format (§14.3 input-validation hardening)
+        if not is_valid_mac(player_id):
+            logger.warning("Invalid player_id format: %r", player_id)
+            return {"error": f"Invalid player_id format: {player_id}"}
+
         command_name = str(command[0]).lower()
 
         # Look up handler
@@ -376,4 +417,3 @@ class JsonRpcHandler:
             Command result
         """
         return await self.execute_command(player_id, command)
-

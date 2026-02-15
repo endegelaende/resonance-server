@@ -669,8 +669,7 @@ class CometdManager:
 
         client.touch()
 
-        # Extract the request data and response channel
-        # Format: {"data": {"request": [player_id, command], "response": "/clientId/slim/request"}}
+        # {"data": {"request": [player_id, command], "response": "/clientId/slim/request"}}
         data = request.get("data", {})
         req_data = None
         resp_channel = None

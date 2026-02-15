@@ -31,6 +31,12 @@
 			isJumpInFlight = false;
 		}
 	}
+
+	async function handleRemoveTrack(index: number, event: MouseEvent) {
+		// Stop propagation so clicking the remove button doesn't trigger track jump
+		event.stopPropagation();
+		await playerStore.removeTrack(index);
+	}
 </script>
 
 <div class="flex flex-col h-full">
@@ -119,7 +125,9 @@
 						<button
 							class="p-1 rounded-full hover:bg-surface-1 text-overlay-1 hover:text-error
 								   opacity-0 group-hover:opacity-100 transition-all shrink-0"
+							onclick={(e) => handleRemoveTrack(index, e)}
 							aria-label="Remove from queue"
+							title="Remove from queue"
 						>
 							<X size={14} />
 						</button>

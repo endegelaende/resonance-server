@@ -6,12 +6,15 @@ between components. The primary use case is notifying Cometd subscribers
 when player state changes.
 
 Event types:
+- server.started: All server components initialized, plugins started
+- server.stopping: Server shutdown sequence beginning
 - player.connected: A player connected to the server
 - player.disconnected: A player disconnected
 - player.status: Player status changed (play/pause/stop/volume/elapsed)
 - player.track_started: Player reported STMs for a stream generation
 - player.playlist: Playlist changed (add/remove/index)
 - player.track_finished: Track finished playing (used for playlist advancement)
+- player.live_stream_dropped: Live radio proxy stream ended unexpectedly (re-stream candidate)
 - library.scan.started: Library scan started
 - library.scan.progress: Library scan progress update
 - library.scan.completed: Library scan completed
@@ -179,6 +182,46 @@ class PlayerDecodeReadyEvent(Event):
         return result
 
 @dataclass
+class LiveStreamDroppedEvent(Event):
+    """Fired when a live/radio proxy stream ends unexpectedly.
+
+    This mirrors LMS's ``_RetryOrNext`` in ``StreamingController.pm`` (L910-930):
+    when a live remote stream drops while the player is still playing, LMS
+    attempts to re-connect to the same URL so audio resumes seamlessly.
+
+    The streaming route fires this event from the proxy generator's ``finally``
+    block when a live stream ends for a non-intentional reason (i.e. not
+    cancelled by the server and not disconnected by the player).
+
+    The handler in ``server.py`` checks LMS-equivalent conditions before
+    re-queuing:
+    - Stream generation still matches (not replaced by user action)
+    - At least 10 seconds of playback elapsed (stream was working)
+    - Retry limit not exceeded (prevent infinite reconnect loops)
+    """
+
+    event_type: str = field(default="player.live_stream_dropped", init=False)
+    player_id: str = ""
+    stream_generation: int | None = None
+    remote_url: str = ""
+    content_type: str = "audio/mpeg"
+    title: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "type": self.event_type,
+            "player_id": self.player_id,
+        }
+        if self.stream_generation is not None:
+            result["stream_generation"] = self.stream_generation
+        if self.remote_url:
+            result["remote_url"] = self.remote_url
+        if self.title:
+            result["title"] = self.title
+        return result
+
+
+@dataclass
 class PlayerTrackStartedEvent(Event):
     """Fired when player confirms stream start (Slimproto STMs)."""
 
@@ -213,6 +256,34 @@ class PlayerPlaylistEvent(Event):
             "index": self.index,
             "count": self.count,
         }
+
+
+@dataclass
+class ServerStartedEvent(Event):
+    """Fired after all server components are initialized and plugins are started.
+
+    Plugins can subscribe to this event to perform deferred initialization
+    that depends on the full server being operational.
+    """
+
+    event_type: str = field(default="server.started", init=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": self.event_type}
+
+
+@dataclass
+class ServerStoppingEvent(Event):
+    """Fired when the server begins its shutdown sequence.
+
+    Plugins can subscribe to this event to persist state or release
+    resources before the server components are torn down.
+    """
+
+    event_type: str = field(default="server.stopping", init=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": self.event_type}
 
 
 @dataclass
@@ -352,4 +423,3 @@ class EventBus:
 
 # Global event bus instance
 event_bus = EventBus()
-

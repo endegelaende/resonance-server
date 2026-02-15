@@ -3,26 +3,122 @@ LMS compatibility handlers for legacy/optional top-level commands.
 
 These handlers intentionally provide lightweight behavior so clients that
 expect a broad LMS command surface do not fail with "Unknown command".
+
+Persistence:
+- ``configure_prefs_persistence()`` / ``save_player_prefs()`` /
+  ``load_all_player_prefs()`` serialize per-player preferences to JSON files
+  so they survive server restarts.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
+from pathlib import Path
 from typing import Any
 
-from resonance.web.handlers import CommandContext
 from resonance.protocol.commands import (
     DEFAULT_GRFD_BITMAP_BYTES,
     DEFAULT_GRFD_FRAMEBUFFER_OFFSET,
 )
+from resonance.web.handlers import CommandContext
 from resonance.web.handlers.library import cmd_titles
 from resonance.web.handlers.status import VERSION
 from resonance.web.jsonrpc_helpers import parse_start_items
+
+_logger = logging.getLogger(__name__)
 
 _PLAYER_PREFS_LOCK = asyncio.Lock()
 _PLAYER_PREFS: dict[str, dict[str, str]] = {}
 _TRACK_RATINGS_LOCK = asyncio.Lock()
 _TRACK_RATINGS: dict[str, int] = {}
+
+# ---------------------------------------------------------------------------
+# Player-prefs persistence
+# ---------------------------------------------------------------------------
+
+_PREFS_PERSISTENCE_DIR: Path | None = None
+
+
+def _safe_prefs_filename(player_id: str) -> str:
+    """Turn a player MAC/ID into a safe filename (replace colons)."""
+    return player_id.replace(":", "-") + ".json"
+
+
+def _player_id_from_prefs_filename(filename: str) -> str:
+    """Reverse of ``_safe_prefs_filename``."""
+    return filename.removesuffix(".json").replace("-", ":")
+
+
+def configure_prefs_persistence(directory: Path | None) -> None:
+    """Set the directory used for player-prefs persistence.
+
+    Call once during server startup **before** ``load_all_player_prefs()``.
+    Passing ``None`` disables persistence (pure in-memory).
+    """
+    global _PREFS_PERSISTENCE_DIR  # noqa: PLW0603
+    _PREFS_PERSISTENCE_DIR = directory
+
+
+def save_player_prefs(player_id: str) -> None:
+    """Persist a single player's preferences to disk (synchronous).
+
+    Safe to call from inside ``_PLAYER_PREFS_LOCK`` because file I/O
+    does not touch the lock.
+    """
+    if _PREFS_PERSISTENCE_DIR is None:
+        return
+
+    prefs = _PLAYER_PREFS.get(player_id)
+    if prefs is None:
+        return
+
+    _PREFS_PERSISTENCE_DIR.mkdir(parents=True, exist_ok=True)
+    path = _PREFS_PERSISTENCE_DIR / _safe_prefs_filename(player_id)
+
+    try:
+        payload = {"version": 1, "player_id": player_id, "prefs": dict(prefs)}
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        _logger.exception("Failed to save prefs for player %s", player_id)
+
+
+def load_all_player_prefs() -> int:
+    """Load all player-prefs JSON files from the persistence directory.
+
+    Existing in-memory prefs are **not** overwritten — only players that
+    don't already have prefs loaded get populated from disk.
+
+    Returns:
+        Number of players whose prefs were loaded.
+    """
+    if _PREFS_PERSISTENCE_DIR is None:
+        return 0
+    if not _PREFS_PERSISTENCE_DIR.is_dir():
+        return 0
+
+    loaded = 0
+    for path in sorted(_PREFS_PERSISTENCE_DIR.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            player_id = data.get("player_id", _player_id_from_prefs_filename(path.name))
+            prefs: dict[str, str] = {
+                str(k): str(v) for k, v in data.get("prefs", {}).items()
+            }
+            if player_id and player_id not in _PLAYER_PREFS:
+                _PLAYER_PREFS[player_id] = prefs
+                loaded += 1
+        except Exception:
+            _logger.exception("Skipping corrupt player-prefs file: %s", path)
+
+    if loaded:
+        _logger.info(
+            "Loaded prefs for %d player(s) from %s", loaded, _PREFS_PERSISTENCE_DIR
+        )
+    return loaded
 
 
 async def _get_current_track(ctx: CommandContext) -> Any | None:
@@ -293,20 +389,91 @@ async def cmd_rating(ctx: CommandContext, params: list[Any]) -> dict[str, Any]:
 
 
 async def cmd_playlists(ctx: CommandContext, params: list[Any]) -> dict[str, Any]:
-    subcommand = str(params[1]).lower() if len(params) > 1 else ""
+    from resonance.core.playlist_formats import parse_m3u
+    from resonance.web.handlers.playlist import (
+        _m3u_path_for_name,
+        delete_saved_playlist,
+        list_saved_playlists,
+        load_saved_playlist_tracks,
+        rename_saved_playlist,
+    )
 
-    if subcommand in {"edit", "delete", "new", "rename"}:
+    subcommand = str(params[1]).lower() if len(params) > 1 else ""
+    tagged = parse_tagged_params(params[2:]) if len(params) > 2 else {}
+
+    # ---- delete ----
+    if subcommand == "delete":
+        playlist_id = tagged.get("playlist_id", "")
+        if not playlist_id:
+            # Try positional: playlists delete <name>
+            playlist_id = str(params[2]) if len(params) > 2 else ""
+        if playlist_id:
+            delete_saved_playlist(playlist_id)
         return {}
 
+    # ---- rename ----
+    if subcommand == "rename":
+        playlist_id = tagged.get("playlist_id", "")
+        new_name = tagged.get("newname", "") or tagged.get("dry_run", "")
+        if playlist_id and new_name:
+            rename_saved_playlist(playlist_id, new_name)
+        return {}
+
+    # ---- edit / new ----
+    if subcommand in {"edit", "new"}:
+        return {}
+
+    # ---- tracks ----
     if subcommand == "tracks":
+        playlist_id = tagged.get("playlist_id", "")
+        if not playlist_id:
+            playlist_id = str(params[2]) if len(params) > 2 else ""
+
+        if not playlist_id:
+            return {"count": 0, "playlisttracks_loop": []}
+
+        entries = load_saved_playlist_tracks(playlist_id)
+        if entries is None:
+            return {"count": 0, "playlisttracks_loop": []}
+
+        start = int(tagged.get("_index", 0) or 0)
+        quantity = int(tagged.get("_quantity", len(entries)) or len(entries))
+        page = entries[start : start + quantity]
+
+        tracks_loop: list[dict[str, Any]] = []
+        for i, entry in enumerate(page):
+            item: dict[str, Any] = {
+                "playlist index": start + i,
+                "title": entry.title or Path(entry.path).stem,
+                "url": entry.path,
+            }
+            if entry.artist:
+                item["artist"] = entry.artist
+            if entry.album:
+                item["album"] = entry.album
+            if entry.duration_seconds > 0:
+                item["duration"] = entry.duration_seconds
+            tracks_loop.append(item)
+
         return {
-            "count": 0,
-            "tracks_loop": [],
+            "count": len(entries),
+            "playlisttracks_loop": tracks_loop,
         }
 
+    # ---- list (default) ----
+    search = tagged.get("search", "").lower()
+    all_playlists = list_saved_playlists()
+
+    if search:
+        all_playlists = [p for p in all_playlists if search in p["playlist"].lower()]
+
+    start = int(tagged.get("_index", 0) or 0)
+    quantity = int(tagged.get("_quantity", len(all_playlists)) or len(all_playlists))
+    page = all_playlists[start : start + quantity]
+
     return {
-        "count": 0,
-        "playlists_loop": [],
+        "count": len(all_playlists),
+        "playlists_loop": page,
     }
 
 
@@ -411,8 +578,10 @@ async def cmd_playerpref(ctx: CommandContext, params: list[Any]) -> dict[str, An
                     canonical_name, normalized_value = handled
                     player_prefs[canonical_name] = normalized_value
                     player_prefs[pref_name] = normalized_value
+                    save_player_prefs(ctx.player_id)
                     return {"_p2": normalized_value}
 
+            save_player_prefs(ctx.player_id)
             return {"_p2": player_prefs[pref_name]}
 
         if pref_name in player_prefs:
@@ -660,4 +829,3 @@ async def cmd_debug(ctx: CommandContext, params: list[Any]) -> dict[str, Any]:
 
 async def cmd_noop(ctx: CommandContext, params: list[Any]) -> dict[str, Any]:
     return {}
-

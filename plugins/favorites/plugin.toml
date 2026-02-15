@@ -1,0 +1,6 @@
+[plugin]
+name = "favorites"
+version = "1.0.0"
+description = "Favorites management — LMS-compatible favorites with hierarchical folders, JSON storage, and full Jive menu integration"
+author = "Resonance"
+min_resonance_version = "0.1.0"

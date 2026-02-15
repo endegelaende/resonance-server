@@ -45,11 +45,22 @@ def to_dict(row: Any) -> dict[str, Any]:
 # =============================================================================
 
 
+# Maximum items a single list query may return (input-validation hardening)
+_MAX_QUERY_ITEMS = 10_000
+
+# Maximum sane paging start index
+_MAX_QUERY_START = 1_000_000
+
+
 def parse_start_items(params: list[Any]) -> tuple[int, int]:
     """
     Parse start index and items per response from command params.
 
     LMS commands use positional params: [command, start, items, ...]
+
+    Values are clamped to sane ranges to prevent abuse:
+    - *start* is clamped to ``[0, 1_000_000]``
+    - *items* is clamped to ``[0, 10_000]``
 
     Args:
         params: Command parameters list
@@ -71,6 +82,16 @@ def parse_start_items(params: list[Any]) -> tuple[int, int]:
             items = int(params[2])
         except (ValueError, TypeError):
             pass
+
+    # Clamp to safe ranges (input-validation hardening §14.3)
+    if start < 0:
+        start = 0
+    elif start > _MAX_QUERY_START:
+        start = _MAX_QUERY_START
+    if items < 0:
+        items = 0
+    elif items > _MAX_QUERY_ITEMS:
+        items = _MAX_QUERY_ITEMS
 
     return start, items
 

@@ -68,6 +68,9 @@ async def cmd_sync(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
         return {}
 
     await ctx.player_registry.sync(ctx.player_id, target_player_id)
+    logger.warning(
+        "Sync group created (logical only — clock/buffer synchronization not yet implemented)"
+    )
     return {}
 
 
@@ -90,4 +93,5 @@ async def cmd_syncgroups(ctx: CommandContext, command: list[Any]) -> dict[str, A
         "count": len(loop),
         "offset": 0,
         "syncgroups_loop": loop,
+        "_note": "logical_only",
     }

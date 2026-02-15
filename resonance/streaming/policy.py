@@ -54,6 +54,18 @@ class StreamingPolicy:
             "alac",
             # Treat AAC as problematic by default (many "aac" files are not ADTS-safe)
             "aac",
+            # Opus: no Squeezebox hardware/software player can decode Opus natively
+            # via HTTP streaming. legacy.conf has `opus mp3` / `opus flc` rules.
+            "opus",
+            # WavPack: lossless/lossy format, no native Squeezebox HTTP support.
+            # Transcoded via ffmpeg (LMS uses wvunpack which we don't ship).
+            "wv",
+            # Monkey's Audio (APE): lossless format, no native Squeezebox HTTP support.
+            # Transcoded via ffmpeg (LMS uses mac which we don't ship).
+            "ape",
+            # Musepack (MPC): lossy format, no native Squeezebox HTTP support.
+            # Transcoded via ffmpeg (LMS uses mppdec which we don't ship).
+            "mpc",
         }
     )
 
@@ -66,6 +78,17 @@ class StreamingPolicy:
             "wav",
             "aiff",
             "aif",
+            # WMA: SB2+ hardware can decode WMA natively (legacy devices.toml
+            # lists it in native_formats for the legacy tier). Device-specific
+            # exceptions (e.g. SLIMP3) are handled by legacy.conf rules.
+            "wma",
+            # DSD: DSF and DFF are streamed as passthrough to DSD-capable players
+            # (Squeezelite, patched SB firmware). LMS convert.conf has
+            # `dsf dsf * * → -` and `dff dff * * → -` (passthrough).
+            # LMS reference: Slim/Player/Squeezebox.pm stream_s() sends
+            # format byte 'd' with sub-format in pcmsamplesize (0=DSF, 1=DFF).
+            "dsf",
+            "dff",
         }
     )
 

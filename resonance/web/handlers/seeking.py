@@ -263,7 +263,7 @@ async def _execute_seek_internal(
         # is left unsubstituted and cleaned up.  The LMS-patched faad
         # interprets -e as a duration (not absolute position), so passing
         # the full track duration here produces garbage output that the
-        # player cannot decode (see session compatibility rule 4.6).
+        # player cannot decode.
         ctx.streaming_server.queue_file_with_seek(
             ctx.player_id,
             file_path,

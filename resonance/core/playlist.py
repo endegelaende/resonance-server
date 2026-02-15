@@ -10,18 +10,20 @@ Design decisions:
 - Each PlayerClient gets its own Playlist instance
 - Supports basic operations: add, play, clear, next, previous
 - Track references are by ID (TrackId) or path string
+- Playlists are persisted as JSON files in a configurable directory
+  so they survive server restarts.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, NewType
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
+from typing import Any, NewType
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,12 @@ class PlaylistTrack:
 
     We store both track_id (for DB lookups) and path (for streaming).
     This allows the playlist to work even if the DB is not available.
+
+    For remote streams (Internet Radio, Podcasts, external URLs), ``path``
+    holds the canonical URL and ``is_remote`` is ``True``.  The optional
+    ``stream_url`` field carries the *resolved* streaming URL when it
+    differs from ``path`` (e.g. after a playlist-URL has been resolved to
+    a direct audio stream).
     """
 
     track_id: TrackId | None
@@ -63,6 +71,32 @@ class PlaylistTrack:
     artist: str = ""
     album: str = ""
     duration_ms: int = 0
+
+    # --- Remote / Content-Provider fields ---
+    source: str = "local"
+    """Origin of this track: ``"local"`` (default), ``"radio"``, ``"podcast"``, ``"external"``."""
+
+    stream_url: str | None = None
+    """Resolved stream URL.  For local tracks this is ``None``; for remote
+    tracks it may differ from *path* (e.g. a redirect-resolved direct URL)."""
+
+    external_id: str | None = None
+    """Provider-specific identifier (e.g. TuneIn station ID, podcast GUID)."""
+
+    artwork_url: str | None = None
+    """Remote artwork URL for tracks that have no local cover art."""
+
+    is_remote: bool = False
+    """``True`` when the track references a remote URL rather than a local file."""
+
+    content_type: str | None = None
+    """MIME type hint from the content provider (e.g. ``"audio/mpeg"``)."""
+
+    bitrate: int = 0
+    """Bitrate in kbps as reported by the content provider (0 = unknown)."""
+
+    is_live: bool = False
+    """``True`` for live/infinite streams (Internet Radio) with no defined duration."""
 
     @classmethod
     def from_path(cls, path: str | Path) -> PlaylistTrack:
@@ -77,6 +111,69 @@ class PlaylistTrack:
             artist_id=None,
             title=p.stem,
         )
+
+    @classmethod
+    def from_url(
+        cls,
+        url: str,
+        *,
+        title: str = "",
+        artist: str = "",
+        album: str = "",
+        duration_ms: int = 0,
+        source: str = "external",
+        stream_url: str | None = None,
+        external_id: str | None = None,
+        artwork_url: str | None = None,
+        content_type: str | None = None,
+        bitrate: int = 0,
+        is_live: bool = False,
+    ) -> PlaylistTrack:
+        """Create a playlist track from a remote URL.
+
+        Args:
+            url: Canonical URL for this track (stored in ``path``).
+            title: Display title (falls back to the URL if empty).
+            artist: Artist / station name.
+            album: Album / show name.
+            duration_ms: Duration in ms (0 for live streams).
+            source: Origin tag — ``"radio"``, ``"podcast"``, ``"external"``.
+            stream_url: Resolved direct stream URL if different from *url*.
+            external_id: Provider-specific ID.
+            artwork_url: Remote cover art URL.
+            content_type: MIME type hint.
+            bitrate: Bitrate in kbps.
+            is_live: Whether this is an infinite live stream.
+        """
+        return cls(
+            track_id=None,
+            path=url,
+            album_id=None,
+            artist_id=None,
+            title=title or url.rsplit("/", 1)[-1],
+            artist=artist,
+            album=album,
+            duration_ms=duration_ms,
+            source=source,
+            stream_url=stream_url,
+            external_id=external_id,
+            artwork_url=artwork_url,
+            is_remote=True,
+            content_type=content_type,
+            bitrate=bitrate,
+            is_live=is_live,
+        )
+
+    @property
+    def effective_stream_url(self) -> str:
+        """Return the URL to actually stream from.
+
+        For remote tracks this is ``stream_url`` (if set) or ``path``.
+        For local tracks this returns ``path`` unchanged.
+        """
+        if self.is_remote and self.stream_url:
+            return self.stream_url
+        return self.path
 
 
 @dataclass
@@ -109,13 +206,17 @@ class Playlist:
     # Original order (for unshuffle)
     _original_order: list[PlaylistTrack] = field(default_factory=list)
 
+    # Dirty flag — set by _touch(), cleared after successful save.
+    _dirty: bool = field(default=False, repr=False)
+
     def __len__(self) -> int:
         """Return number of tracks in playlist."""
         return len(self.tracks)
 
     def _touch(self) -> None:
-        """Update the mutation timestamp."""
+        """Update the mutation timestamp and mark dirty for persistence."""
         self.updated_at = time.time()
+        self._dirty = True
 
     @property
     def is_empty(self) -> bool:
@@ -433,17 +534,131 @@ class Playlist:
         return result
 
 
+# ---------------------------------------------------------------------------
+# Serialization helpers
+# ---------------------------------------------------------------------------
+
+_PERSISTENCE_VERSION = 1
+
+
+def _serialize_playlist(playlist: Playlist) -> dict[str, Any]:
+    """Serialize a Playlist to a JSON-safe dict."""
+    tracks: list[dict[str, Any]] = []
+    for t in playlist.tracks:
+        td: dict[str, Any] = {
+            "track_id": t.track_id,
+            "path": t.path,
+            "title": t.title,
+            "artist": t.artist,
+            "album": t.album,
+            "album_id": t.album_id,
+            "artist_id": t.artist_id,
+            "duration_ms": t.duration_ms,
+        }
+        # Persist remote-stream fields only when they carry non-default values
+        # so that playlists with only local tracks stay compact.
+        if t.is_remote:
+            td["is_remote"] = True
+            td["source"] = t.source
+        if t.stream_url is not None:
+            td["stream_url"] = t.stream_url
+        if t.external_id is not None:
+            td["external_id"] = t.external_id
+        if t.artwork_url is not None:
+            td["artwork_url"] = t.artwork_url
+        if t.content_type is not None:
+            td["content_type"] = t.content_type
+        if t.bitrate:
+            td["bitrate"] = t.bitrate
+        if t.is_live:
+            td["is_live"] = True
+        tracks.append(td)
+
+    return {
+        "player_id": playlist.player_id,
+        "version": _PERSISTENCE_VERSION,
+        "current_index": playlist.current_index,
+        "repeat_mode": playlist.repeat_mode.value,
+        "shuffle_mode": playlist.shuffle_mode.value,
+        "updated_at": playlist.updated_at,
+        "tracks": tracks,
+    }
+
+
+def _deserialize_playlist(data: dict[str, Any]) -> Playlist:
+    """Deserialize a dict (from JSON) back into a Playlist.
+
+    Unknown / missing fields are handled gracefully so that files written
+    by older or newer versions of Resonance don't crash the loader.
+    """
+    player_id: str = data.get("player_id", "")
+    tracks: list[PlaylistTrack] = []
+    for td in data.get("tracks", []):
+        tracks.append(PlaylistTrack(
+            track_id=TrackId(td["track_id"]) if td.get("track_id") is not None else None,
+            path=td.get("path", ""),
+            title=td.get("title", ""),
+            artist=td.get("artist", ""),
+            album=td.get("album", ""),
+            album_id=AlbumId(td["album_id"]) if td.get("album_id") is not None else None,
+            artist_id=ArtistId(td["artist_id"]) if td.get("artist_id") is not None else None,
+            duration_ms=td.get("duration_ms", 0),
+            # Remote-stream fields (backward-compat: default to local track)
+            source=td.get("source", "local"),
+            stream_url=td.get("stream_url"),
+            external_id=td.get("external_id"),
+            artwork_url=td.get("artwork_url"),
+            is_remote=td.get("is_remote", False),
+            content_type=td.get("content_type"),
+            bitrate=td.get("bitrate", 0),
+            is_live=td.get("is_live", False),
+        ))
+
+    playlist = Playlist(
+        player_id=player_id,
+        tracks=tracks,
+        current_index=data.get("current_index", 0),
+        repeat_mode=RepeatMode(data.get("repeat_mode", 0)),
+        shuffle_mode=ShuffleMode(data.get("shuffle_mode", 0)),
+        updated_at=data.get("updated_at", 0.0),
+    )
+    # Freshly loaded — not dirty.
+    playlist._dirty = False
+    return playlist
+
+
+def _safe_filename(player_id: str) -> str:
+    """Turn a player MAC/ID into a safe filename (replace colons)."""
+    return player_id.replace(":", "-") + ".json"
+
+
+def _player_id_from_filename(filename: str) -> str:
+    """Reverse of ``_safe_filename``."""
+    return filename.removesuffix(".json").replace("-", ":")
+
+
 class PlaylistManager:
     """
     Manages playlists for all connected players.
 
     This is a central registry that creates and retrieves playlists
     by player ID (MAC address).
+
+    Optionally persists playlists as JSON files so queues survive
+    server restarts.
     """
 
-    def __init__(self) -> None:
-        """Initialize the playlist manager."""
+    def __init__(self, persistence_dir: Path | None = None) -> None:
+        """Initialize the playlist manager.
+
+        Args:
+            persistence_dir: Directory for JSON playlist files.
+                ``None`` disables persistence (pure in-memory).
+        """
         self._playlists: dict[str, Playlist] = {}
+        self._persistence_dir: Path | None = persistence_dir
+        self._autosave_task: asyncio.Task[None] | None = None
+        self._autosave_interval: float = 30.0  # seconds
 
     def get(self, player_id: str) -> Playlist:
         """
@@ -490,3 +705,101 @@ class PlaylistManager:
     def __contains__(self, player_id: str) -> bool:
         """Check if a playlist exists for a player."""
         return player_id in self._playlists
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save_all(self) -> int:
+        """Persist every dirty playlist to disk (synchronous).
+
+        Returns:
+            Number of playlists written.
+        """
+        if self._persistence_dir is None:
+            return 0
+
+        self._persistence_dir.mkdir(parents=True, exist_ok=True)
+        written = 0
+        for playlist in self._playlists.values():
+            if not playlist._dirty:
+                continue
+            path = self._persistence_dir / _safe_filename(playlist.player_id)
+            try:
+                data = _serialize_playlist(playlist)
+                tmp_path = path.with_suffix(".tmp")
+                tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                tmp_path.replace(path)
+                playlist._dirty = False
+                written += 1
+            except Exception:
+                logger.exception(
+                    "Failed to save playlist for player %s", playlist.player_id
+                )
+        if written:
+            logger.debug("Saved %d playlist(s) to %s", written, self._persistence_dir)
+        return written
+
+    def load_all(self) -> int:
+        """Load all playlist JSON files from the persistence directory.
+
+        Existing in-memory playlists are **not** overwritten — only players
+        that don't already have a playlist get one loaded from disk.
+
+        Returns:
+            Number of playlists loaded.
+        """
+        if self._persistence_dir is None:
+            return 0
+        if not self._persistence_dir.is_dir():
+            return 0
+
+        loaded = 0
+        for path in sorted(self._persistence_dir.glob("*.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                playlist = _deserialize_playlist(data)
+                if not playlist.player_id:
+                    logger.warning("Skipping playlist file without player_id: %s", path)
+                    continue
+                if playlist.player_id not in self._playlists:
+                    self._playlists[playlist.player_id] = playlist
+                    loaded += 1
+            except Exception:
+                logger.exception("Skipping corrupt playlist file: %s", path)
+
+        if loaded:
+            logger.info(
+                "Loaded %d persisted playlist(s) from %s", loaded, self._persistence_dir
+            )
+        return loaded
+
+    async def start_autosave(self) -> None:
+        """Start the background auto-save task (call once after event loop is running)."""
+        if self._persistence_dir is None:
+            return
+        if self._autosave_task is not None:
+            return
+        self._autosave_task = asyncio.create_task(self._autosave_loop())
+        logger.debug("Playlist autosave started (interval=%.0fs)", self._autosave_interval)
+
+    async def stop_autosave(self) -> None:
+        """Stop the background auto-save task and flush dirty playlists."""
+        if self._autosave_task is not None:
+            self._autosave_task.cancel()
+            try:
+                await self._autosave_task
+            except asyncio.CancelledError:
+                pass
+            self._autosave_task = None
+        # Final flush
+        self.save_all()
+
+    async def _autosave_loop(self) -> None:
+        """Periodically save dirty playlists."""
+        try:
+            while True:
+                await asyncio.sleep(self._autosave_interval)
+                self.save_all()
+        except asyncio.CancelledError:
+            pass

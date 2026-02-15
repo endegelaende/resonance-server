@@ -63,6 +63,7 @@ class ScanResult:
     updated_tracks: int
     skipped_files: int
     errors: int
+    deleted_tracks: int = 0
 
 
 @dataclass
@@ -149,13 +150,23 @@ class MusicLibrary:
         await self._db.ensure_schema()
         self._initialized = True
 
-    async def scan(self, *, roots: Sequence[Path] | None = None) -> ScanResult:
+    async def scan(
+        self,
+        *,
+        roots: Sequence[Path] | None = None,
+        force: bool = False,
+    ) -> ScanResult:
         """
         Scan music folders and update the library DB.
 
         We keep scanning & persistence separate internally:
         - scanner returns normalized metadata
         - db upserts rows (idempotent)
+
+        Args:
+            roots: Directories to scan.  Falls back to ``self._music_root``.
+            force: If ``True``, skip the mtime/size optimisation and re-read
+                every file's tags unconditionally (full rescan).
         """
         self._require_initialized()
 
@@ -165,9 +176,16 @@ class MusicLibrary:
         if not scan_roots:
             raise MusicLibraryError("No scan roots provided and no music_root configured.")
 
+        # Pre-load the mtime index so we can skip unchanged files.
+        mtime_index: dict[str, tuple[int, int]] = {}
+        if not force:
+            mtime_index = await self._db.get_track_mtime_index()
+
         scanned_files = 0
+        skipped_files = 0
         errors = 0
         upserted = 0
+        total_deleted = 0
 
         for root in scan_roots:
             scan_cfg = ScanConfig(root=root)
@@ -176,12 +194,27 @@ class MusicLibrary:
             scanned_files += len(result.tracks) + len(result.issues)
             errors += len(result.issues)
 
+            # Collect every path the scanner found under this root so we can
+            # detect orphans (files deleted from disk since the last scan).
+            scanned_paths: set[str] = set()
+
             to_upsert: list[UpsertTrack] = []
             for tm in result.tracks:
+                path_str = str(tm.path)
+                scanned_paths.add(path_str)
+
                 stat = tm.path.stat()
+
+                # mtime-skip: if the file has not changed, skip tag extraction / upsert.
+                if not force:
+                    existing = mtime_index.get(path_str)
+                    if existing and existing[0] == stat.st_mtime_ns and existing[1] == stat.st_size:
+                        skipped_files += 1
+                        continue
+
                 to_upsert.append(
                     UpsertTrack(
-                        path=str(tm.path),
+                        path=path_str,
                         title=tm.title,
                         artist=tm.artist,
                         album=tm.album,
@@ -205,13 +238,30 @@ class MusicLibrary:
 
             upserted += await self._db.upsert_tracks(to_upsert)
 
-        # For MVP we don't distinguish added vs updated yet (DB layer could be extended later).
+            # Orphan detection: remove DB entries for files that no longer
+            # exist on disk under this scan root.
+            deleted = await self._db.delete_tracks_not_in_paths(
+                scanned_paths, str(root)
+            )
+            if deleted:
+                logger.info("Removed %d orphaned track(s) under %s", deleted, root)
+                await self._db.cleanup_orphans()
+            total_deleted += deleted
+
+        # Rebuild FTS5 index when a full rescan was requested or orphaned
+        # tracks were removed.  The triggers keep the index in sync for
+        # normal upserts, but bulk deletes and force-rescans benefit from
+        # a full rebuild to guarantee consistency.
+        if force or total_deleted > 0:
+            await self._db.rebuild_fts()
+
         return ScanResult(
             scanned_files=scanned_files,
             added_tracks=0,
             updated_tracks=upserted,
-            skipped_files=0,
+            skipped_files=skipped_files,
             errors=errors,
+            deleted_tracks=total_deleted,
         )
 
     # ---- Browse APIs (build the web UI / JSON-RPC on top of these) ----
@@ -513,6 +563,7 @@ class MusicLibrary:
                 updated_tracks=total_upserted,
                 skipped_files=0,
                 errors=total_errors,
+                deleted_tracks=0,
             )
             logger.info(
                 "Scan complete: %d files, %d tracks, %d errors",

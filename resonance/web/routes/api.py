@@ -5,6 +5,7 @@ Provides REST endpoints for the web UI and external integrations:
 - /api/status: Server status
 - /api/players: Player management
 - /api/library/*: Library browsing and search
+- /api/settings: Server settings management
 - /api/artwork/*: Album artwork
 """
 
@@ -614,3 +615,137 @@ async def trigger_scan() -> dict[str, Any]:
 
     await _music_library.start_scan()
     return {"status": "scan_started"}
+
+
+# =============================================================================
+# Settings
+# =============================================================================
+
+
+@router.get("/api/settings")
+async def get_settings() -> dict[str, Any]:
+    """Get the current server settings.
+
+    Returns all settings grouped by category, plus metadata about
+    which settings are runtime-changeable vs restart-required.
+    """
+    from resonance.config.settings import (
+        RESTART_REQUIRED,
+        RUNTIME_CHANGEABLE,
+        settings_loaded,
+    )
+    from resonance.config.settings import (
+        get_settings as _get_settings,
+    )
+
+    if not settings_loaded():
+        raise HTTPException(status_code=503, detail="Settings not loaded")
+
+    settings = _get_settings()
+    settings_dict = settings.to_dict()
+
+    # Annotate each field with changeability info
+    meta: dict[str, str] = {}
+    for key in settings_dict:
+        if key in RUNTIME_CHANGEABLE:
+            meta[key] = "runtime"
+        elif key in RESTART_REQUIRED:
+            meta[key] = "restart_required"
+        else:
+            meta[key] = "runtime"
+
+    return {
+        "settings": settings_dict,
+        "sections": settings.to_toml_dict(),
+        "meta": meta,
+        "config_file": str(settings._config_path) if settings._config_path else None,
+    }
+
+
+@router.put("/api/settings")
+async def put_settings(request: Request) -> dict[str, Any]:
+    """Update server settings (partial update).
+
+    Request body: ``{"settings": {"default_volume": 60, "log_level": "DEBUG"}}``
+
+    Only the provided fields are updated. Unknown fields are ignored
+    with a warning. Settings that require a restart are accepted but
+    flagged in the response.
+
+    Returns the full updated settings plus any warnings.
+    """
+    from resonance.config.settings import (
+        get_settings as _get_settings,
+    )
+    from resonance.config.settings import (
+        save_settings as _save_settings,
+    )
+    from resonance.config.settings import (
+        settings_loaded,
+    )
+    from resonance.config.settings import (
+        update_settings as _update_settings,
+    )
+
+    if not settings_loaded():
+        raise HTTPException(status_code=503, detail="Settings not loaded")
+
+    body = await request.json()
+    updates = body.get("settings")
+    if not updates or not isinstance(updates, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Request body must contain a 'settings' object with fields to update",
+        )
+
+    try:
+        settings, warnings = _update_settings(updates)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # Persist to TOML file
+    try:
+        config_path = _save_settings(settings)
+    except Exception as exc:
+        logger.error("Failed to save settings: %s", exc)
+        warnings.append(f"Settings applied in memory but could not be saved to disk: {exc}")
+        config_path = None
+
+    return {
+        "settings": settings.to_dict(),
+        "warnings": warnings,
+        "config_file": str(config_path) if config_path else None,
+    }
+
+
+@router.post("/api/settings/reset")
+async def reset_settings_endpoint() -> dict[str, Any]:
+    """Reset all settings to their default values.
+
+    The config file path is preserved so that ``save`` still works.
+    The reset settings are automatically saved to disk.
+    """
+    from resonance.config.settings import (
+        reset_settings as _reset_settings,
+    )
+    from resonance.config.settings import (
+        save_settings as _save_settings,
+    )
+
+    settings = _reset_settings()
+
+    warnings: list[str] = []
+    try:
+        config_path = _save_settings(settings)
+    except Exception as exc:
+        logger.error("Failed to save reset settings: %s", exc)
+        warnings.append(f"Settings reset in memory but could not be saved to disk: {exc}")
+        config_path = None
+
+    warnings.append("All settings reset to defaults. A server restart is recommended.")
+
+    return {
+        "settings": settings.to_dict(),
+        "warnings": warnings,
+        "config_file": str(config_path) if config_path else None,
+    }

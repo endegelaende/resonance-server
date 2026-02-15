@@ -1,0 +1,6 @@
+[plugin]
+name = "podcast"
+version = "1.0.0"
+description = "Podcasts — browse, search, subscribe, and stream podcast episodes with resume support and full Jive menu integration"
+author = "Resonance"
+min_resonance_version = "0.1.0"

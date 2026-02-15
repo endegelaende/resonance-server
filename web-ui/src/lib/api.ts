@@ -45,6 +45,14 @@ export interface Track {
   format?: string;
   // BlurHash placeholder for instant preview
   blurhash?: string;
+  // Remote/radio stream metadata (LMS-compatible)
+  remote?: number;
+  source?: string;
+  isLive?: boolean;
+  currentTitle?: string;
+  icyArtist?: string;
+  icyTitle?: string;
+  contentType?: string;
 }
 
 export interface Album {
@@ -81,6 +89,50 @@ export interface SearchResults {
 
 // MusicFolder is just a string path (backend returns string array)
 export type MusicFolder = string;
+
+/** Server settings as returned by GET /api/settings */
+export interface ServerSettingsData {
+  // Network
+  host: string;
+  slimproto_port: number;
+  web_port: number;
+  cli_port: number;
+  cors_origins: string[];
+  // Library
+  music_folders: string[];
+  scan_on_startup: boolean;
+  auto_rescan: boolean;
+  // Playback defaults
+  default_volume: number;
+  default_repeat: number;
+  default_transition_type: number;
+  default_transition_duration: number;
+  default_replay_gain_mode: number;
+  // Paths
+  data_dir: string;
+  cache_dir: string;
+  // Logging
+  log_level: string;
+  log_file: string | null;
+}
+
+/** Metadata about each setting field (runtime-changeable vs restart-required) */
+export type SettingsFieldMeta = Record<string, "runtime" | "restart_required">;
+
+/** Response from GET /api/settings */
+export interface SettingsResponse {
+  settings: ServerSettingsData;
+  sections: Record<string, Record<string, unknown>>;
+  meta: SettingsFieldMeta;
+  config_file: string | null;
+}
+
+/** Response from PUT /api/settings and POST /api/settings/reset */
+export interface SettingsUpdateResponse {
+  settings: ServerSettingsData;
+  warnings: string[];
+  config_file: string | null;
+}
 
 export interface ScanStatus {
   scanning: boolean;
@@ -125,6 +177,77 @@ export interface AlarmUpdateInput {
   volume?: number;
   shufflemode?: number;
   url?: string;
+}
+
+// ---- Favorites ----
+export interface FavoriteItem {
+  id: string;
+  name: string;
+  url: string;
+  type: string;
+  icon?: string;
+  hasitems: boolean;
+}
+
+export interface FavoritesResult {
+  items: FavoriteItem[];
+  total: number;
+}
+
+// ---- Radio ----
+export interface RadioItem {
+  name: string;
+  url: string;
+  type: string;
+  icon?: string;
+  hasitems: boolean;
+  /** Category key for drill-down (e.g. "popular", "country:DE", "tag:jazz"). */
+  category?: string;
+  bitrate?: number;
+  codec?: string;
+  country?: string;
+  countrycode?: string;
+  tags?: string;
+  stationuuid?: string;
+  subtext?: string;
+  votes?: number;
+  homepage?: string;
+}
+
+export interface RadioResult {
+  items: RadioItem[];
+  total: number;
+}
+
+// ---- Podcasts ----
+export interface PodcastItem {
+  name: string;
+  url: string;
+  type: string;
+  icon?: string;
+  hasitems: boolean;
+  subtitle?: string;
+}
+
+export interface PodcastResult {
+  items: PodcastItem[];
+  total: number;
+}
+
+// ---- Saved Playlists ----
+export interface SavedPlaylist {
+  id: string;
+  playlist: string;
+  url: string;
+}
+
+export interface SavedPlaylistTrack {
+  title: string;
+  url: string;
+  artist?: string;
+  album?: string;
+  duration?: number;
+  "playlist index": number;
 }
 
 // JSON-RPC types
@@ -204,6 +327,22 @@ class ResonanceAPI {
       throw new Error(data.error.message);
     }
 
+    // Plugin commands (radio, podcast, favorites, …) return errors inside
+    // the result body as { error: "…" } rather than as a JSON-RPC transport
+    // error.  Without this check the caller receives a "successful" response
+    // containing an error message, leading to misleading Success-toasts in
+    // the UI while the operation actually failed.
+    const res = data.result as Record<string, unknown> | null;
+    if (
+      res &&
+      typeof res === "object" &&
+      typeof (res as Record<string, unknown>).error === "string"
+    ) {
+      const msg = (res as Record<string, unknown>).error as string;
+      console.error("[api.rpc] Result-level error:", msg);
+      throw new Error(msg);
+    }
+
     return data.result as T;
   }
 
@@ -279,7 +418,14 @@ class ResonanceAPI {
       "playlist index"?: number;
       playlist_tracks: number;
       // Preferred: explicit currentTrack object from backend (stable)
-      currentTrack?: Track;
+      // NOTE: backend sends snake_case keys for remote fields — mapped below.
+      currentTrack?: Track & {
+        is_live?: boolean;
+        current_title?: string;
+        icy_artist?: string;
+        icy_title?: string;
+        content_type?: string;
+      };
       // Fallback: LMS-style playlist_loop
       playlist_loop?: Array<{
         id: number;
@@ -297,28 +443,39 @@ class ResonanceAPI {
     const playlistIndex =
       result["playlist index"] ?? result.playlist_cur_index ?? 0;
 
+    // Map snake_case remote fields from backend to camelCase Track interface
+    let mappedCurrentTrack: Track | undefined;
+    if (result.currentTrack) {
+      const ct = result.currentTrack;
+      mappedCurrentTrack = {
+        ...ct,
+        // Map snake_case → camelCase for remote/radio fields
+        isLive: ct.is_live ?? ct.isLive,
+        currentTitle: ct.current_title ?? ct.currentTitle,
+        icyArtist: ct.icy_artist ?? ct.icyArtist,
+        icyTitle: ct.icy_title ?? ct.icyTitle,
+        contentType: ct.content_type ?? ct.contentType,
+      };
+    } else if (currentTrackFromLoop) {
+      mappedCurrentTrack = {
+        id: currentTrackFromLoop.id,
+        title: currentTrackFromLoop.title,
+        artist: currentTrackFromLoop.artist,
+        album: currentTrackFromLoop.album,
+        duration: currentTrackFromLoop.duration,
+        path: currentTrackFromLoop.url || "",
+        coverArt:
+          currentTrackFromLoop.coverArt || currentTrackFromLoop.artwork_url,
+      };
+    }
+
     return {
       mode: result.mode || "stop",
       volume: result["mixer volume"] || 50,
       muted: result["mixer volume"] === 0,
       time: result.time || 0,
       duration: result.duration || 0,
-      currentTrack: result.currentTrack
-        ? result.currentTrack
-        : currentTrackFromLoop
-          ? {
-              id: currentTrackFromLoop.id,
-              title: currentTrackFromLoop.title,
-              artist: currentTrackFromLoop.artist,
-              album: currentTrackFromLoop.album,
-              duration: currentTrackFromLoop.duration,
-              // NOTE: LMS `url` is a stream URL, not a filesystem path. Keep it for now as fallback.
-              path: currentTrackFromLoop.url || "",
-              coverArt:
-                currentTrackFromLoop.coverArt ||
-                currentTrackFromLoop.artwork_url,
-            }
-          : undefined,
+      currentTrack: mappedCurrentTrack,
       playlistIndex,
       playlistTracks: result.playlist_tracks || 0,
     };
@@ -392,7 +549,11 @@ class ResonanceAPI {
     prefValue: string | number | boolean,
   ): Promise<string> {
     const value =
-      typeof prefValue === "boolean" ? (prefValue ? "1" : "0") : String(prefValue);
+      typeof prefValue === "boolean"
+        ? prefValue
+          ? "1"
+          : "0"
+        : String(prefValue);
     const result = await this.rpc<{ _p2?: string }>(playerId, [
       "playerpref",
       prefName,
@@ -429,15 +590,25 @@ class ResonanceAPI {
     playerId: string,
     prefs: PlayerRuntimePrefs,
   ): Promise<PlayerRuntimePrefs> {
-    const [transitionType, transitionDuration, transitionSmart, replayGainMode, remoteReplayGain, gapless] =
-      await Promise.all([
-        this.setPlayerPref(playerId, "transitionType", prefs.transitionType),
-        this.setPlayerPref(playerId, "transitionDuration", prefs.transitionDuration),
-        this.setPlayerPref(playerId, "transitionSmart", prefs.transitionSmart),
-        this.setPlayerPref(playerId, "replayGainMode", prefs.replayGainMode),
-        this.setPlayerPref(playerId, "remoteReplayGain", prefs.remoteReplayGain),
-        this.setPlayerPref(playerId, "gapless", prefs.gapless),
-      ]);
+    const [
+      transitionType,
+      transitionDuration,
+      transitionSmart,
+      replayGainMode,
+      remoteReplayGain,
+      gapless,
+    ] = await Promise.all([
+      this.setPlayerPref(playerId, "transitionType", prefs.transitionType),
+      this.setPlayerPref(
+        playerId,
+        "transitionDuration",
+        prefs.transitionDuration,
+      ),
+      this.setPlayerPref(playerId, "transitionSmart", prefs.transitionSmart),
+      this.setPlayerPref(playerId, "replayGainMode", prefs.replayGainMode),
+      this.setPlayerPref(playerId, "remoteReplayGain", prefs.remoteReplayGain),
+      this.setPlayerPref(playerId, "gapless", prefs.gapless),
+    ]);
 
     return {
       transitionType,
@@ -524,7 +695,9 @@ class ResonanceAPI {
     }
 
     if (update.volume !== undefined) {
-      args.push(`volume:${Math.max(0, Math.min(100, Math.floor(update.volume)))}`);
+      args.push(
+        `volume:${Math.max(0, Math.min(100, Math.floor(update.volume)))}`,
+      );
     }
 
     if (update.shufflemode !== undefined) {
@@ -560,11 +733,15 @@ class ResonanceAPI {
 
       return {
         id: alarm.id || "",
-        time: Number.isFinite(alarm.time) ? Math.max(0, Math.floor(alarm.time || 0)) : 0,
+        time: Number.isFinite(alarm.time)
+          ? Math.max(0, Math.floor(alarm.time || 0))
+          : 0,
         dow: Array.from(new Set(rawDow)).sort((a, b) => a - b),
         enabled: (alarm.enabled || 0) !== 0,
         repeat: (alarm.repeat || 0) !== 0,
-        volume: Number.isFinite(alarm.volume) ? Math.max(0, Math.floor(alarm.volume || 0)) : 50,
+        volume: Number.isFinite(alarm.volume)
+          ? Math.max(0, Math.floor(alarm.volume || 0))
+          : 50,
         shufflemode: Number.isFinite(alarm.shufflemode)
           ? Math.max(0, Math.floor(alarm.shufflemode || 0))
           : 0,
@@ -608,14 +785,19 @@ class ResonanceAPI {
     await this.rpc(playerId, ["alarm", "disableall"]);
   }
 
-  async setDefaultAlarmVolume(playerId: string, volume: number): Promise<number> {
+  async setDefaultAlarmVolume(
+    playerId: string,
+    volume: number,
+  ): Promise<number> {
     const sanitized = Math.max(0, Math.min(100, Math.floor(volume)));
     const result = await this.rpc<{ volume?: number }>(playerId, [
       "alarm",
       "defaultvolume",
       `volume:${sanitized}`,
     ]);
-    return Number.isFinite(result.volume) ? Math.max(0, Math.floor(result.volume || 0)) : sanitized;
+    return Number.isFinite(result.volume)
+      ? Math.max(0, Math.floor(result.volume || 0))
+      : sanitized;
   }
 
   // ---------------------------------------------------------------------------
@@ -647,6 +829,10 @@ class ResonanceAPI {
 
   async clearPlaylist(playerId: string): Promise<void> {
     await this.rpc(playerId, ["playlist", "clear"]);
+  }
+
+  async removeFromPlaylist(playerId: string, index: number): Promise<void> {
+    await this.rpc(playerId, ["playlist", "delete", String(index)]);
   }
 
   async getPlaylist(
@@ -1022,6 +1208,440 @@ class ResonanceAPI {
       return false;
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Settings
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Get current server settings with metadata.
+   */
+  async getSettings(): Promise<SettingsResponse> {
+    const response = await fetch(`${this.baseUrl}/api/settings`);
+    if (!response.ok) {
+      throw new Error(`Failed to get settings: ${response.status}`);
+    }
+    return await response.json();
+  }
+
+  /**
+   * Update server settings (partial update).
+   * Only provided fields are changed. Returns updated settings + warnings.
+   *
+   * @param updates - Object with setting field names and new values.
+   *   Example: `{ default_volume: 80, log_level: "DEBUG" }`
+   */
+  async updateSettings(
+    updates: Partial<ServerSettingsData>,
+  ): Promise<SettingsUpdateResponse> {
+    const response = await fetch(`${this.baseUrl}/api/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings: updates }),
+    });
+    if (!response.ok) {
+      const error = await response
+        .json()
+        .catch(() => ({ detail: response.statusText }));
+      throw new Error(
+        error.detail || `Failed to update settings: ${response.status}`,
+      );
+    }
+    return await response.json();
+  }
+
+  /**
+   * Reset all settings to their built-in defaults.
+   * The config file path is preserved.
+   */
+  async resetSettings(): Promise<SettingsUpdateResponse> {
+    const response = await fetch(`${this.baseUrl}/api/settings/reset`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      const error = await response
+        .json()
+        .catch(() => ({ detail: response.statusText }));
+      throw new Error(
+        error.detail || `Failed to reset settings: ${response.status}`,
+      );
+    }
+    return await response.json();
+  }
+
+  // =========================================================================
+  // Favorites (Plugin: favorites)
+  // =========================================================================
+
+  /**
+   * Browse favorites. Pass `itemId` to browse a sub-folder.
+   */
+  async getFavorites(
+    start = 0,
+    count = 100,
+    itemId?: string,
+  ): Promise<FavoritesResult> {
+    const cmd: string[] = ["favorites", "items", String(start), String(count)];
+    if (itemId) cmd.push(`item_id:${itemId}`);
+    const result = await this.rpc<Record<string, unknown>>("-", cmd);
+    const loop = (result.loop || []) as Record<string, unknown>[];
+    const items: FavoriteItem[] = loop.map((r) => ({
+      id: String(r.id ?? ""),
+      name: String(r.name ?? r.title ?? ""),
+      url: String(r.url ?? ""),
+      type: String(
+        (r.type ?? r.isaudio) ? "audio" : r.hasitems ? "folder" : "audio",
+      ),
+      icon: r.icon ? String(r.icon) : r.image ? String(r.image) : undefined,
+      hasitems: r.hasitems === 1 || r.hasitems === true,
+    }));
+    return { items, total: Number(result.count ?? items.length) };
+  }
+
+  /**
+   * Add a URL to favorites.
+   */
+  async addFavorite(url: string, title: string, type = "audio"): Promise<void> {
+    await this.rpc("-", [
+      "favorites",
+      "add",
+      `url:${url}`,
+      `title:${title}`,
+      `type:${type}`,
+    ]);
+  }
+
+  /**
+   * Delete a favorite by index id (e.g. "0", "1.2").
+   */
+  async deleteFavorite(itemId: string): Promise<void> {
+    await this.rpc("-", ["favorites", "delete", `item_id:${itemId}`]);
+  }
+
+  /**
+   * Rename a favorite.
+   */
+  async renameFavorite(itemId: string, title: string): Promise<void> {
+    await this.rpc("-", [
+      "favorites",
+      "rename",
+      `item_id:${itemId}`,
+      `title:${title}`,
+    ]);
+  }
+
+  /**
+   * Add a folder to favorites.
+   */
+  async addFavoriteFolder(title: string, parentId?: string): Promise<void> {
+    const cmd = ["favorites", "addlevel", `title:${title}`];
+    if (parentId) cmd.push(`item_id:${parentId}`);
+    await this.rpc("-", cmd);
+  }
+
+  /**
+   * Check if a URL exists in favorites.
+   */
+  async favoriteExists(url: string): Promise<boolean> {
+    const result = await this.rpc<Record<string, unknown>>("-", [
+      "favorites",
+      "exists",
+      url,
+    ]);
+    return result.exists === 1 || result.exists === true;
+  }
+
+  /**
+   * Play all favorites (or folder contents) on the selected player.
+   */
+  async playFavorites(
+    playerId: string,
+    method: "play" | "add" | "insert" = "play",
+    itemId?: string,
+  ): Promise<void> {
+    const cmd = ["favorites", "playlist", method];
+    if (itemId) cmd.push(`item_id:${itemId}`);
+    await this.rpc(playerId, cmd);
+  }
+
+  // =========================================================================
+  // Radio (Plugin: radio / radio-browser.info)
+  // =========================================================================
+
+  /**
+   * Browse radio categories / stations. Pass `category` to drill into a category.
+   * Categories: "popular", "trending", "country", "country:DE", "tag", "tag:jazz",
+   * "language", "language:german".
+   */
+  async getRadioItems(
+    start = 0,
+    count = 100,
+    category?: string,
+  ): Promise<RadioResult> {
+    const cmd: string[] = ["radio", "items", String(start), String(count)];
+    if (category) cmd.push(`category:${category}`);
+    const result = await this.rpc<Record<string, unknown>>("-", cmd);
+    const loop = (result.loop || []) as Record<string, unknown>[];
+    const items: RadioItem[] = loop.map((r) => ({
+      name: String(r.name ?? r.title ?? ""),
+      url: String(r.url ?? r.URL ?? ""),
+      type: String(r.type ?? "link"),
+      icon: r.icon ? String(r.icon) : r.image ? String(r.image) : undefined,
+      hasitems:
+        r.hasitems === 1 || r.hasitems === true || r.category !== undefined,
+      category: r.category ? String(r.category) : undefined,
+      bitrate: r.bitrate ? Number(r.bitrate) : undefined,
+      codec: r.codec ? String(r.codec) : undefined,
+      country: r.country ? String(r.country) : undefined,
+      countrycode: r.countrycode ? String(r.countrycode) : undefined,
+      tags: r.tags ? String(r.tags) : undefined,
+      stationuuid: r.id ? String(r.id) : undefined,
+      subtext: r.subtext ? String(r.subtext) : undefined,
+      votes: r.votes ? Number(r.votes) : undefined,
+      homepage: r.homepage ? String(r.homepage) : undefined,
+    }));
+    return { items, total: Number(result.count ?? items.length) };
+  }
+
+  /**
+   * Search radio stations via radio-browser.info.
+   */
+  async searchRadio(
+    query: string,
+    start = 0,
+    count = 100,
+  ): Promise<RadioResult> {
+    const cmd: string[] = [
+      "radio",
+      "search",
+      String(start),
+      String(count),
+      `term:${query}`,
+    ];
+    const result = await this.rpc<Record<string, unknown>>("-", cmd);
+    const loop = (result.loop || []) as Record<string, unknown>[];
+    const items: RadioItem[] = loop.map((r) => ({
+      name: String(r.name ?? r.title ?? ""),
+      url: String(r.url ?? r.URL ?? ""),
+      type: String(r.type ?? "audio"),
+      icon: r.icon ? String(r.icon) : r.image ? String(r.image) : undefined,
+      hasitems: r.hasitems === 1 || r.hasitems === true,
+      bitrate: r.bitrate ? Number(r.bitrate) : undefined,
+      codec: r.codec ? String(r.codec) : undefined,
+      country: r.country ? String(r.country) : undefined,
+      countrycode: r.countrycode ? String(r.countrycode) : undefined,
+      tags: r.tags ? String(r.tags) : undefined,
+      stationuuid: r.id ? String(r.id) : undefined,
+      subtext: r.subtext ? String(r.subtext) : undefined,
+      votes: r.votes ? Number(r.votes) : undefined,
+      homepage: r.homepage ? String(r.homepage) : undefined,
+    }));
+    return { items, total: Number(result.count ?? items.length) };
+  }
+
+  /**
+   * Play a radio station on a player.
+   */
+  async playRadio(
+    playerId: string,
+    stationUrl: string,
+    title?: string,
+    method: "play" | "add" | "insert" = "play",
+    extra?: {
+      icon?: string;
+      codec?: string;
+      bitrate?: number;
+      stationuuid?: string;
+    },
+  ): Promise<void> {
+    const cmd = ["radio", "play", `url:${stationUrl}`, `cmd:${method}`];
+    if (title) cmd.push(`title:${title}`);
+    if (extra?.icon) cmd.push(`icon:${extra.icon}`);
+    if (extra?.codec) cmd.push(`codec:${extra.codec}`);
+    if (extra?.bitrate != null) cmd.push(`bitrate:${extra.bitrate}`);
+    if (extra?.stationuuid) cmd.push(`id:${extra.stationuuid}`);
+    await this.rpc(playerId, cmd);
+  }
+
+  // =========================================================================
+  // Podcasts (Plugin: podcast)
+  // =========================================================================
+
+  /**
+   * Browse podcasts. Without `feedUrl`, returns top-level (subscriptions etc.).
+   * With `feedUrl`, returns episodes for that feed.
+   */
+  async getPodcastItems(
+    start = 0,
+    count = 100,
+    feedUrl?: string,
+  ): Promise<PodcastResult> {
+    const cmd: string[] = ["podcast", "items", String(start), String(count)];
+    if (feedUrl) cmd.push(`url:${feedUrl}`);
+    const result = await this.rpc<Record<string, unknown>>("-", cmd);
+    const loop = (result.loop || []) as Record<string, unknown>[];
+    const items: PodcastItem[] = loop.map((r) => ({
+      name: String(r.name ?? r.text ?? r.title ?? ""),
+      url: String(r.url ?? ""),
+      type: String(r.type ?? "link"),
+      icon: r.icon ? String(r.icon) : r.image ? String(r.image) : undefined,
+      hasitems: r.hasitems === 1 || r.hasitems === true,
+      subtitle: r.subtitle ? String(r.subtitle) : undefined,
+    }));
+    return { items, total: Number(result.count ?? items.length) };
+  }
+
+  /**
+   * Search PodcastIndex for podcasts.
+   */
+  async searchPodcasts(
+    query: string,
+    start = 0,
+    count = 100,
+  ): Promise<PodcastResult> {
+    const cmd: string[] = [
+      "podcast",
+      "items",
+      String(start),
+      String(count),
+      `search:${query}`,
+    ];
+    const result = await this.rpc<Record<string, unknown>>("-", cmd);
+    const loop = (result.loop || []) as Record<string, unknown>[];
+    const items: PodcastItem[] = loop.map((r) => ({
+      name: String(r.name ?? r.text ?? r.title ?? ""),
+      url: String(r.url ?? ""),
+      type: String(r.type ?? "folder"),
+      icon: r.icon ? String(r.icon) : r.image ? String(r.image) : undefined,
+      hasitems: r.hasitems === 1 || r.hasitems === true,
+      subtitle: r.subtitle
+        ? String(r.subtitle)
+        : r.description
+          ? String(r.description)
+          : undefined,
+    }));
+    return { items, total: Number(result.count ?? items.length) };
+  }
+
+  /**
+   * Play a podcast episode on a player.
+   */
+  async playPodcast(
+    playerId: string,
+    episodeUrl: string,
+    title?: string,
+    method: "play" | "add" | "insert" = "play",
+  ): Promise<void> {
+    const cmd = ["podcast", "play", `url:${episodeUrl}`, `cmd:${method}`];
+    if (title) cmd.push(`title:${title}`);
+    await this.rpc(playerId, cmd);
+  }
+
+  /**
+   * Subscribe to a podcast feed.
+   */
+  async podcastSubscribe(feedUrl: string, title?: string): Promise<void> {
+    const cmd = ["podcast", "addshow", `url:${feedUrl}`];
+    if (title) cmd.push(`name:${title}`);
+    await this.rpc("-", cmd);
+  }
+
+  /**
+   * Unsubscribe from a podcast feed.
+   */
+  async podcastUnsubscribe(feedUrl: string): Promise<void> {
+    await this.rpc("-", ["podcast", "delshow", `url:${feedUrl}`]);
+  }
+
+  // =========================================================================
+  // Saved Playlists (LMS-compat: playlists command)
+  // =========================================================================
+
+  /**
+   * List saved playlists on disk (M3U files).
+   */
+  async getSavedPlaylists(
+    start = 0,
+    count = 200,
+    search?: string,
+  ): Promise<{ playlists: SavedPlaylist[]; total: number }> {
+    const cmd: string[] = ["playlists", String(start), String(count)];
+    if (search) cmd.push(`search:${search}`);
+    const result = await this.rpc<Record<string, unknown>>("-", cmd);
+    const loop = (result.playlists_loop || []) as Record<string, unknown>[];
+    const playlists: SavedPlaylist[] = loop.map((r) => ({
+      id: String(r.id ?? ""),
+      playlist: String(r.playlist ?? ""),
+      url: String(r.url ?? ""),
+    }));
+    return { playlists, total: Number(result.count ?? playlists.length) };
+  }
+
+  /**
+   * Get tracks from a saved playlist.
+   */
+  async getSavedPlaylistTracks(
+    playlistId: string,
+    start = 0,
+    count = 200,
+  ): Promise<{ tracks: SavedPlaylistTrack[]; total: number }> {
+    const result = await this.rpc<Record<string, unknown>>("-", [
+      "playlists",
+      "tracks",
+      `playlist_id:${playlistId}`,
+      `_index:${start}`,
+      `_quantity:${count}`,
+    ]);
+    const loop = (result.playlisttracks_loop || []) as Record<
+      string,
+      unknown
+    >[];
+    const tracks: SavedPlaylistTrack[] = loop.map((r) => ({
+      title: String(r.title ?? ""),
+      url: String(r.url ?? ""),
+      artist: r.artist ? String(r.artist) : undefined,
+      album: r.album ? String(r.album) : undefined,
+      duration: r.duration ? Number(r.duration) : undefined,
+      "playlist index": Number(r["playlist index"] ?? 0),
+    }));
+    return { tracks, total: Number(result.count ?? tracks.length) };
+  }
+
+  /**
+   * Save the current player queue as a named playlist (M3U).
+   */
+  async savePlaylist(playerId: string, name: string): Promise<void> {
+    await this.rpc(playerId, ["playlist", "save", name]);
+  }
+
+  /**
+   * Load a saved playlist into the player queue and start playing.
+   */
+  async loadSavedPlaylist(playerId: string, name: string): Promise<void> {
+    await this.rpc(playerId, ["playlist", "resume", name]);
+  }
+
+  /**
+   * Delete a saved playlist.
+   */
+  async deleteSavedPlaylist(playlistId: string): Promise<void> {
+    await this.rpc("-", ["playlists", "delete", `playlist_id:${playlistId}`]);
+  }
+
+  /**
+   * Rename a saved playlist.
+   */
+  async renameSavedPlaylist(
+    playlistId: string,
+    newName: string,
+  ): Promise<void> {
+    await this.rpc("-", [
+      "playlists",
+      "rename",
+      `playlist_id:${playlistId}`,
+      `newname:${newName}`,
+    ]);
+  }
 }
 
 // Export singleton instance
@@ -1029,6 +1649,3 @@ export const api = new ResonanceAPI();
 
 // Also export class for custom instances
 export { ResonanceAPI };
-
-
-

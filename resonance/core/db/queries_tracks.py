@@ -131,6 +131,14 @@ async def count_tracks(conn: aiosqlite.Connection) -> int:
     return int(row["c"]) if row else 0
 
 
+async def _has_fts5(conn: aiosqlite.Connection) -> bool:
+    """Return True if the ``tracks_fts`` FTS5 virtual table exists."""
+    cursor = await conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tracks_fts' LIMIT 1;"
+    )
+    return await cursor.fetchone() is not None
+
+
 async def search_tracks(
     conn: aiosqlite.Connection,
     query: str,
@@ -138,6 +146,34 @@ async def search_tracks(
     limit: int,
     offset: int,
 ) -> list[TrackRow]:
+    # Prefer FTS5 when the virtual table is available (schema v9+).
+    # FTS5 provides relevance ranking via the built-in ``rank`` column and
+    # unicode61 diacritics normalisation out of the box.
+    if await _has_fts5(conn):
+        # FTS5 match syntax: wrap each token in double-quotes so special
+        # characters (colons, hyphens, …) are treated as literals, then
+        # append ``*`` for prefix matching.
+        tokens = query.split()
+        match_expr = " ".join(f'"{t}"*' for t in tokens) if tokens else f'"{query}"*'
+        try:
+            cursor = await conn.execute(
+                """
+                SELECT t.* FROM tracks t
+                JOIN tracks_fts fts ON t.id = fts.rowid
+                WHERE tracks_fts MATCH ?
+                ORDER BY fts.rank
+                LIMIT ? OFFSET ?;
+                """,
+                (match_expr, int(limit), int(offset)),
+            )
+            rows = await cursor.fetchall()
+            return [_row_to_track(r) for r in rows]
+        except Exception:
+            # Malformed MATCH expression or FTS index corruption — fall
+            # through to the LIKE fallback so the user still gets results.
+            pass
+
+    # Fallback: simple LIKE search (no ranking, no diacritics normalisation).
     like_pattern = f"%{query}%"
     cursor = await conn.execute(
         """

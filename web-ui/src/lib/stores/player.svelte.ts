@@ -180,7 +180,8 @@ async function loadPlayers(): Promise<void> {
 
     // Prefer real audio players; fall back to any connected player.
     const hasSelectedPlayer =
-      selectedPlayerId !== null && players.some((p) => p.id === selectedPlayerId);
+      selectedPlayerId !== null &&
+      players.some((p) => p.id === selectedPlayerId);
 
     if (!hasSelectedPlayer && players.length > 0) {
       const preferredPlayer =
@@ -555,6 +556,36 @@ async function addToPlaylist(track: Track): Promise<void> {
   // pending action clears or on next poll cycle.
 }
 
+async function removeTrack(index: number): Promise<void> {
+  if (!selectedPlayerId) return;
+
+  // Optimistic UI update: remove the track from the local playlist immediately
+  setPendingAction(1000);
+  const wasCurrentTrack = index === status.playlistIndex;
+  playlist = playlist.filter((_, i) => i !== index);
+  status.playlistTracks = playlist.length;
+
+  // Adjust playlistIndex if we removed a track before or at the current position
+  if (index < status.playlistIndex) {
+    status.playlistIndex = Math.max(0, status.playlistIndex - 1);
+  } else if (wasCurrentTrack && playlist.length === 0) {
+    // Removed the only/current track — stop
+    status.mode = "stop";
+    currentTrack = null;
+    stopInterpolation();
+    resetSmoothing(0);
+  }
+
+  await api.removeFromPlaylist(selectedPlayerId, index);
+
+  // Converge to server truth
+  setTimeout(() => {
+    pendingAction = false;
+    loadStatus();
+    loadPlaylist();
+  }, 300);
+}
+
 async function clearPlaylist(): Promise<void> {
   if (!selectedPlayerId) return;
 
@@ -700,8 +731,8 @@ export const playerStore = {
   playTrack,
   playAlbum,
   addToPlaylist,
+  removeTrack,
   clearPlaylist,
   startPolling,
   stopPolling,
 };
-
