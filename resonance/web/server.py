@@ -187,6 +187,36 @@ class WebServer:
     def _register_routes(self) -> None:
         """Register all routes with the FastAPI app."""
 
+        # ── Diagnostic middleware: log artwork-related requests ───────
+        # JiveLite fetches artwork via artworkPool (persistent HTTP).
+        # This middleware logs any request to /imageproxy/ or /music/
+        # so we can verify whether JiveLite actually reaches the server.
+        @self.app.middleware("http")
+        async def _log_artwork_requests(request, call_next):
+            path = request.url.path
+            if path.startswith("/imageproxy/") or (
+                path.startswith("/music/") and "cover" in path
+            ) or path.startswith("/html/images/"):
+                logger.info(
+                    "[ARTWORK-REQ] %s %s from %s (user-agent: %s)",
+                    request.method,
+                    path[:200],
+                    request.client.host if request.client else "?",
+                    request.headers.get("user-agent", "?")[:80],
+                )
+            resp = await call_next(request)
+            if path.startswith("/imageproxy/") or (
+                path.startswith("/music/") and "cover" in path
+            ) or path.startswith("/html/images/"):
+                logger.info(
+                    "[ARTWORK-REQ] %s %s -> %d (%s bytes)",
+                    request.method,
+                    path[:120],
+                    resp.status_code,
+                    resp.headers.get("content-length", "?"),
+                )
+            return resp
+
         # Health check
         @self.app.get("/health")
         async def health_check() -> dict[str, str]:
@@ -234,6 +264,13 @@ class WebServer:
             cometd_manager=self.cometd_manager,
             jsonrpc_handler=self.jsonrpc_handler,
         )
+
+        # Serve LMS-compatible static assets (/html/images/radio.png etc.)
+        # Must come before the catch-all Svelte mount.
+        _static_html = Path(__file__).resolve().parent.parent.parent / "static" / "html"
+        if _static_html.is_dir():
+            self.app.mount("/html", StaticFiles(directory=str(_static_html)), name="lms_html")
+            logger.info("LMS-compatible /html/ static assets mounted from %s", _static_html)
 
         # Serve Svelte static build at / (must be last — catch-all)
         _ui_build = Path(__file__).resolve().parent.parent.parent / "web-ui" / "build"

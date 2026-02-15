@@ -349,7 +349,10 @@ class TestRemoteMetaFieldsRadio:
         track = _make_radio_track(artwork_url="http://img.test/logo.png")
         ctx = _make_ctx(track)
         result = await cmd_status(ctx, ["status", "-", 1])
-        assert result["remoteMeta"]["artwork_url"] == "http://img.test/logo.png"
+        # Server-relative proxied path (like LMS proxiedImage()) so
+        # JiveLite fetches via its reliable artworkPool connection
+        # (SlimServer.lua L987-989) instead of ad-hoc SocketHttp.
+        assert result["remoteMeta"]["artwork_url"] == "/imageproxy/http%3A%2F%2Fimg.test%2Flogo.png/image.png"
 
     @pytest.mark.asyncio
     async def test_live_edge_for_live_stream(self) -> None:

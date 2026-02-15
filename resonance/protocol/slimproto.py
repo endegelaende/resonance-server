@@ -169,6 +169,23 @@ DEVICE_IDS: dict[int, str] = {
     12: "squeezeplay",
 }
 
+# Friendly default names by model (LMS _makeDefaultName uses modelName()).
+# Keys match DEVICE_IDS values; SqueezePlay devices override via
+# capabilities ModelName (e.g. "Squeezebox Radio").
+MODEL_NAMES: dict[str, str] = {
+    "squeezebox": "Squeezebox",
+    "squeezebox2": "Squeezebox",
+    "transporter": "Transporter",
+    "receiver": "Squeezebox Receiver",
+    "controller": "Squeezebox Controller",
+    "boom": "Squeezebox Boom",
+    "squeezeplay": "SqueezePlay",
+    "squeezeslave": "Squeezelite",
+    "softsqueeze": "SoftSqueeze",
+    "softsqueeze3": "SoftSqueeze",
+    "softboom": "SoftBoom",
+}
+
 # Message handler type
 MessageHandler = Callable[[PlayerClient, bytes], Coroutine[Any, Any, None]]
 
@@ -594,7 +611,13 @@ class SlimprotoServer:
         client.info.firmware_version = str(revision)
         client.info.uuid = uuid
         client.info.capabilities = capabilities
-        client.info.model = DEVICE_IDS.get(device_id, f"unknown-{device_id}")
+        model = DEVICE_IDS.get(device_id, f"unknown-{device_id}")
+        client.info.model = model
+
+        # Derive default player name (LMS _makeDefaultName equivalent).
+        # Priority: capabilities ModelName > MODEL_NAMES lookup > model string.
+        model_name = capabilities.get("ModelName") or MODEL_NAMES.get(model, model)
+        client.name = model_name
 
         # Extract name from capabilities if present
         if "Name" in capabilities:
@@ -1208,10 +1231,19 @@ class SlimprotoServer:
             corrected_elapsed_sec = (elapsed_seconds or 0) + start_offset
             corrected_elapsed_ms = (elapsed_ms or 0) + int(start_offset * 1000)
 
+            _pub_state = client.status.state.value
+            # Log state transitions at INFO so we can trace the Cometd reexec chain.
+            # STMt heartbeats are too frequent — only log the important ones.
+            if event_code.startswith("STM") and event_code[3:4] in ("s", "r", "p"):
+                logger.info(
+                    "Publishing PlayerStatusEvent for %s: %s (state=%s, elapsed=%.1fs)",
+                    client.mac_address, event_code, _pub_state, corrected_elapsed_sec,
+                )
+
             event_bus.publish_sync(
                 PlayerStatusEvent(
                     player_id=client.mac_address,
-                    state=client.status.state.value,
+                    state=_pub_state,
                     volume=client.status.volume,
                     muted=client.status.muted,
                     elapsed_seconds=corrected_elapsed_sec,
@@ -1411,13 +1443,40 @@ class SlimprotoServer:
         if setting_id == 0 and payload:
             # Player name update
             name = payload.decode("utf-8", errors="replace").rstrip("\x00")
-            if name:
+            # SqueezePlay sends Lua "nil" when it has no stored name.
+            # Treat "nil" and empty as no-name → keep the default set in _parse_helo.
+            if name and name != "nil":
                 old_name = client.name
                 client.name = name
                 logger.info(
                     "SETD from %s: player name changed '%s' → '%s'",
                     client.id, old_name, name,
                 )
+            elif name == "nil":
+                logger.info(
+                    "SETD from %s: player reported name 'nil' — keeping default '%s'",
+                    client.id, client.name,
+                )
+                # LMS Squeezebox2.pm L940-944 + L959-982 (setPlayerSetting):
+                # When the server has a stored/default name that differs from
+                # what the player reported, LMS pushes it back via SETD so
+                # the player firmware updates its display.
+                # Frame format: pack('CZ*', firmwareid=0, name) → setting_id
+                # byte + null-terminated UTF-8 string.
+                correct_name = client.name
+                if correct_name and correct_name != "nil":
+                    setd_payload = bytes([0]) + correct_name.encode("utf-8") + b"\x00"
+                    try:
+                        await self._send_message(client, "setd", setd_payload)
+                        logger.info(
+                            "SETD to %s: pushed correct name '%s' back to player firmware",
+                            client.id, correct_name,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "SETD to %s: failed to push name '%s' back to player",
+                            client.id, correct_name,
+                        )
         elif setting_id == 4:
             # Disabled flag
             disabled = payload[0] if payload else 0

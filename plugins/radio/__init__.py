@@ -627,6 +627,15 @@ async def _radio_play(
     codec = tagged.get("codec", "")
     bitrate_str = tagged.get("bitrate", "0")
 
+    logger.info(
+        "[RADIO-PLAY] params: url=%s id=%s title=%s icon=%s cmd=%s",
+        stream_url[:80] if stream_url else "<empty>",
+        station_uuid or "<empty>",
+        title or "<empty>",
+        icon[:120] if icon else "<NONE>",
+        play_cmd,
+    )
+
     if not stream_url and not station_uuid:
         return {"error": "Missing 'url' or 'id' parameter"}
 
@@ -670,13 +679,20 @@ async def _radio_play(
     # Build a PlaylistTrack for the radio stream.
     from resonance.core.playlist import PlaylistTrack
 
+    _artwork = icon or None
+    logger.info(
+        "[RADIO-PLAY] creating PlaylistTrack: title=%s artwork_url=%s",
+        title or "Radio Station",
+        _artwork[:120] if _artwork else "<NONE>",
+    )
+
     track = PlaylistTrack.from_url(
         url=stream_url,
         title=title or "Radio Station",
         source="radio",
         stream_url=stream_url,
         external_id=station_uuid,
-        artwork_url=icon or None,
+        artwork_url=_artwork,
         content_type=content_type,
         bitrate=bitrate,
         is_live=True,

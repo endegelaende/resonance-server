@@ -235,6 +235,37 @@ All notable changes to the project are documented here.
   - Cometd subscribers re-execute status and receive updated metadata immediately
   - CLI mapping mirrors LMS `playlist newsong`
 
+### 🎨 Radio Cover-Art Fixes for JiveLite/SqueezePlay (2026-02-15)
+
+- **ICO→PNG auto-conversion** (`resonance/web/routes/artwork.py`):
+  Many TuneIn stations serve `.ico` favicons (Windows Icon format). JiveLite uses SDL_image
+  which cannot render `.ico` files (`Surface:loadImageData()` returns `w=0, h=0` → image
+  silently discarded). The imageproxy endpoint now detects non-standard formats (ICO, BMP,
+  TIFF — anything not JPEG/PNG/GIF/WebP) and converts them to PNG via PIL before serving.
+- **Server-relative icon paths** (`resonance/web/handlers/status.py`):
+  All `icon` / `icon-id` fields for remote tracks now use server-relative `/imageproxy/…`
+  paths via `_proxied_image_url()` (mirrors LMS `Slim::Web::ImageProxy::proxiedImage()`,
+  ImageProxy.pm L437-457). Previously absolute URLs caused JiveLite to use ad-hoc
+  `SocketHttp` fetches which were unreliable on embedded hardware.
+- **Resize-suffix stripping route** (`resonance/web/routes/artwork.py`, NEW):
+  JiveLite's `fetchArtwork()` (SlimServer.lua L1170-1172) appends `_300x300_m` to icon-id
+  paths, e.g. `/html/images/radio_300x300_m.png`. New `/html/images/{filename}` route
+  strips the suffix via `_RESIZE_SUFFIX_RE` and serves the original file.
+- **Imageproxy upstream fallback** (`resonance/web/routes/artwork.py`):
+  When the upstream image fetch fails (HTTP error, timeout, network error) the imageproxy
+  now returns the radio placeholder image (`/html/images/radio.png`) instead of a 502,
+  so SqueezePlay always gets *some* artwork.
+- **Debug logging** for artwork pipeline:
+  `[RADIO-PLAY]` log in radio plugin shows `icon` parameter at play time;
+  `[STATUS-ART]` log in status handler traces `artwork_url` → `icon` path resolution.
+
+| Problem | Root Cause | Fix |
+|---|---|---|
+| Cover sometimes yes, sometimes no | `.ico` favicons → SDL_image can't load ICO | Imageproxy converts non-standard formats to PNG via PIL |
+| JiveLite unreliable artwork loading | Absolute URLs → ad-hoc `SocketHttp` | All `icon` paths server-relative (→ `artworkPool`) |
+| Radio fallback icon 404 | JiveLite appends resize suffix to `/html/images/radio.png` | New route strips `_300x300_m` suffix |
+| Imageproxy upstream errors | No fallback handling | Returns radio placeholder on 404/timeout |
+
 ### 🖥️ Bitmap Display Metadata Pipeline + Feature Flag (2026-02-15)
 
 - Fix: Bitmap displays (SB2/SB3/Classic/Boom) now receive metadata updates:

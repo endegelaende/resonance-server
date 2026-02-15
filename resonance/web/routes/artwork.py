@@ -7,6 +7,7 @@ Provides endpoints for serving album artwork:
 - /api/artwork/track/{track_id}/blurhash: Get BlurHash placeholder for a track
 - /api/artwork/album/{album_id}/blurhash: Get BlurHash placeholder for an album
 - /music/{id}/cover_{spec}: LMS-compatible resized cover art for Squeezebox devices
+- /imageproxy/{url}/image{ext}: LMS-compatible proxy for external artwork URLs
 """
 
 from __future__ import annotations
@@ -17,7 +18,9 @@ import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import unquote
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 
 try:
@@ -33,6 +36,7 @@ if TYPE_CHECKING:
     from resonance.core.library import MusicLibrary
 
 logger = logging.getLogger(__name__)
+logger.info("[IMAGEPROXY] PIL/Pillow available: %s", PIL_AVAILABLE)
 
 router = APIRouter(tags=["artwork"])
 
@@ -555,6 +559,248 @@ async def get_album_blurhash(album_id: int) -> dict[str, Any]:
         "blurhash": blurhash_str,
         "album_id": album_id,
     }
+
+
+# ---------------------------------------------------------------------------
+# Image Proxy — LMS Slim::Web::ImageProxy equivalent
+# ---------------------------------------------------------------------------
+# LMS proxiedImage() (ImageProxy.pm L437-457) converts external artwork URLs
+# to /imageproxy/<uri_escaped_url>/image.png so SqueezePlay/JiveLite devices
+# fetch artwork from the server instead of reaching out to the internet
+# directly (which many embedded players cannot do reliably).
+#
+# Usage in status responses:
+#   proxied_url(url) → "/imageproxy/<escaped>/image.png"
+# ---------------------------------------------------------------------------
+
+# Shared httpx client for image proxy requests (lazy-initialized).
+_imageproxy_client: httpx.AsyncClient | None = None
+
+# Reasonable limits for proxied images.
+_IMAGEPROXY_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+_IMAGEPROXY_TIMEOUT = 10.0  # seconds
+
+# Content-type → extension mapping for validation.
+_IMAGE_CONTENT_TYPES = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/svg+xml": ".svg",
+    "image/bmp": ".bmp",
+}
+
+
+def proxied_url(url: str | None) -> str | None:
+    """Convert an external artwork URL to an /imageproxy/ server-local path.
+
+    Mirrors LMS ``Slim::Web::ImageProxy::proxiedImage()`` (ImageProxy.pm L437-457).
+    Returns *None* when *url* is falsy or already server-relative.
+    """
+    if not url or not url.startswith(("http://", "https://")):
+        return None
+
+    # Detect file extension (LMS defaults to .png).
+    ext = ".png"
+    import re as _re
+    m = _re.search(r"\.(jpe?g|png|gif|webp)", url, _re.IGNORECASE)
+    if m:
+        ext = "." + m.group(1).lower()
+        if ext == ".jpeg":
+            ext = ".jpg"
+
+    # URI-encode the URL so it's safe to embed in a path segment.
+    from urllib.parse import quote
+    encoded = quote(url, safe="")
+    return f"/imageproxy/{encoded}/image{ext}"
+
+
+async def _get_imageproxy_client() -> httpx.AsyncClient:
+    """Return (and lazily create) the shared httpx client for image proxy."""
+    global _imageproxy_client  # noqa: PLW0603
+    if _imageproxy_client is None or _imageproxy_client.is_closed:
+        _imageproxy_client = httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=httpx.Timeout(_IMAGEPROXY_TIMEOUT),
+            limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
+            headers={"User-Agent": "Resonance/1.0 ImageProxy"},
+        )
+    return _imageproxy_client
+
+
+# Resolve the static/html directory once.
+_STATIC_HTML_DIR = Path(__file__).resolve().parent.parent.parent.parent / "static" / "html"
+
+# Radio placeholder image — loaded lazily on first fallback.
+_RADIO_PLACEHOLDER_PATH = _STATIC_HTML_DIR / "images" / "radio.png"
+
+
+def _radio_placeholder_response() -> Response | None:
+    """Return a Response with the radio placeholder PNG, or *None*."""
+    if _RADIO_PLACEHOLDER_PATH.is_file():
+        return Response(
+            content=_RADIO_PLACEHOLDER_PATH.read_bytes(),
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+    return None
+
+
+@router.get("/imageproxy/{url:path}")
+async def imageproxy(url: str, request: Request) -> Response:
+    """LMS-compatible image proxy for external artwork URLs.
+
+    SqueezePlay/JiveLite devices request artwork via:
+        /imageproxy/<uri_escaped_url>/image.png
+
+    This endpoint decodes the URL, fetches the image from the origin,
+    and returns it with appropriate caching headers.
+
+    When the upstream fetch fails (404, timeout, network error) we fall
+    back to the radio placeholder image (``/html/images/radio.png``) so
+    that SqueezePlay always gets *some* artwork instead of a broken icon.
+    """
+    logger.info("[IMAGEPROXY] >>> request path=%s", url[:120])
+
+    # Strip trailing /image[_WxH_m].ext if present.
+    # Standard LMS convention:  /image.png
+    # JiveLite resize variant:  /image_300x300_m.png
+    # Both need to be removed to recover the original upstream URL.
+    clean_url = re.sub(r"/image(?:_\d+x\d+_\w)?(?:\.\w{2,4})?$", "", url)
+    # URL-decode (the URL was percent-encoded by proxied_url / LMS proxiedImage).
+    decoded_url = unquote(clean_url)
+
+    logger.info("[IMAGEPROXY] decoded_url=%s", decoded_url[:200])
+
+    if not decoded_url.startswith(("http://", "https://")):
+        logger.warning("[IMAGEPROXY] rejected non-http URL: %s", decoded_url[:120])
+        raise HTTPException(status_code=400, detail="Only http/https URLs supported")
+
+    try:
+        client = await _get_imageproxy_client()
+        resp = await client.get(decoded_url)
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        logger.warning("[IMAGEPROXY] upstream HTTP error for %s: %s", decoded_url[:120], exc)
+        fallback = _radio_placeholder_response()
+        if fallback is not None:
+            return fallback
+        raise HTTPException(status_code=502, detail="Upstream image fetch failed") from exc
+    except (httpx.RequestError, httpx.TimeoutException) as exc:
+        logger.warning("[IMAGEPROXY] request failed for %s: %s", decoded_url[:120], exc)
+        fallback = _radio_placeholder_response()
+        if fallback is not None:
+            return fallback
+        raise HTTPException(status_code=502, detail="Upstream image fetch failed") from exc
+
+    content = resp.content
+    if len(content) > _IMAGEPROXY_MAX_BYTES:
+        raise HTTPException(status_code=502, detail="Image too large")
+
+    # Determine content type from upstream response.
+    content_type = resp.headers.get("content-type", "image/png").split(";")[0].strip()
+    if not content_type.startswith("image/"):
+        content_type = "image/png"
+
+    # ── Convert non-standard formats to PNG for JiveLite/SDL_image ───
+    # JiveLite uses SDL_image which cannot load .ico (Windows icon) and
+    # some other exotic formats.  RadioBrowser stations frequently have
+    # favicon.ico as their only artwork.  Convert anything that isn't
+    # a standard web image format (JPEG/PNG/GIF/WebP) to PNG so the
+    # Squeezebox hardware can display it.
+    _STANDARD_TYPES = {
+        "image/jpeg", "image/png", "image/gif", "image/webp",
+    }
+    if content_type not in _STANDARD_TYPES and PIL_AVAILABLE:
+        try:
+            img = Image.open(io.BytesIO(content))
+            img = img.convert("RGBA")
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            content = buf.getvalue()
+            content_type = "image/png"
+            logger.info(
+                "[IMAGEPROXY] converted %s -> PNG (%d bytes) for %s",
+                resp.headers.get("content-type", "?"), len(content), decoded_url[:80],
+            )
+        except Exception as exc:
+            logger.warning(
+                "[IMAGEPROXY] failed to convert %s to PNG for %s: %s",
+                resp.headers.get("content-type", "?"), decoded_url[:80], exc,
+            )
+            # Fall through and return the original content — better than nothing.
+
+    logger.info(
+        "[IMAGEPROXY] <<< serving %s %d bytes as %s for %s",
+        "converted" if content_type == "image/png" and resp.headers.get("content-type", "").split(";")[0].strip() != "image/png" else "original",
+        len(content), content_type, decoded_url[:100],
+    )
+
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "X-Imageproxy-Source": decoded_url[:200],
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Static image serving with resize-suffix stripping
+# ---------------------------------------------------------------------------
+# JiveLite's fetchArtwork() (SlimServer.lua L1170-1172) appends a resize
+# suffix to path-based icon-ids:
+#   /html/images/radio.png  →  /html/images/radio_300x300_m.png
+#
+# LMS's web server (Slim::Web::HTTP) handles this transparently by resizing
+# on the fly.  We don't need actual resizing for placeholder images — just
+# strip the suffix and serve the original file.
+#
+# This route MUST be registered before the StaticFiles mount at /html/ so
+# FastAPI's router matches it first.
+# ---------------------------------------------------------------------------
+
+# Pattern: {stem}_{WxH}_{mode}.{ext}  e.g. radio_300x300_m.png
+_RESIZE_SUFFIX_RE = re.compile(r"^(.+?)_\d+x\d+_\w(?:_[0-9a-fA-F]+)?(\.\w+)$")
+
+@router.get("/html/images/{filename:path}")
+async def serve_static_image_with_resize(filename: str) -> Response:
+    """Serve static images from /html/images/, stripping JiveLite resize suffixes.
+
+    JiveLite requests e.g. ``/html/images/radio_300x300_m.png`` but we only
+    have ``radio.png``.  Strip the ``_WxH_m`` suffix and serve the original.
+    """
+    images_dir = _STATIC_HTML_DIR / "images"
+
+    # Try the literal filename first (no suffix stripping needed).
+    candidate = images_dir / filename
+    if candidate.is_file():
+        ext = candidate.suffix.lower()
+        ct = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+              ".gif": "image/gif", ".webp": "image/webp"}.get(ext, "image/png")
+        return Response(
+            content=candidate.read_bytes(),
+            media_type=ct,
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    # Strip resize suffix and retry.
+    m = _RESIZE_SUFFIX_RE.match(filename)
+    if m:
+        original = images_dir / (m.group(1) + m.group(2))
+        if original.is_file():
+            ext = original.suffix.lower()
+            ct = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                  ".gif": "image/gif", ".webp": "image/webp"}.get(ext, "image/png")
+            logger.debug("Resize-suffix strip: %s → %s", filename, original.name)
+            return Response(
+                content=original.read_bytes(),
+                media_type=ct,
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+
+    raise HTTPException(status_code=404, detail="Image not found")
 
 
 @router.get("/api/artwork/test")

@@ -404,7 +404,11 @@ class TestArtworkFallback:
         result = await cmd_status(ctx, ["status", "-", 1])
         ct = result.get("currentTrack", {})
 
-        assert ct.get("icon") == "http://img.radio.com/logo.png"
+        # Artwork URLs are proxied through /imageproxy/ for SqueezePlay
+        # (LMS ImageProxy.pm proxiedImage).
+        # Server-relative proxied path (like LMS proxiedImage()) so
+        # JiveLite fetches via its reliable artworkPool connection.
+        assert ct.get("icon") == "/imageproxy/http%3A%2F%2Fimg.radio.com%2Flogo.png/image.png"
         # icon-id requires album_id, so it should NOT be set
         assert "icon-id" not in ct
 
@@ -440,8 +444,10 @@ class TestArtworkFallback:
         ct = result.get("currentTrack", {})
 
         assert ct["coverArt"] == ""
-        assert "icon" not in ct
-        assert "icon-id" not in ct
+        # Radio fallback: server-relative icon-id path.  JiveLite adds a
+        # resize suffix (radio_300x300_m.png) — our /html/images/ route
+        # strips it and serves the original file.
+        assert ct.get("icon-id") == "/html/images/radio.png"
 
 
 # =============================================================================
@@ -527,7 +533,8 @@ class TestPlaylistLoopRemoteFields:
         assert len(loop) >= 1
         item = loop[0]
         assert item["coverArt"] == "http://img.radio.com/logo.png"
-        assert item.get("icon") == "http://img.radio.com/logo.png"
+        # Server-relative proxied path (like LMS proxiedImage())
+        assert item.get("icon") == "/imageproxy/http%3A%2F%2Fimg.radio.com%2Flogo.png/image.png"
 
     @pytest.mark.asyncio
     async def test_local_track_no_remote_in_playlist_loop(self) -> None:
@@ -577,7 +584,8 @@ class TestMenuModeArtwork:
         items = result.get("item_loop", [])
         assert len(items) >= 1
         track_item = items[0]
-        assert track_item.get("icon") == "http://img.station.com/favicon.png"
+        # Server-relative proxied path (like LMS proxiedImage())
+        assert track_item.get("icon") == "/imageproxy/http%3A%2F%2Fimg.station.com%2Ffavicon.png/image.png"
         # icon-id requires album_id which radio tracks don't have
         assert "icon-id" not in track_item
 
@@ -592,7 +600,7 @@ class TestMenuModeArtwork:
         items = result.get("item_loop", [])
         assert len(items) >= 1
         track_item = items[0]
-        assert track_item.get("icon-id") == 10  # album_id
+        assert track_item.get("icon-id") == "/music/10/cover"  # server-relative path
 
 
 # =============================================================================
@@ -801,7 +809,7 @@ class TestRadioStatusIntegration:
         ct = result["currentTrack"]
         assert ct["title"] == "BBC Radio 1"
         assert ct["coverArt"] == "http://bbc.co.uk/radio1/logo.png"
-        assert ct["icon"] == "http://bbc.co.uk/radio1/logo.png"
+        assert ct["icon"] == "/imageproxy/http%3A%2F%2Fbbc.co.uk%2Fradio1%2Flogo.png/image.png"
         assert ct["remote"] == 1
         assert ct["source"] == "radio"
         assert ct["is_live"] is True
@@ -815,7 +823,7 @@ class TestRadioStatusIntegration:
         assert item["remote"] == 1
         assert item["trackType"] == "radio"
         assert item["coverArt"] == "http://bbc.co.uk/radio1/logo.png"
-        assert item["icon"] == "http://bbc.co.uk/radio1/logo.png"
+        assert item["icon"] == "/imageproxy/http%3A%2F%2Fbbc.co.uk%2Fradio1%2Flogo.png/image.png"
         assert item["title"] == "BBC Radio 1"
 
     @pytest.mark.asyncio

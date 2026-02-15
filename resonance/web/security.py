@@ -445,7 +445,7 @@ def is_valid_mac(player_id: str) -> bool:
 
     The special value ``"-"`` (server-level commands) is also accepted.
     """
-    if player_id == "-":
+    if player_id in ("-", ""):
         return True
     return bool(_MAC_RE.match(player_id))
 

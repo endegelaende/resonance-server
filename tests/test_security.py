@@ -534,8 +534,9 @@ class TestMacValidation:
     def test_server_dash_is_valid(self) -> None:
         assert is_valid_mac("-") is True
 
-    def test_empty_is_invalid(self) -> None:
-        assert is_valid_mac("") is False
+    def test_empty_is_valid_for_server_commands(self) -> None:
+        """Empty player_id is valid — SqueezePlay sends it for server-level commands like serverstatus."""
+        assert is_valid_mac("") is True
 
     def test_short_is_invalid(self) -> None:
         assert is_valid_mac("aa:bb:cc") is False

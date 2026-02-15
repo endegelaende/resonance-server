@@ -187,12 +187,26 @@ async def _process_message(
                             resp_channel,
                         )
 
-            response = await manager.slim_subscribe(
-                client_id=effective_client_id,
-                request=msg,
-                msg_id=msg_id,
-            )
-            responses.append(response)
+            if not effective_client_id:
+                logger.warning(
+                    "/slim/subscribe with empty clientId — ignoring (msg=%s)",
+                    {k: v for k, v in msg.items() if k != "data"},
+                )
+                response_dict = {
+                    "channel": "/slim/subscribe",
+                    "successful": False,
+                    "error": "No clientId",
+                }
+                if msg_id is not None:
+                    response_dict["id"] = msg_id
+                responses.append(response_dict)
+            else:
+                response = await manager.slim_subscribe(
+                    client_id=effective_client_id,
+                    request=msg,
+                    msg_id=msg_id,
+                )
+                responses.append(response)
 
         elif channel == "/slim/unsubscribe":
             # Extract clientId from response channel if not provided directly (same as subscribe)
@@ -205,12 +219,27 @@ async def _process_message(
                     if len(parts) >= 2 and parts[1]:
                         effective_client_id = parts[1]
 
-            response = await manager.slim_unsubscribe(
-                client_id=effective_client_id,
-                request=msg,
-                msg_id=msg_id,
-            )
-            responses.append(response)
+            if not effective_client_id:
+                # No clientId found — ignore instead of creating ghost client with key ""
+                logger.warning(
+                    "/slim/unsubscribe with empty clientId — ignoring (msg=%s)",
+                    {k: v for k, v in msg.items() if k != "data"},
+                )
+                response_dict: dict[str, Any] = {
+                    "channel": "/slim/unsubscribe",
+                    "successful": False,
+                    "error": "No clientId",
+                }
+                if msg_id is not None:
+                    response_dict["id"] = msg_id
+                responses.append(response_dict)
+            else:
+                response = await manager.slim_unsubscribe(
+                    client_id=effective_client_id,
+                    request=msg,
+                    msg_id=msg_id,
+                )
+                responses.append(response)
 
         elif channel == "/slim/request":
             # Extract clientId from response channel if not provided directly (same as subscribe)
@@ -223,12 +252,26 @@ async def _process_message(
                     if len(parts) >= 2 and parts[1]:
                         effective_client_id = parts[1]
 
-            response = await manager.slim_request(
-                client_id=effective_client_id,
-                request=msg,
-                msg_id=msg_id,
-            )
-            responses.append(response)
+            if not effective_client_id:
+                logger.warning(
+                    "/slim/request with empty clientId — ignoring (msg=%s)",
+                    {k: v for k, v in msg.items() if k != "data"},
+                )
+                response_dict = {
+                    "channel": "/slim/request",
+                    "successful": False,
+                    "error": "No clientId",
+                }
+                if msg_id is not None:
+                    response_dict["id"] = msg_id
+                responses.append(response_dict)
+            else:
+                response = await manager.slim_request(
+                    client_id=effective_client_id,
+                    request=msg,
+                    msg_id=msg_id,
+                )
+                responses.append(response)
 
         else:
             logger.warning("Unknown cometd channel: %s", channel)

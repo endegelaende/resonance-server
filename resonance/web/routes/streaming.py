@@ -870,7 +870,7 @@ def _log_icy_metadata(meta_bytes: bytes, player_mac: str) -> None:
         if not text:
             return
 
-        logger.info("[ICY] player=%s metadata: %s", player_mac, text)
+        logger.debug("[ICY] player=%s metadata: %s", player_mac, text)
 
         # Extract StreamTitle='Artist - Song'; from the ICY block.
         match = re.search(r"StreamTitle='([^']*)'", text)
@@ -878,9 +878,14 @@ def _log_icy_metadata(meta_bytes: bytes, player_mac: str) -> None:
             title = match.group(1).strip()
             if title:
                 changed = _streaming_server.set_icy_title(player_mac, title)
-                logger.info(
-                    "[ICY] player=%s StreamTitle stored: %s", player_mac, title,
-                )
+                if changed:
+                    logger.info(
+                        "[ICY] player=%s StreamTitle changed: %s", player_mac, title,
+                    )
+                else:
+                    logger.debug(
+                        "[ICY] player=%s StreamTitle unchanged: %s", player_mac, title,
+                    )
 
                 # ── Push notification on title change (LMS-equivalent) ──
                 # LMS fires `['playlist', 'newsong', $title]` when the

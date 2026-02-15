@@ -875,22 +875,32 @@ class CometdManager:
         now-playing info, and all other status changes.
         """
         if self._jsonrpc_handler is None:
+            logger.debug("Reexec skipped for player %s — no jsonrpc_handler set", player_id)
             return
 
         async with self._lock:
             # Collect all subscriptions that match this player
             subs_to_execute: list[tuple[str, SlimSubscription]] = []
+            total_subs = 0
             for cid, client in self._clients.items():
                 for sub in client.slim_subscriptions:
+                    total_subs += 1
                     # Match: subscription targets this player, or is a wildcard ("")
                     if sub.player_id == player_id or (sub.player_id == "" and "playerstatus" in sub.response_channel):
                         subs_to_execute.append((cid, sub))
 
         if not subs_to_execute:
-            logger.debug(
-                "No slim subscriptions for player %s (clients: %d)",
-                player_id, len(self._clients),
+            logger.info(
+                "Reexec: no matching slim subscriptions for player %s "
+                "(clients: %d, total_subs: %d)",
+                player_id, len(self._clients), total_subs,
             )
+            return
+
+        logger.info(
+            "Reexec: firing %d slim subscription(s) for player %s",
+            len(subs_to_execute), player_id,
+        )
 
         for cid, sub in subs_to_execute:
             try:
@@ -910,11 +920,15 @@ class CometdManager:
                             waiter = self._connect_waiters.get(cid)
                             if waiter:
                                 waiter.set()
+                            logger.info(
+                                "Reexec: pushed result to client %s on %s (cmd=%s)",
+                                cid, sub.response_channel, sub.command[:3],
+                            )
 
                 else:
-                    logger.debug(
-                        "Re-exec returned empty result for player=%s cmd=%s",
-                        player_id, sub.command,
+                    logger.info(
+                        "Reexec: empty result for player=%s cmd=%s on %s",
+                        player_id, sub.command, sub.response_channel,
                     )
             except Exception as e:
                 logger.exception(
@@ -1007,7 +1021,7 @@ class CometdManager:
             # ── Playlist changed: debounced re-execution ──
             # Coalesces bursts (e.g. clear + load) into a single re-execution.
             delay = self._get_reexec_delay(event)
-            logger.debug(
+            logger.info(
                 "Playlist event for player %s (action=%s, count=%d) "
                 "— scheduling debounced reexec in %.1fs",
                 event.player_id, event.action, event.count, delay,
@@ -1021,7 +1035,7 @@ class CometdManager:
             #   ["status", "-", 10, "menu:menu", "useContextMenu:1", "subscribe:600"]
             # and expects the full re-executed result on the response channel.
             delay = self._get_reexec_delay(event)
-            logger.debug(
+            logger.info(
                 "Status event for player %s (state=%s) "
                 "— scheduling debounced reexec in %.1fs",
                 event.player_id, event.state, delay,

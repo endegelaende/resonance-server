@@ -23,8 +23,10 @@ we skip it (and optionally let other background mechanisms populate caches).
 
 from __future__ import annotations
 
+import re as _re_mod
 import time
 from typing import Any
+from urllib.parse import quote as _url_quote
 
 from resonance.web.handlers import CommandContext
 from resonance.web.jsonrpc_helpers import (
@@ -69,6 +71,31 @@ def _parse_icy_title(icy_title: str) -> tuple[str, str]:
         return (parts[0].strip(), parts[1].strip())
     # More than one " - " or none at all → entire string is the title
     return ("", icy_title.strip())
+
+
+def _proxied_image_url(url: str | None) -> str | None:
+    """Convert an external artwork URL to an /imageproxy/ server-local path.
+
+    Mirrors LMS ``Slim::Web::ImageProxy::proxiedImage()`` (ImageProxy.pm L437-457).
+    SqueezePlay/JiveLite devices cannot reliably fetch external URLs directly,
+    so LMS routes all remote artwork through a server-side proxy.
+
+    Returns *None* when *url* is falsy or already server-relative.
+    """
+    if not url or not url.startswith(("http://", "https://")):
+        return None
+
+    # Detect file extension (LMS defaults to .png).
+    ext = ".png"
+    m = _re_mod.search(r"\.(jpe?g|png|gif|webp)", url, _re_mod.IGNORECASE)
+    if m:
+        ext = "." + m.group(1).lower()
+        if ext == ".jpeg":
+            ext = ".jpg"
+
+    # URI-encode the URL so it's safe to embed in a path segment.
+    encoded = _url_quote(url, safe="")
+    return f"/imageproxy/{encoded}/image{ext}"
 
 
 def _lms_song_elapsed_seconds(*, status: Any, mode: str) -> float:
@@ -304,6 +331,33 @@ async def cmd_status(
         "power": 1 if player else 0,
     }
 
+    # ── Player info (LMS Queries.pm L4050-4058) ─────────────────
+    # JiveLite/SqueezePlay reads player_name from the status response
+    # to display in the UI header.  Without this field the box shows
+    # whatever it has stored locally (often "nil" for unconfigured
+    # SqueezePlay instances).
+    if player is not None:
+        _raw_name = getattr(player, "name", "") or ""
+        # Normalize nil-like names the same way jsonrpc_helpers does.
+        _NIL_NAMES = {"nil", "null", "none", "undefined", "(null)"}
+        if _raw_name and _raw_name.strip().lower() not in _NIL_NAMES:
+            result["player_name"] = _raw_name
+        else:
+            # Fall back to capability ModelName → model label → MAC
+            _cap = getattr(player, "capabilities", None) or {}
+            _model_name_cap = _cap.get("ModelName", "")
+            if _model_name_cap and _model_name_cap.lower() not in _NIL_NAMES:
+                result["player_name"] = _model_name_cap
+            else:
+                _model = getattr(player, "model", "")
+                from resonance.web.jsonrpc_helpers import PLAYER_MODEL_LABELS
+                _label = PLAYER_MODEL_LABELS.get(str(_model).lower(), "")
+                result["player_name"] = _label or getattr(player, "mac_address", "Player")
+        # player_ip (LMS Queries.pm L4056)
+        _ip = getattr(player, "ip", None) or getattr(player, "address", None)
+        if _ip:
+            result["player_ip"] = str(_ip)
+
     # Attach stream generation for discontinuity detection on polling clients.
     # This increments whenever a new stream is queued and allows clients to
     # ignore stale/foreign status samples.
@@ -480,6 +534,19 @@ async def cmd_status(
                 path = getattr(current, "path", "")
                 _artwork_url = getattr(current, "artwork_url", None)
 
+                # ── Artwork debug logging ────────────────────────────
+                import logging as _logging
+                _status_logger = _logging.getLogger("resonance.web.handlers.status")
+                _status_logger.debug(
+                    "[STATUS-ART] player=%s track=%s album_id=%s artwork_url=%s is_remote=%s source=%s",
+                    ctx.player_id,
+                    getattr(current, "title", "?")[:60],
+                    album_id,
+                    (_artwork_url[:120] if _artwork_url else "<NONE>"),
+                    _is_remote,
+                    _source,
+                )
+
                 # Also expose a top-level track id so polling clients can detect
                 # track changes even if `currentTrack` is missing/partial temporarily.
                 result["track_id"] = track_id
@@ -579,9 +646,17 @@ async def cmd_status(
                     if _ct:
                         _remote_meta["type"] = _ct
 
-                    # Artwork (tag K)
+                    # Artwork (tag K) — proxy external URLs through
+                    # /imageproxy/ like LMS does (Queries.pm _songData
+                    # uses proxiedImage for tag K).
                     if _cover_art:
-                        _remote_meta["artwork_url"] = _cover_art
+                        _proxied_rm = _proxied_image_url(_cover_art)
+                        if _proxied_rm:
+                            # Server-relative path like LMS proxiedImage()
+                            # so JiveLite fetches via artworkPool.
+                            _remote_meta["artwork_url"] = _proxied_rm
+                        else:
+                            _remote_meta["artwork_url"] = _cover_art
 
                     # Remote flag (tag x)
                     _remote_meta["remote"] = 1
@@ -593,13 +668,42 @@ async def cmd_status(
 
                 # JiveLite/SqueezePlay compatibility (Squeezebox Radio, Touch, etc.)
                 if album_id:
+                    # Server-relative paths — JiveLite fetches these via
+                    # its persistent artworkPool (SlimServer.lua L987-989)
+                    # instead of opening ad-hoc SocketHttp connections
+                    # which are unreliable (L975-983 "XXXX" comment).
                     result["currentTrack"]["icon-id"] = f"/music/{album_id}/cover"
-                    result["currentTrack"]["icon"] = f"{current_server_url}/artwork/{album_id}"
+                    result["currentTrack"]["icon"] = f"/music/{album_id}/cover"
                     result["currentTrack"]["artwork_track_id"] = album_id
                 elif _artwork_url:
-                    # Remote artwork (e.g. station favicon) — use icon
-                    # (full URL) rather than icon-id (server-relative).
-                    result["currentTrack"]["icon"] = _artwork_url
+                    # Remote artwork (e.g. station favicon) — proxy through
+                    # /imageproxy/ so SqueezePlay fetches via artworkPool.
+                    # LMS proxiedImage() returns server-relative paths
+                    # (ImageProxy.pm L457): /imageproxy/<encoded>/image.ext
+                    # JiveLite adds resize suffix → our endpoint strips it.
+                    _proxied_ct = _proxied_image_url(_artwork_url)
+                    if _proxied_ct:
+                        result["currentTrack"]["icon"] = _proxied_ct
+                        _status_logger.info(
+                            "[STATUS-ART] player=%s currentTrack.icon=%s (proxied from %s)",
+                            ctx.player_id, _proxied_ct[:120], _artwork_url[:120],
+                        )
+                    else:
+                        result["currentTrack"]["icon"] = _artwork_url
+                        _status_logger.info(
+                            "[STATUS-ART] player=%s currentTrack.icon=%s (raw, not proxied)",
+                            ctx.player_id, _artwork_url[:120],
+                        )
+                elif _is_remote:
+                    # Radio placeholder (LMS Player.pm L622).
+                    # Server-relative path — JiveLite adds resize suffix
+                    # (e.g. radio_300x300_m.png), our /html/images/ route
+                    # strips it and serves the original.
+                    result["currentTrack"]["icon-id"] = "/html/images/radio.png"
+                    _status_logger.info(
+                        "[STATUS-ART] player=%s currentTrack.icon-id=/html/images/radio.png (fallback, no artwork_url)",
+                        ctx.player_id,
+                    )
 
                 # Add BlurHash if available — MUST NOT BLOCK status polling.
                 #
@@ -705,28 +809,71 @@ async def cmd_status(
 
                 if menu_mode:
                     # ── Jive item_loop format ────────────────────────
-                    # Matches LMS _addJiveSong():
-                    #   text (multiline), track, album, artist, icon-id,
+                    # Matches LMS _addJiveSong() (Queries.pm L5522-5615):
+                    #   text (multiline), track, album, artist, icon/icon-id,
                     #   params (track_id + playlist_index), style, trackType
-                    second_line_parts: list[str] = []
-                    if artist:
-                        second_line_parts.append(artist)
-                    if album:
-                        second_line_parts.append(album)
-                    second_line = " - ".join(second_line_parts)
-                    text = f"{title}\n{second_line}" if second_line else title
+                    #
+                    # For the CURRENT track of a remote/radio stream, LMS
+                    # enriches these fields from remoteMeta (getMetadataFor):
+                    #   track  = ICY parsed title (or static title)
+                    #   artist = ICY parsed artist
+                    #   album  = remote_title (station name) for radio
+                    # This is how SqueezePlay shows "Artist - Title" on
+                    # the NowPlaying screen instead of just the station name.
+
+                    _jive_title = title
+                    _jive_artist = artist
+                    _jive_album = album
 
                     # Determine trackType from PlaylistTrack.source
                     # (LMS uses "radio" for radio streams, "local" for
                     # library tracks, etc.)
                     _trk_source = getattr(track, "source", "local") or "local"
                     _trk_type = _trk_source if _trk_source != "external" else "local"
+                    _trk_is_remote = bool(getattr(track, "is_remote", False))
+
+                    # ── Enrich current track with ICY metadata ───────
+                    # LMS _addJiveSong calls _songData which merges
+                    # remoteMeta from getMetadataFor().  We replicate
+                    # this by injecting ICY artist/title for the current
+                    # track (the only one with live ICY data).
+                    if _trk_is_remote and playlist_idx == playlist.current_index:
+                        # Re-use the ICY data already parsed above for
+                        # currentTrack / remoteMeta (avoids duplicate lookups).
+                        _jive_icy_title: str | None = None
+                        if ctx.streaming_server is not None:
+                            _jive_icy_title = ctx.streaming_server.get_icy_title(ctx.player_id)
+                        if not _jive_icy_title and player is not None:
+                            _jive_icy_title = getattr(player, "icy_title", None)
+
+                        if _jive_icy_title:
+                            _jive_icy_artist, _jive_icy_parsed = _parse_icy_title(_jive_icy_title)
+                            if _jive_icy_artist and _jive_icy_parsed:
+                                _jive_title = _jive_icy_parsed
+                                _jive_artist = _jive_icy_artist
+                            else:
+                                # No " - " separator — show raw ICY as title
+                                _jive_title = _jive_icy_title
+
+                        # LMS Queries.pm L5579-5583: for remote streams with
+                        # no album and a remote_title (station name), use
+                        # station name as album line.
+                        if _trk_source == "radio" and not _jive_album:
+                            _jive_album = title  # static title IS the station name
+
+                    second_line_parts: list[str] = []
+                    if _jive_artist:
+                        second_line_parts.append(_jive_artist)
+                    if _jive_album:
+                        second_line_parts.append(_jive_album)
+                    second_line = " - ".join(second_line_parts)
+                    text = f"{_jive_title}\n{second_line}" if second_line else _jive_title
 
                     track_dict: dict[str, Any] = {
                         "text": text,
-                        "track": title,
-                        "album": album or "",
-                        "artist": artist or "",
+                        "track": _jive_title,
+                        "album": _jive_album or "",
+                        "artist": _jive_artist or "",
                         "params": {
                             "track_id": track_id,
                             "playlist_index": playlist_idx,
@@ -734,12 +881,35 @@ async def cmd_status(
                         "style": "itemplay",
                         "trackType": _trk_type,
                     }
+
+                    # ── Artwork (LMS Player.pm L601-625) ─────────────
+                    # LMS uses proxiedImage() for external URLs so
+                    # SqueezePlay fetches via the server.  Fallback:
+                    # /html/images/radio.png for remote tracks with no art.
                     _trk_artwork = getattr(track, "artwork_url", None)
                     if album_id:
-                        track_dict["icon-id"] = album_id
-                        track_dict["icon"] = f"{server_url}/artwork/{album_id}"
+                        track_dict["icon-id"] = f"/music/{album_id}/cover"
+                        track_dict["icon"] = f"/music/{album_id}/cover"
                     elif _trk_artwork:
-                        track_dict["icon"] = _trk_artwork
+                        # Server-relative proxied path like LMS proxiedImage().
+                        _proxied = _proxied_image_url(_trk_artwork)
+                        if _proxied:
+                            track_dict["icon"] = _proxied
+                            _status_logger.info(
+                                "[STATUS-ART] player=%s item_loop[%d].icon=%s (proxied from %s)",
+                                ctx.player_id, playlist_idx, _proxied[:120], _trk_artwork[:120],
+                            )
+                        else:
+                            track_dict["icon"] = _trk_artwork
+                            _status_logger.info(
+                                "[STATUS-ART] player=%s item_loop[%d].icon=%s (raw, not proxied)",
+                                ctx.player_id, playlist_idx, _trk_artwork[:120],
+                            )
+                    elif _trk_is_remote:
+                        # Radio placeholder (LMS Player.pm L622).
+                        # Server-relative path — resize suffix handled by
+                        # our /html/images/ route.
+                        track_dict["icon-id"] = "/html/images/radio.png"
 
                 else:
                     # ── Standard playlist_loop format ─────────────────
@@ -777,10 +947,15 @@ async def cmd_status(
                     # These players expect icon-id or icon for cover art display
                     if album_id:
                         track_dict["icon-id"] = f"/music/{album_id}/cover"
-                        track_dict["icon"] = f"{server_url}/artwork/{album_id}"
+                        track_dict["icon"] = f"/music/{album_id}/cover"
                         track_dict["artwork_track_id"] = album_id
                     elif _loop_artwork_url:
-                        track_dict["icon"] = _loop_artwork_url
+                        # Server-relative proxied path like LMS proxiedImage().
+                        _proxied_loop = _proxied_image_url(_loop_artwork_url)
+                        if _proxied_loop:
+                            track_dict["icon"] = _proxied_loop
+                        else:
+                            track_dict["icon"] = _loop_artwork_url
 
                     # JiveLite expects track/album/artist as separate fields + text
                     track_dict["track"] = title
