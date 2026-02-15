@@ -1243,7 +1243,7 @@ When you want to build your own plugin (not the tutorial plugin):
 | [`PLUGIN_API.md`](PLUGIN_API.md) | Complete API reference |
 | `plugins/example/` | Minimal template |
 | `plugins/favorites/` | Complete reference plugin (commands, menus, persistence) |
-| `plugins/radio/` | Reference ContentProvider plugin (TuneIn, remote streaming) |
+| `plugins/radio/` | Reference ContentProvider plugin (radio-browser.info, remote streaming) |
 | `plugins/podcast/` | Reference ContentProvider plugin (RSS feeds, subscriptions, resume) |
 
 ---

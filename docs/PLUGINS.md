@@ -3,7 +3,7 @@
 A guide to what the Resonance plugin system is, why it exists,
 and how it works at a high level — no code required.
 Resonance currently ships with five plugins, including Internet Radio
-via TuneIn and Podcasts.
+via radio-browser.info and Podcasts.
 
 For the developer perspective (API, code examples, tutorial):
 → [`PLUGIN_API.md`](PLUGIN_API.md)
@@ -33,10 +33,10 @@ plugins/
 ├── nowplaying/       ← Now Playing tutorial plugin
 │   ├── plugin.toml
 │   └── __init__.py
-├── radio/            ← Internet Radio (TuneIn) — first ContentProvider
+├── radio/            ← Internet Radio (radio-browser.info) — first ContentProvider
 │   ├── plugin.toml
 │   ├── __init__.py   ← Commands, Jive menu, RadioProvider
-│   └── tunein.py     ← TuneIn OPML/JSON API client
+│   └── radiobrowser.py ← radio-browser.info API client
 ├── podcast/          ← Podcasts — second ContentProvider
 │   ├── plugin.toml
 │   ├── __init__.py   ← Commands, Jive menu, PodcastProvider
@@ -114,7 +114,7 @@ or streaming service tracks. The server proxies the remote audio stream
 to the player (required because Squeezebox hardware cannot handle HTTPS).
 
 > *Example:* The Radio plugin registers a `ContentProvider` that browses
-> TuneIn categories, searches for stations, and resolves station IDs
+> radio-browser.info categories, searches for stations, and resolves station UUIDs
 > to direct stream URLs. The user sees "Radio" in the Jive home menu.
 
 A content provider implements three methods:
@@ -219,16 +219,16 @@ template for your own plugins.
 The Favorites plugin is a **reference implementation** — a complete,
 production-ready plugin that serves as a model for complex plugins.
 
-### 5.3) Radio Plugin (TuneIn)
+### 5.3) Radio Plugin (radio-browser.info)
 
 | | |
 |---|---|
-| **Purpose** | Internet Radio — browse, search, and stream live radio via TuneIn |
+| **Purpose** | Internet Radio — browse, search, and stream live radio via radio-browser.info |
 | **Folder** | `plugins/radio/` |
 | **Commands** | `radio` (items, search, play) |
 | **Menu** | "Radio" in the Jive home menu (weight 45 — between My Music and Favorites) |
 | **Content Provider** | Registered as `"radio"` — first ContentProvider plugin |
-| **Features** | TuneIn OPML/JSON API, browse categories (Local, Music, News, Sports, Talk, By Location, By Language, Podcasts), full-text search, stream URL resolution, play/add/insert, add-to-favorites context menu |
+| **Features** | radio-browser.info API (~40,000+ stations), browse by country/genre/language, full-text search, pre-resolved stream URLs, play/add/insert, add-to-favorites context menu. Free community API, no API key required. |
 | **Caching** | 10-minute TTL browse cache (256 entries) |
 | **Tests** | 114 tests |
 
@@ -287,7 +287,7 @@ plugin are implemented:
 - ✅ `PlaylistTrack` extended for remote sources (`is_remote`, `stream_url`, `source`, …)
 - ✅ Playback handlers branch on local/remote tracks automatically
 - ✅ 88 tests covering all infrastructure components
-- ✅ **Radio Plugin** (TuneIn) — first production ContentProvider (114 tests)
+- ✅ **Radio Plugin** (radio-browser.info) — first production ContentProvider (114 tests)
 - ✅ **Podcast Plugin** — second ContentProvider (RSS feeds, PodcastIndex search, subscriptions, resume positions, 178 tests)
 
 ### Phase 3 — Settings & Repository
@@ -311,9 +311,9 @@ as Resonance plugins.
 
 ### Can plugins stream Internet Radio?
 
-**Yes.** The included Radio plugin streams Internet Radio via TuneIn —
-browse categories, search stations, and play live streams. The server
-proxies the remote audio (HTTP/HTTPS) to the player hardware. ICY
+**Yes.** The included Radio plugin streams Internet Radio via radio-browser.info —
+browse by country, genre, or language, search stations, and play live streams.
+The server proxies the remote audio (HTTP/HTTPS) to the player hardware. ICY
 metadata (station/title changes) is stripped and logged. You can also
 build your own streaming plugins using the `ContentProvider` API —
 see [`PLUGIN_API.md`](PLUGIN_API.md) §16 for details.
@@ -346,7 +346,7 @@ asyncio (async/await) is helpful since all handlers are asynchronous.
 → [`PLUGIN_API.md`](PLUGIN_API.md) — Complete API reference
 → `plugins/example/` — Minimal template
 → `plugins/favorites/` — Reference plugin (commands, menus, persistence)
-→ `plugins/radio/` — Reference ContentProvider plugin (TuneIn, remote streaming)
+→ `plugins/radio/` — Reference ContentProvider plugin (radio-browser.info, remote streaming)
 → `plugins/podcast/` — Reference ContentProvider plugin (RSS feeds, subscriptions, resume)
 
 ---

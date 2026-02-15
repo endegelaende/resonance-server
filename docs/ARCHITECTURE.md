@@ -117,7 +117,7 @@ resonance-server/
 │   ├── example/                  # Template/demo plugin
 │   ├── favorites/                # Favorites (LMS-compatible)
 │   ├── nowplaying/               # Now Playing tutorial plugin
-│   ├── radio/                    # Internet Radio — TuneIn
+│   ├── radio/                    # Internet Radio — radio-browser.info
 │   └── podcast/                  # Podcasts — RSS/PodcastIndex
 │
 ├── tests/                        # pytest suite

@@ -1078,7 +1078,7 @@ Import: `from resonance.content_provider import ContentProvider`
 
 | Method / Property | Signature | Description |
 |---|---|---|
-| `name` | `@property -> str` | Human-readable name (e.g. `"TuneIn Radio"`) |
+| `name` | `@property -> str` | Human-readable name (e.g. `"Internet Radio"`) |
 | `icon` | `@property -> str \| None` | Optional icon URL for top-level menu |
 | `browse` | `async (path: str = "") -> list[BrowseItem]` | Browse content tree (empty = root) |
 | `search` | `async (query: str) -> list[BrowseItem]` | Search for items by text |
@@ -1191,7 +1191,7 @@ track = PlaylistTrack.from_url(
     artist="Jazz FM Network",
     source="radio",
     stream_url="https://cdn.example.com/stream.aac",
-    external_id="tunein:s123456",
+    external_id="radio:s123456",
     artwork_url="https://img.example.com/logo.png",
     content_type="audio/aac",
     bitrate=128,
@@ -1254,15 +1254,15 @@ Complete, production-ready plugin:
 
 ### Radio Plugin (`plugins/radio/`)
 
-First ContentProvider plugin — Internet Radio via TuneIn:
+First ContentProvider plugin — Internet Radio via radio-browser.info:
 
 - 1 command (`radio`) with 3 sub-commands (`items`, `search`, `play`)
 - 1 menu node ("Radio" at weight 45)
 - ContentProvider registered as `"radio"` (`browse`, `search`, `get_stream_info`)
-- TuneIn OPML/JSON API client with async caching (256 entries, 10min TTL)
-- Stream URL resolution, play/add/insert modes
+- radio-browser.info API client with async caching (256 entries, 10min TTL)
+- Pre-resolved stream URLs, play/add/insert modes
 - "Add to Favorites" context menu via `jivefavorites add`
-- ~730 lines of code (plugin + TuneIn client)
+- ~730 lines of code (plugin + radio-browser.info client)
 - 114 tests
 
 **Ideal as a reference for ContentProvider plugins (remote streaming,
@@ -1310,7 +1310,7 @@ Companion code for the [Plugin Tutorial](PLUGIN_TUTORIAL.md):
 | [`PLUGINS.md`](PLUGINS.md) | General overview for all audiences |
 | [`PLUGIN_TUTORIAL.md`](PLUGIN_TUTORIAL.md) | Step-by-step: Build your own plugin |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Resonance system architecture |
-| `plugins/radio/` | Reference ContentProvider plugin (TuneIn, remote streaming) |
+| `plugins/radio/` | Reference ContentProvider plugin (radio-browser.info, remote streaming) |
 | `plugins/podcast/` | Reference ContentProvider plugin (RSS feeds, subscriptions, resume) |
 
 ---

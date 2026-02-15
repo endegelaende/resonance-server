@@ -20,10 +20,10 @@ All notable changes to the project are documented here.
   - Artwork/icon display for items with remote icons
 
 - **RadioView** (`web-ui/src/lib/components/RadioView.svelte`, NEW — ~411 LOC):
-  TuneIn internet radio browsing via JSON-RPC `radio` commands
-  - Category drill-down navigation (Local Radio → Music → Jazz → Stations)
+  Internet radio browsing via JSON-RPC `radio` commands
+  - Category drill-down navigation (Country → Genre → Stations)
   - Station play/add-to-queue with in-flight guards
-  - Inline search with debounce (400ms) searching TuneIn
+  - Inline search with debounce (400ms) searching radio-browser.info
   - Station logos, LIVE badge, bitrate display
   - Breadcrumb navigation with back button
 
@@ -203,7 +203,7 @@ All notable changes to the project are documented here.
 `plugins/podcast/store.py` (NEW), `plugins/podcast/plugin.toml` (NEW),
 `tests/test_podcast_plugin.py` (NEW)
 
-### 📻 Radio Plugin — TuneIn Internet Radio (2026-02-14)
+### 📻 Radio Plugin — Internet Radio via radio-browser.info (2026-02-14)
 
 ### 📻 Radio Quality Phase — Status Metadata + ICY Title Wiring (2026-02-15)
 
@@ -238,7 +238,7 @@ All notable changes to the project are documented here.
 ### 🎨 Radio Cover-Art Fixes for JiveLite/SqueezePlay (2026-02-15)
 
 - **ICO→PNG auto-conversion** (`resonance/web/routes/artwork.py`):
-  Many TuneIn stations serve `.ico` favicons (Windows Icon format). JiveLite uses SDL_image
+  Many radio stations serve `.ico` favicons (Windows Icon format). JiveLite uses SDL_image
   which cannot render `.ico` files (`Surface:loadImageData()` returns `w=0, h=0` → image
   silently discarded). The imageproxy endpoint now detects non-standard formats (ICO, BMP,
   TIFF — anything not JPEG/PNG/GIF/WebP) and converts them to PNG via PIL before serving.
@@ -276,27 +276,28 @@ All notable changes to the project are documented here.
   - Display rendering is gated behind `RESONANCE_DISPLAY=1` (default off until hardware verified)
 
 - **Radio Plugin** (`plugins/radio/`, NEW — 3 files, 114 tests):
-  First ContentProvider plugin — browse, search, and stream live Internet Radio via TuneIn
+  First ContentProvider plugin — browse, search, and stream live Internet Radio via radio-browser.info
 
-- **TuneIn API Client** (`plugins/radio/tunein.py`, NEW):
-  - `TuneInClient`: Async httpx-based client wrapping the TuneIn OPML/JSON API (Partner ID 16, matching LMS)
-  - `TuneInItem`: Frozen dataclass for parsed OPML outline items (audio/link/search/container)
-  - `TuneInStream`: Frozen dataclass for resolved stream info (url, bitrate, media_type, is_hls)
+- **radio-browser.info API Client** (`plugins/radio/radiobrowser.py`, NEW):
+  - `RadioBrowserClient`: Async httpx-based client wrapping the radio-browser.info JSON API
+  - `RadioStation`: Frozen dataclass for station data (name, url, url_resolved, favicon, country, tags, codec, bitrate, votes)
   - `_SimpleCache`: Bounded TTL cache for browse responses (256 entries, 10min TTL)
-  - OPML JSON parsing: `_parse_outline()`, `_parse_body()`, `flatten_items()` (inlines container sections)
-  - URL helpers: `extract_station_id()`, `is_tunein_url()`, `is_tune_url()`, `is_browse_url()`, `content_type_for_media()`
-  - Endpoints: `fetch_root()` (Index.aspx), `browse(url)` (Browse.ashx), `search(query)` (Search.ashx), `tune(id)` / `tune_url(url)` (Tune.ashx → direct stream URL)
+  - Browse endpoints: countries, tags, languages, codecs, top/trending stations
+  - Search: full-text by station name, tag, country, language
+  - Click counting: `count_click()` registers plays with the community API
+  - Pre-resolved stream URLs (`url_resolved`) — no M3U/PLS resolution needed
+  - Free community API, no API key or partner ID required
 
 - **RadioProvider ContentProvider** (`plugins/radio/__init__.py`, NEW):
   - Implements `ContentProvider` ABC — `browse()`, `search()`, `get_stream_info()`, `on_stream_started/stopped()`
   - Registered as `"radio"` via `PluginContext.register_content_provider()`
-  - `browse()` maps TuneIn categories/stations to `BrowseItem` (folder/audio/search types)
-  - `search()` delegates to TuneIn Search.ashx, returns mixed audio/folder results
-  - `get_stream_info()` resolves station ID via Tune.ashx → `StreamInfo` with `is_live=True`
+  - `browse()` maps radio-browser.info categories/stations to `BrowseItem` (folder/audio/search types)
+  - `search()` delegates to radio-browser.info search API, returns station results
+  - `get_stream_info()` resolves station UUID → `StreamInfo` with `is_live=True`
 
 - **JSON-RPC Commands**:
   - `radio items <start> <count>` — browse categories/stations (supports `url:`, `search:`, `menu:1` params)
-  - `radio search <start> <count>` — search TuneIn (supports `term:`, `query:`, `search:` params)
+  - `radio search <start> <count>` — search radio-browser.info (supports `term:`, `query:`, `search:` params)
   - `radio play` — resolve station and start playback (supports `id:`, `url:`, `title:`, `icon:`, `cmd:play/add/insert`)
   - Full Jive `item_loop` format with `play`/`add`/`go`/`more` (add-to-favorites) actions
   - CLI `loop` format for non-menu queries
@@ -316,22 +317,18 @@ All notable changes to the project are documented here.
   - Publishes `PlayerPlaylistEvent` for Cometd status push
 
 - **Tests** (`tests/test_radio_plugin.py`, NEW — 114 tests):
-  - TuneIn URL helpers (24 tests): ensure_json, ensure_partner_id, is_tunein/tune/browse/search_url, extract_station_id, content_type_for_media
+  - API client (12 tests): browse countries/tags/top, search, get_station_by_uuid, count_click, caching, lifecycle
+  - RadioStation dataclass (2 tests): defaults, all fields
   - SimpleCache (7 tests): put/get, TTL expiry, eviction, clear
-  - OPML parsing (6 tests): audio/link/search/container items, empty outlines, body parsing
-  - Flatten items (4 tests): flat passthrough, container inlining, mixed
-  - TuneInStream (2 tests): defaults, all fields
-  - TuneInClient (12 tests): fetch_root, browse, search, tune (success/empty/no-url/error/HLS), tune_url, caching, lifecycle
-  - RadioProvider (8 tests): name, icon, browse root, flattening, search, get_stream_info (mp3/aac/failure)
-  - Jive menu builders (8 tests): audio/folder/search items, missing image, missing guide_id, CLI format, window icon-id
+  - RadioProvider (8 tests): name, icon, browse root, categories, search, get_stream_info (mp3/aac/failure)
+  - Jive menu builders (8 tests): audio/folder/search items, missing image, missing station UUID, CLI format, window icon-id
   - Base actions (1 test): structure validation
   - Parameter parsing (10 tests): tagged colon/dict/mixed format, start/count defaults/explicit/clamped
   - Command dispatch (5 tests): default, items, search, unknown, not initialized
-  - Radio items (6 tests): root menu, CLI mode, pagination, url param, search param, empty
+  - Radio items (6 tests): root menu, CLI mode, pagination, category param, search param, empty
   - Radio search (4 tests): term, query param, empty query, CLI mode
-  - Radio play (8 tests): missing params, station ID, add/insert mode, no player, tune failure, tune URL, no playlist manager
+  - Radio play (8 tests): missing params, station UUID, add/insert mode, no player, resolve failure, direct URL, no playlist manager
   - Plugin lifecycle (2 tests): setup registers components, teardown clears state
-  - TuneInItem dataclass (2 tests): defaults, frozen
   - Integration flow (2 tests): browse→play, search→play
 
 ### 🌐 Content Provider Phase 2 — Infrastructure (2026-02-14)

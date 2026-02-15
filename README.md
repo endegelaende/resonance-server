@@ -143,7 +143,7 @@ Resonance speaks the same protocols as LMS. The server gives commands, players e
 | --------------------------------------------- | ------ |
 | HTTP Streaming (MP3, FLAC, OGG, WAV)          | Yes    |
 | On-the-fly Transcoding (M4A, M4B, AAC, ALAC)  | Yes    |
-| Internet Radio (TuneIn via plugin)             | Yes    |
+| Internet Radio (radio-browser.info via plugin)  | Yes    |
 | Remote URL Proxy (HTTPS → HTTP for hardware)   | Yes    |
 | Gapless Playback                               | Yes    |
 | Crossfade (configurable overlap)               | Yes    |
@@ -341,7 +341,7 @@ web-ui/
 │   │   │   ├── PodcastView.svelte        # Podcast browse + subscribe
 │   │   │   ├── QualityBadge.svelte       # Lossless / Hi-Res indicators
 │   │   │   ├── Queue.svelte              # Playlist sidebar
-│   │   │   ├── RadioView.svelte          # TuneIn browse + search
+│   │   │   ├── RadioView.svelte          # Internet radio browse + search
 │   │   │   ├── ResizeHandle.svelte       # Drag-to-resize panels
 │   │   │   ├── SearchBar.svelte          # Search with debounce + Ctrl+K
 │   │   │   ├── SettingsPanel.svelte      # Player settings
@@ -438,7 +438,7 @@ resonance-server/
 │   ├── example/                  #   Hello World template
 │   ├── favorites/                #   Favorites (LMS-compatible)
 │   ├── nowplaying/               #   Now Playing tutorial plugin
-│   ├── radio/                    #   Internet Radio (TuneIn)
+│   ├── radio/                    #   Internet Radio (radio-browser.info)
 │   └── podcast/                  #   Podcast (RSS + PodcastIndex)
 ├── web-ui/                       # Svelte 5 frontend
 ├── tests/                        # pytest suite (2041 tests)
