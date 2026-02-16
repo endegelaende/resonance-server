@@ -73,30 +73,22 @@ async def cmd_artists(
 
     db = ctx.music_library._db
 
-    if search_term:
-        # Search — uses legacy list_artists with search (not filter-based)
-        rows = await db.list_artists(
-            search=search_term,
-            offset=start,
-            limit=items,
-        )
-        total_count = len(rows)  # Approximate for search
-    else:
-        # Build composable filter
-        f = ArtistFilter(
-            genre_id=genre_id,
-            role_id=role_id,
-            year=year,
-            compilation=compilation,
-        )
+    # Build composable filter (search is just another filter dimension)
+    f = ArtistFilter(
+        genre_id=genre_id,
+        role_id=role_id,
+        year=year,
+        compilation=compilation,
+        search=search_term,
+    )
 
-        total_count = await db.count_artists_filtered(f)
-        rows = await db.list_artists_filtered(
-            f,
-            offset=start,
-            limit=items,
-            order_by=sort_key,
-        )
+    total_count = await db.count_artists_filtered(f)
+    rows = await db.list_artists_filtered(
+        f,
+        offset=start,
+        limit=items,
+        order_by=sort_key,
+    )
 
     # Build response items
     artists_loop = []
@@ -150,31 +142,23 @@ async def cmd_albums(
     db = ctx.music_library._db
     server_url = f"http://{ctx.server_host}:{ctx.server_port}"
 
-    if search_term:
-        # Search — uses legacy list_albums with search (not filter-based)
-        rows = await db.list_albums(
-            search=search_term,
-            offset=start,
-            limit=items,
-        )
-        total_count = len(rows)
-    else:
-        # Build composable filter
-        f = AlbumFilter(
-            artist_id=artist_id,
-            genre_id=genre_id,
-            year=year,
-            compilation=compilation,
-            role_id=role_id,
-        )
+    # Build composable filter (search is just another filter dimension)
+    f = AlbumFilter(
+        artist_id=artist_id,
+        genre_id=genre_id,
+        year=year,
+        compilation=compilation,
+        role_id=role_id,
+        search=search_term,
+    )
 
-        total_count = await db.count_albums_filtered(f)
-        rows = await db.list_albums_filtered(
-            f,
-            offset=start,
-            limit=items,
-            order_by=sort_key,
-        )
+    total_count = await db.count_albums_filtered(f)
+    rows = await db.list_albums_filtered(
+        f,
+        offset=start,
+        limit=items,
+        order_by=sort_key,
+    )
 
     # Build response items
     albums_loop = []
@@ -233,7 +217,7 @@ async def cmd_titles(
     if search_term:
         # Search — uses dedicated FTS/LIKE search (not filter-based)
         rows = await db.search_tracks(
-            term=search_term,
+            query=search_term,
             offset=start,
             limit=items,
         )
@@ -352,23 +336,19 @@ async def cmd_search(
     tracks = await db.search_tracks(query=search_term, limit=items, offset=start)
     tracks_loop = [build_track_item(t, tags, server_url=server_url) for t in tracks]
 
-    # Search artists
-    artists = await db.list_artists(search=search_term, limit=items, offset=start)
-    artists_loop = []
-    for a in artists:
-        if isinstance(a, dict):
-            artists_loop.append(build_artist_item(a, tags))
-        else:
-            artists_loop.append({"artist": str(a)})
+    # Search artists (via composable filter)
+    artist_filter = ArtistFilter(search=search_term)
+    artists = await db.list_artists_filtered(
+        artist_filter, offset=start, limit=items, order_by="artist"
+    )
+    artists_loop = [build_artist_item(a, tags) for a in artists]
 
-    # Search albums
-    albums = await db.list_albums(search=search_term, limit=items, offset=start)
-    albums_loop = []
-    for al in albums:
-        if isinstance(al, dict):
-            albums_loop.append(build_album_item(al, tags, server_url=server_url))
-        else:
-            albums_loop.append({"album": str(al)})
+    # Search albums (via composable filter)
+    album_filter = AlbumFilter(search=search_term)
+    albums = await db.list_albums_filtered(
+        album_filter, offset=start, limit=items, order_by="album"
+    )
+    albums_loop = [build_album_item(al, tags, server_url=server_url) for al in albums]
 
     result: dict[str, Any] = {"count": len(tracks_loop) + len(artists_loop) + len(albums_loop)}
     if tracks_loop:

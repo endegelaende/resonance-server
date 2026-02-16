@@ -66,6 +66,7 @@ class AlbumFilter:
 
     ``genre_id`` and ``role_id`` require a JOIN through the tracks table.
     ``compilation`` filters on ``tracks.compilation``.
+    ``search`` applies a case-insensitive LIKE on the album title.
     """
 
     artist_id: int | None = None
@@ -73,6 +74,7 @@ class AlbumFilter:
     year: int | None = None
     compilation: int | None = None
     role_id: int | None = None
+    search: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,12 +84,14 @@ class ArtistFilter:
 
     All filters except the trivial "all artists" case require a JOIN
     through the tracks table.
+    ``search`` applies a case-insensitive LIKE on the artist name.
     """
 
     genre_id: int | None = None
     year: int | None = None
     compilation: int | None = None
     role_id: int | None = None
+    search: str | None = None
 
 
 # =============================================================================
@@ -255,6 +259,10 @@ def _album_joins_and_where(
         params.append(int(f.role_id))
         needs_distinct = True
 
+    if f.search is not None:
+        clauses.append("a.title LIKE ?")
+        params.append(f"%{f.search}%")
+
     return joins, clauses, params, needs_distinct
 
 
@@ -360,6 +368,10 @@ def _artist_joins_and_where(
         joins.append("JOIN contributor_tracks ct ON ct.track_id = t.id")
         clauses.append("ct.role_id = ?")
         params.append(int(f.role_id))
+
+    if f.search is not None:
+        clauses.append("ar.name LIKE ?")
+        params.append(f"%{f.search}%")
 
     # If any filter needs the tracks table, add the base tracks join first.
     if needs_track_join:
