@@ -25,7 +25,10 @@ from resonance.protocol.commands import (
 from resonance.web.handlers import CommandContext
 from resonance.web.handlers.library import cmd_titles
 from resonance.web.handlers.status import VERSION
-from resonance.web.jsonrpc_helpers import parse_start_items
+from resonance.web.jsonrpc_helpers import (
+    parse_start_items,
+    parse_tagged_params,
+)
 
 _logger = logging.getLogger(__name__)
 
