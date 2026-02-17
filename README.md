@@ -238,6 +238,13 @@ Binaries are **included** in `third_party/bin/` — no extra installation needed
 sudo apt install -y flac lame sox
 ```
 
+### MacOS
+
+```bash
+# using brew :
+brew install flac lame sox
+```
+
 For `faad` you need the **LMS-patched version** from
 [ralph-irving/faad2](https://github.com/ralph-irving/faad2), which adds
 seeking support (`-j`/`-e` flags) and ALAC decoding.
