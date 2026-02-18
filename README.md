@@ -471,6 +471,9 @@ resonance-server/
 # Install dev dependencies (one-time)
 pip install -e ".[dev]"
 
+# Install ALL optional dependencies (Pillow, blurhash, dev tools)
+pip install -e ".[all]"
+
 # Run the full test suite
 pytest
 
@@ -479,6 +482,28 @@ pytest --cov
 
 # Run a specific test module
 pytest tests/test_radio_plugin.py -v
+```
+
+### Optional Dependency Markers
+
+Some tests require optional dependencies (Pillow, external audio tools like
+`flac`, `lame`, `sox`). These tests are tagged with **pytest markers** and will
+be **auto-skipped** when the dependency is missing — no failures, just skips.
+
+| Marker | Requires | Install |
+|---|---|---|
+| `@pytest.mark.requires_pil` | Pillow (PIL) | `pip install -e ".[blurhash]"` |
+| `@pytest.mark.requires_tools` | `flac`, `lame`, `sox` on PATH | See [Transcoding Tools](#transcoding-tools-optional) |
+
+```bash
+# Run only tests that need no optional dependencies
+pytest -m "not requires_pil and not requires_tools"
+
+# Run only PIL-dependent tests
+pytest -m requires_pil
+
+# Run everything (missing deps auto-skip with clear message)
+pytest
 ```
 
 ---

@@ -487,6 +487,7 @@ def _write_silence_wav(path: Path, duration_seconds: float, sample_rate: int = 4
 class TestServerSideCrossfadePlan:
     """Tests for server-side crossfade preparation and STMd integration."""
 
+    @pytest.mark.requires_tools
     def test_prepare_crossfade_plan_builds_splice_values(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as prev_f:
             prev_path = Path(prev_f.name)
@@ -520,6 +521,7 @@ class TestServerSideCrossfadePlan:
             prev_path.unlink(missing_ok=True)
             next_path.unlink(missing_ok=True)
 
+    @pytest.mark.requires_tools
     @pytest.mark.asyncio
     async def test_decode_ready_queues_server_side_crossfade(self) -> None:
         from resonance.core.events import PlayerDecodeReadyEvent
@@ -673,7 +675,3 @@ class TestServerSideCrossfadePlan:
         assert kwargs["transition_type"] == 1
         assert kwargs["transition_duration"] == 1
         assert kwargs["format_hint_override"] is None
-
-
-
-
