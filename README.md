@@ -238,10 +238,10 @@ Binaries are **included** in `third_party/bin/` — no extra installation needed
 sudo apt install -y flac lame sox
 ```
 
-### MacOS
+### macOS
 
 ```bash
-# using brew :
+# Using Homebrew:
 brew install flac lame sox
 ```
 
