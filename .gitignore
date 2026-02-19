@@ -75,6 +75,9 @@ artifacts/
 docs/dev/
 data/
 
+# === Community Plugin Repo (separate git repo) ===
+community-repo/
+
 # === Misc ===
 *.bak
 *.tmp

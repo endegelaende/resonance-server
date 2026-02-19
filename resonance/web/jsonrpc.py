@@ -89,6 +89,7 @@ from resonance.web.handlers.playback import (
     cmd_stop,
 )
 from resonance.web.handlers.playlist import cmd_playlist
+from resonance.web.handlers.plugins import cmd_pluginmanager, cmd_pluginsettings
 from resonance.web.handlers.seeking import cmd_time
 from resonance.web.handlers.status import (
     cmd_displaystatus,
@@ -114,6 +115,9 @@ if TYPE_CHECKING:
     from resonance.core.library import MusicLibrary
     from resonance.core.playlist import PlaylistManager
     from resonance.player.registry import PlayerRegistry
+    from resonance.plugin_installer import PluginInstaller
+    from resonance.plugin_manager import PluginManager
+    from resonance.plugin_repository import PluginRepository
     from resonance.protocol.slimproto import SlimprotoServer
     from resonance.streaming.server import StreamingServer
 
@@ -219,6 +223,9 @@ COMMAND_HANDLERS: dict[str, CommandHandler] = {
     "firmwareupgrade": cmd_firmwareupgrade,
     "playerinfo": cmd_playerinfo,
     "jiveblankcommand": cmd_jiveblankcommand,
+    # Plugin management
+    "pluginsettings": cmd_pluginsettings,
+    "pluginmanager": cmd_pluginmanager,
 }
 
 
@@ -274,6 +281,9 @@ class JsonRpcHandler:
         streaming_server: StreamingServer | None = None,
         slimproto: SlimprotoServer | None = None,
         artwork_manager: ArtworkManager | None = None,
+        plugin_manager: PluginManager | None = None,
+        plugin_installer: PluginInstaller | None = None,
+        plugin_repository: PluginRepository | None = None,
         server_host: str = "127.0.0.1",
         server_port: int = 9000,
         server_uuid: str = "resonance",
@@ -284,6 +294,9 @@ class JsonRpcHandler:
         self.streaming_server = streaming_server
         self.slimproto = slimproto
         self.artwork_manager = artwork_manager
+        self.plugin_manager = plugin_manager
+        self.plugin_installer = plugin_installer
+        self.plugin_repository = plugin_repository
         self.server_host = server_host
         self.server_port = server_port
         self.server_uuid = server_uuid
@@ -388,6 +401,9 @@ class JsonRpcHandler:
             streaming_server=self.streaming_server,
             slimproto=self.slimproto,
             artwork_manager=self.artwork_manager,
+            plugin_manager=self.plugin_manager,
+            plugin_installer=self.plugin_installer,
+            plugin_repository=self.plugin_repository,
             server_host=self.server_host,
             server_port=self.server_port,
             server_uuid=self.server_uuid,

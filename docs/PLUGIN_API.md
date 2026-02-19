@@ -27,6 +27,7 @@ Step-by-step tutorial: → [`PLUGIN_TUTORIAL.md`](PLUGIN_TUTORIAL.md)
 15. [Known Limitations](#15-known-limitations)
 16. [Content Providers](#16-content-providers)
 17. [Reference Plugins](#17-reference-plugins)
+18. [Plugin Settings & Management API](#18-plugin-settings--management-api)
 
 ---
 
@@ -92,6 +93,37 @@ reads the `[plugin]` table and creates a `PluginManifest` object.
 | `description` | ❌ | string | One-line description. |
 | `author` | ❌ | string | Author or maintainer. |
 | `min_resonance_version` | ❌ | string | Minimum server version (informational, not enforced). |
+| `category` | ❌ | string | Optional category for UIs/repository (`radio`, `podcast`, `tools`, ...). |
+| `icon` | ❌ | string | Optional icon key/URL hint for UIs. |
+
+### Declarative Settings (`[settings.<key>]`)
+
+Plugins can declare settings directly in `plugin.toml`. Each setting is a
+table under `[settings.<key>]` and is parsed into `SettingDefinition`.
+
+Supported setting types:
+- `string`
+- `int`
+- `float`
+- `bool`
+- `select` (requires `options = [...]`)
+
+Common setting fields:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `type` | string | `"string"` | Value type |
+| `label` | string | key | Display label |
+| `description` | string | `""` | Help text |
+| `default` | type-dependent | varies | Default value |
+| `required` | bool | `false` | Reject empty value |
+| `secret` | bool | `false` | Mask value in external responses |
+| `restart_required` | bool | `false` | Marks update as restart-relevant |
+| `order` | int | `0` | UI sort order |
+| `min` / `max` | number | `null` | Numeric range |
+| `min_length` / `max_length` | int | `null` | String length bounds |
+| `pattern` | string | `null` | Regex for strings |
+| `options` | list[string] | `[]` | Allowed values for `select` |
 
 ### Full Example
 
@@ -102,6 +134,20 @@ version = "1.0.0"
 description = "Favorites management — LMS-compatible favorites with hierarchical folders"
 author = "Resonance"
 min_resonance_version = "0.1.0"
+category = "library"
+icon = "star"
+
+[settings.sort_mode]
+type = "select"
+label = "Sort mode"
+default = "name"
+options = ["name", "recent"]
+
+[settings.api_key]
+type = "string"
+label = "API key"
+secret = true
+required = true
 ```
 
 ### Internal Data Model
@@ -114,11 +160,16 @@ class PluginManifest:
     description: str = ""
     author: str = ""
     min_resonance_version: str = ""
+    category: str = ""
+    icon: str = ""
+    plugin_type: str = "core"     # set by PluginManager (core/community)
     plugin_dir: Path = ...          # Set by loader, not from TOML
+    settings_defs: tuple[SettingDefinition, ...] = ()
 ```
 
 **Error handling:** If `name` or `version` is missing, the plugin is
-skipped and a warning is logged. Other plugins continue to load normally.
+skipped and a warning is logged. Invalid settings definitions are logged
+and skipped individually. Other plugins continue to load normally.
 
 ---
 
@@ -265,6 +316,13 @@ server functionality.
 | Method | Signature | Description |
 |---|---|---|
 | `ensure_data_dir` | `() -> Path` | Create/return data directory |
+| `get_setting` | `(key: str) -> Any` | Read one setting (falls back to default) |
+| `set_setting` | `(key: str, value: Any) -> None` | Validate and persist one setting |
+| `set_settings` | `(values: dict[str, Any]) -> list[str]` | Validate and persist multiple settings atomically |
+| `get_all_settings` | `() -> dict[str, Any]` | All settings with defaults |
+| `get_all_settings_masked` | `() -> dict[str, Any]` | Same values, but secrets masked |
+| `get_settings_definitions` | `() -> list[dict[str, Any]]` | Serialized setting definitions for APIs |
+| `has_settings` | `@property -> bool` | Whether the plugin declared settings |
 
 ### Cleanup Guarantee
 
@@ -312,6 +370,9 @@ class CommandContext:
     streaming_server: StreamingServer | None    # Streaming
     slimproto: SlimprotoServer | None           # Slimproto
     artwork_manager: ArtworkManager | None      # Cover art
+    plugin_manager: PluginManager | None        # Plugin registry/state
+    plugin_installer: PluginInstaller | None    # ZIP installer
+    plugin_repository: PluginRepository | None  # Repository client
     server_host: str                            # Server IP
     server_port: int                            # Server port (default: 9000)
     server_uuid: str                            # Server UUID
@@ -1036,8 +1097,7 @@ If `teardown()` raises an exception:
 | No hot-reload | Plugins cannot be loaded/unloaded at runtime | Server restart required |
 | No sandbox/security | Plugins run in the same process, full Python access | Accepted (same as LMS) |
 | FastAPI routes not removable | `register_route()` is permanent | Framework limitation |
-| No plugin settings UI | Plugins have no declarative settings | Phase 3 planned |
-| No plugin repository | No central installation/updates | Phase 3 planned |
+| Enable/disable/install is restart-oriented | State changes set `restart_required`; running plugin instances are not hot-swapped | Explicit restart workflow in UI/API |
 | `playlist_manager` optional | Can be `None` in tests | Always check |
 | Content provider commands are per-plugin | No generic `content.browse` — each plugin defines its own commands (e.g. `radio items`) | By design |
 
@@ -1303,16 +1363,94 @@ Companion code for the [Plugin Tutorial](PLUGIN_TUTORIAL.md):
 
 ---
 
+## 18) Plugin Settings & Management API
+
+This section documents the built-in management surface introduced with the
+plugin modernization (phases A-E).
+
+### JSON-RPC Commands
+
+#### `pluginsettings`
+
+| Command | Purpose |
+|---|---|
+| `["pluginsettings", "getdef", "<plugin>"]` | Returns only setting definitions |
+| `["pluginsettings", "get", "<plugin>"]` | Returns definitions + current (masked) values |
+| `["pluginsettings", "set", "<plugin>", "key:value", ...]` | Validates, persists, and updates values |
+
+Notes:
+- `set` performs type parsing (`int/float/bool/string/select`) before validation.
+- Secret values are masked in responses.
+- If a changed setting has `restart_required = true`, response includes `restart_required: true`.
+
+#### `pluginmanager`
+
+| Command | Purpose |
+|---|---|
+| `["pluginmanager", "list"]` | List installed plugins with state/type metadata |
+| `["pluginmanager", "info", "<plugin>"]` | One plugin + setting definitions |
+| `["pluginmanager", "enable", "<plugin>"]` | Persist state as enabled |
+| `["pluginmanager", "disable", "<plugin>"]` | Persist state as disabled |
+| `["pluginmanager", "install", "<url>", "<sha256>"]` | Download and install plugin ZIP |
+| `["pluginmanager", "uninstall", "<plugin>"]` | Uninstall community plugin |
+| `["pluginmanager", "repository"]` | Fetch repository index + compare with installed |
+| `["pluginmanager", "installrepo", "<plugin>"]` | Install plugin directly from repository |
+
+### REST Endpoints
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/api/plugins` | `GET` | List plugins + `restart_required` |
+| `/api/plugins/{name}/settings` | `GET` | Get definitions + masked values |
+| `/api/plugins/{name}/settings` | `PUT` | Update settings with validation |
+| `/api/plugins/{name}/enable` | `POST` | Enable plugin |
+| `/api/plugins/{name}/disable` | `POST` | Disable plugin |
+| `/api/plugins/install` | `POST` | Install from ZIP URL + SHA256 |
+| `/api/plugins/{name}/uninstall` | `POST` | Uninstall community plugin |
+| `/api/plugins/repository` | `GET` | List repository plugins (`force_refresh` optional) |
+| `/api/plugins/install-from-repo` | `POST` | Install by repository plugin name |
+
+### Settings Storage Format
+
+Per plugin, settings are stored at:
+
+```
+data/plugins/<plugin_name>/settings.json
+```
+
+Payload structure:
+
+```json
+{
+  "_version": 1,
+  "_plugin_version": "1.0.0",
+  "my_setting": "value"
+}
+```
+
+### State Storage Format
+
+Plugin enable/disable states are stored globally at:
+
+```
+data/plugin_states.json
+```
+
+Unknown plugins default to `enabled` for backwards compatibility.
+
+---
+
 ## Further Reading
 
 | Document | Content |
 |---|---|
 | [`PLUGINS.md`](PLUGINS.md) | General overview for all audiences |
 | [`PLUGIN_TUTORIAL.md`](PLUGIN_TUTORIAL.md) | Step-by-step: Build your own plugin |
+| [`PLUGIN_REPOSITORY.md`](PLUGIN_REPOSITORY.md) | Publishing plugins and repository index format |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Resonance system architecture |
 | `plugins/radio/` | Reference ContentProvider plugin (radio-browser.info, remote streaming) |
 | `plugins/podcast/` | Reference ContentProvider plugin (RSS feeds, subscriptions, resume) |
 
 ---
 
-*Last updated: February 2026 (Podcast Plugin, Radio Plugin, Now Playing Plugin added to §17)*
+*Last updated: February 2026 (plugin settings/management API added in §18)*

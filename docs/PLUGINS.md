@@ -8,6 +8,7 @@ via radio-browser.info and Podcasts.
 For the developer perspective (API, code examples, tutorial):
 → [`PLUGIN_API.md`](PLUGIN_API.md)
 → [`PLUGIN_TUTORIAL.md`](PLUGIN_TUTORIAL.md)
+→ [`PLUGIN_REPOSITORY.md`](PLUGIN_REPOSITORY.md)
 
 ---
 
@@ -271,7 +272,7 @@ full content-provider lifecycle.
 
 ---
 
-## 6) Current & Planned Extensions
+## 6) Current Extensions
 
 ### Phase 2 — Content Providers ✅ Complete
 
@@ -290,11 +291,21 @@ plugin are implemented:
 - ✅ **Radio Plugin** (radio-browser.info) — first production ContentProvider (114 tests)
 - ✅ **Podcast Plugin** — second ContentProvider (RSS feeds, PodcastIndex search, subscriptions, resume positions, 178 tests)
 
-### Phase 3 — Settings & Repository
+### Phase 3 — Plugin Management ✅ Complete
 
-- Plugin settings (API keys, quality levels, …) via Web UI / JSON-RPC
-- Central plugin repository for installation and updates
-- Native reimplementation of popular LMS plugins (Spotify, YouTube, …)
+- ✅ Declarative plugin settings in `plugin.toml` (`[settings.<key>]`) with validation
+- ✅ Settings persistence in `data/plugins/<plugin>/settings.json`
+- ✅ Plugin state persistence in `data/plugin_states.json` (enable/disable)
+- ✅ Community plugin install/uninstall via ZIP + SHA256 verification
+- ✅ Plugin repository index integration (available/install/update metadata)
+- ✅ REST endpoints for plugin management (`/api/plugins*`)
+- ✅ JSON-RPC management commands (`pluginsettings`, `pluginmanager`)
+- ✅ Svelte PluginsView with Installed / Available / Settings tabs
+
+### Phase 4 — Ecosystem Growth (ongoing)
+
+- Native reimplementation of popular LMS plugin functionality (Spotify, YouTube, …)
+- External plugin publishing workflow and CI/CD for repository releases
 
 ---
 
@@ -351,4 +362,32 @@ asyncio (async/await) is helpful since all handlers are asynchronous.
 
 ---
 
-*Last updated: February 2026 (Podcast Plugin added)*
+## 8) Plugin Management (for operators)
+
+The plugin system now supports full lifecycle operations without editing code.
+
+### Installed Plugins
+
+- `GET /api/plugins` returns plugin metadata, state (`enabled`/`disabled`), type (`core`/`community`), and `restart_required`.
+- `POST /api/plugins/{name}/enable` and `POST /api/plugins/{name}/disable` toggle runtime state persistence.
+- Core plugins cannot be uninstalled.
+
+### Plugin Settings
+
+- Settings are declared in `plugin.toml` via `[settings.<key>]` tables.
+- Current values and definitions are available via `GET /api/plugins/{name}/settings`.
+- Updates are applied via `PUT /api/plugins/{name}/settings` with type validation and secret masking in responses.
+
+### Repository and Installation
+
+- Repository index: `GET /api/plugins/repository` (supports `force_refresh=true`).
+- Install from repository: `POST /api/plugins/install-from-repo` with JSON body `{ "name": "plugin_name" }`.
+- Direct install from ZIP URL: `POST /api/plugins/install` with `{ "url": "...", "sha256": "..." }`.
+- Uninstall community plugins: `POST /api/plugins/{name}/uninstall`.
+
+For implementation details and manifest schema, see [`PLUGIN_API.md`](PLUGIN_API.md)
+and [`PLUGIN_REPOSITORY.md`](PLUGIN_REPOSITORY.md).
+
+---
+
+*Last updated: February 2026 (Plugin management phases A-E completed)*

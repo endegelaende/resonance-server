@@ -4,9 +4,56 @@ All notable changes to the project are documented here.
 
 ---
 
-## [Unreleased] — Phase 3 Completed ✅
+## [Unreleased] — Phase 3 + Plugin Modernization Completed ✅
 
-**Status:** 2041 passed, 2 skipped | ~43,500 LOC Python (38,100 core + 5,450 plugins) | ~9,800 LOC Svelte/TS
+**Status:** 2071 passed, 2 skipped | Plugin-System Modernisierung (Phasen A-E) umgesetzt
+
+### 🔌 Plugin System Modernization — Phases A-E (2026-02-19)
+
+- **Plugin settings (declarative)**:
+  - `plugin.toml` now supports `[settings.<key>]` definitions (`string/int/float/bool/select`)
+  - Validation rules: `required`, `min/max`, `min_length/max_length`, `pattern`, `options`
+  - Runtime API in `PluginContext`: `get_setting()`, `set_setting()`, `set_settings()`, `get_all_settings()`
+  - Persistence: `data/plugins/<plugin>/settings.json` with `_version` and `_plugin_version`
+
+- **Plugin states (enable/disable)**:
+  - New persisted state file: `data/plugin_states.json`
+  - State-aware startup: disabled plugins are discovered/loaded but not started
+  - `restart_required` flag for state changes and install/uninstall operations
+
+- **Dual-directory discovery + installer**:
+  - `PluginManager` scans core (`plugins/`) and community (`data/installed_plugins/`) directories
+  - New `PluginInstaller` supports ZIP install/uninstall with SHA256 verification
+  - ZIP extraction hardening: zip-slip guard + manifest-based plugin name resolution
+
+- **Repository client + install flow**:
+  - New `PluginRepository` fetches repository index, caches results, merges multiple repositories
+  - Compares repository versions against installed plugins (core/community aware)
+  - Supports direct repository download + install flow
+
+- **New JSON-RPC commands**:
+  - `pluginsettings`: `get`, `set`, `getdef`
+  - `pluginmanager`: `list`, `info`, `enable`, `disable`, `install`, `uninstall`, `repository`, `installrepo`
+
+- **New REST endpoints** (`/api/plugins*`):
+  - `GET /api/plugins`
+  - `GET/PUT /api/plugins/{plugin}/settings`
+  - `POST /api/plugins/{plugin}/enable`
+  - `POST /api/plugins/{plugin}/disable`
+  - `POST /api/plugins/install`
+  - `POST /api/plugins/{plugin}/uninstall`
+  - `GET /api/plugins/repository`
+  - `POST /api/plugins/install-from-repo`
+
+- **Web-UI plugin management**:
+  - New `PluginsView.svelte` with tabs: Installed / Available / Settings
+  - Sidebar navigation and UI store extended with `plugins` view
+  - API client extended with plugin management and repository methods
+
+- **Test coverage added**:
+  - `test_plugin_settings.py`, `test_plugin_states.py`, `test_plugin_installer.py`
+  - `test_plugin_repository.py`, `test_plugin_handlers.py`, `test_plugin_api.py`
+  - Full suite: **2071 passed, 2 skipped**
 
 ### 🌐 Svelte Web-UI Major Update — Favorites, Radio, Podcasts, Playlists (2026-02-15)
 

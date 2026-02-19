@@ -250,6 +250,66 @@ export interface SavedPlaylistTrack {
   "playlist index": number;
 }
 
+// ---- Plugin Management ----
+export interface PluginInfo {
+  name: string;
+  version: string;
+  description: string;
+  author: string;
+  category: string;
+  icon: string;
+  state: "enabled" | "disabled";
+  started: boolean;
+  type: "core" | "community";
+  has_settings: boolean;
+  can_uninstall: boolean;
+}
+
+export interface PluginSettingDefinition {
+  key: string;
+  type: "string" | "int" | "float" | "bool" | "select";
+  label: string;
+  description?: string;
+  default: unknown;
+  secret?: boolean;
+  required?: boolean;
+  order: number;
+  restart_required?: boolean;
+  min?: number;
+  max?: number;
+  options?: string[];
+}
+
+export interface PluginSettingsResponse {
+  plugin_name: string;
+  definitions: PluginSettingDefinition[];
+  values: Record<string, unknown>;
+  updated?: string[];
+  restart_required?: boolean;
+}
+
+export interface RepositoryPlugin {
+  name: string;
+  version: string;
+  description: string;
+  author: string;
+  category: string;
+  icon: string;
+  min_resonance_version: string;
+  url: string;
+  sha256: string;
+  homepage: string;
+  changelog: string;
+  tags: string[];
+  installed_version: string | null;
+  update_available: boolean;
+  is_core: boolean;
+  compatible: boolean;
+  incompatible_reason: string;
+  can_install: boolean;
+  can_update: boolean;
+}
+
 // JSON-RPC types
 interface JsonRpcRequest {
   id: number;
@@ -1267,6 +1327,129 @@ class ResonanceAPI {
       );
     }
     return await response.json();
+  }
+
+  // =========================================================================
+  // Plugin Management (REST API)
+  // =========================================================================
+
+  async getPlugins(): Promise<{
+    count: number;
+    plugins: PluginInfo[];
+    restart_required: boolean;
+  }> {
+    const response = await fetch(`${this.baseUrl}/api/plugins`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch plugins: ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async enablePlugin(name: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/api/plugins/${name}/enable`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      const error = await response
+        .json()
+        .catch(() => ({ detail: response.statusText }));
+      throw new Error(error.detail || `Failed to enable plugin: ${name}`);
+    }
+  }
+
+  async disablePlugin(name: string): Promise<void> {
+    const response = await fetch(
+      `${this.baseUrl}/api/plugins/${name}/disable`,
+      {
+        method: "POST",
+      },
+    );
+    if (!response.ok) {
+      const error = await response
+        .json()
+        .catch(() => ({ detail: response.statusText }));
+      throw new Error(error.detail || `Failed to disable plugin: ${name}`);
+    }
+  }
+
+  async uninstallPlugin(name: string): Promise<void> {
+    const response = await fetch(
+      `${this.baseUrl}/api/plugins/${name}/uninstall`,
+      {
+        method: "POST",
+      },
+    );
+    if (!response.ok) {
+      const error = await response
+        .json()
+        .catch(() => ({ detail: response.statusText }));
+      throw new Error(error.detail || `Failed to uninstall plugin: ${name}`);
+    }
+  }
+
+  async getPluginSettings(name: string): Promise<PluginSettingsResponse> {
+    const response = await fetch(
+      `${this.baseUrl}/api/plugins/${name}/settings`,
+    );
+    if (!response.ok) {
+      const error = await response
+        .json()
+        .catch(() => ({ detail: response.statusText }));
+      throw new Error(error.detail || `Failed to fetch settings for: ${name}`);
+    }
+    return response.json();
+  }
+
+  async updatePluginSettings(
+    name: string,
+    values: Record<string, unknown>,
+  ): Promise<PluginSettingsResponse> {
+    const response = await fetch(
+      `${this.baseUrl}/api/plugins/${name}/settings`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(values),
+      },
+    );
+    if (!response.ok) {
+      const error = await response
+        .json()
+        .catch(() => ({ detail: response.statusText }));
+      throw new Error(error.detail || `Failed to save settings for: ${name}`);
+    }
+    return response.json();
+  }
+
+  async getRepository(forceRefresh = false): Promise<{
+    count: number;
+    plugins: RepositoryPlugin[];
+  }> {
+    const params = forceRefresh ? "?force_refresh=true" : "";
+    const response = await fetch(
+      `${this.baseUrl}/api/plugins/repository${params}`,
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to fetch plugin repository: ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async installFromRepository(name: string): Promise<void> {
+    const response = await fetch(
+      `${this.baseUrl}/api/plugins/install-from-repo`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      },
+    );
+    if (!response.ok) {
+      const error = await response
+        .json()
+        .catch(() => ({ detail: response.statusText }));
+      throw new Error(error.detail || `Failed to install plugin: ${name}`);
+    }
   }
 
   // =========================================================================

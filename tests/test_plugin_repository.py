@@ -782,3 +782,160 @@ class TestPluginRepositoryDefaults:
         repo = PluginRepository()
         assert repo._cache == []
         assert repo._cache_time == 0.0
+
+
+# =============================================================================
+# check_compatible
+# =============================================================================
+
+
+class TestCheckCompatible:
+    """Tests for PluginRepository.check_compatible()."""
+
+    def _entry(self, min_version: str = "") -> RepositoryEntry:
+        return RepositoryEntry(
+            name="test-plugin",
+            version="1.0.0",
+            url="https://example.com/test.zip",
+            min_resonance_version=min_version,
+        )
+
+    def test_no_min_version_is_compatible(self) -> None:
+        compatible, reason = PluginRepository.check_compatible(self._entry(""))
+        assert compatible is True
+        assert reason == ""
+
+    def test_whitespace_only_min_version_is_compatible(self) -> None:
+        compatible, reason = PluginRepository.check_compatible(self._entry("   "))
+        assert compatible is True
+        assert reason == ""
+
+    def test_same_version_is_compatible(self) -> None:
+        import resonance
+
+        compatible, reason = PluginRepository.check_compatible(
+            self._entry(resonance.__version__)
+        )
+        assert compatible is True
+        assert reason == ""
+
+    def test_older_min_version_is_compatible(self) -> None:
+        compatible, reason = PluginRepository.check_compatible(self._entry("0.0.1"))
+        assert compatible is True
+        assert reason == ""
+
+    def test_newer_min_version_is_incompatible(self) -> None:
+        compatible, reason = PluginRepository.check_compatible(self._entry("99.0.0"))
+        assert compatible is False
+        assert "99.0.0" in reason
+        assert "requires" in reason.lower()
+
+    def test_incompatible_reason_includes_server_version(self) -> None:
+        import resonance
+
+        compatible, reason = PluginRepository.check_compatible(self._entry("99.0.0"))
+        assert compatible is False
+        assert resonance.__version__ in reason
+
+
+# =============================================================================
+# compare_with_installed — compatibility fields
+# =============================================================================
+
+
+class TestCompareWithInstalledCompatibility:
+    """Tests that compare_with_installed includes compatibility info."""
+
+    def test_compatible_plugin_can_install(self) -> None:
+        repo = PluginRepository()
+        available = [
+            RepositoryEntry(
+                name="new-plugin",
+                version="1.0.0",
+                url="https://example.com/new.zip",
+                min_resonance_version="0.0.1",
+            )
+        ]
+        result = repo.compare_with_installed(available, {}, set())
+        assert len(result) == 1
+        assert result[0]["compatible"] is True
+        assert result[0]["incompatible_reason"] == ""
+        assert result[0]["can_install"] is True
+
+    def test_incompatible_plugin_cannot_install(self) -> None:
+        repo = PluginRepository()
+        available = [
+            RepositoryEntry(
+                name="future-plugin",
+                version="1.0.0",
+                url="https://example.com/future.zip",
+                min_resonance_version="99.0.0",
+            )
+        ]
+        result = repo.compare_with_installed(available, {}, set())
+        assert len(result) == 1
+        assert result[0]["compatible"] is False
+        assert result[0]["incompatible_reason"] != ""
+        assert result[0]["can_install"] is False
+
+    def test_incompatible_plugin_cannot_update(self) -> None:
+        repo = PluginRepository()
+        available = [
+            RepositoryEntry(
+                name="old-plugin",
+                version="2.0.0",
+                url="https://example.com/old.zip",
+                min_resonance_version="99.0.0",
+            )
+        ]
+        installed = {"old-plugin": "1.0.0"}
+        result = repo.compare_with_installed(available, installed, set())
+        assert len(result) == 1
+        assert result[0]["compatible"] is False
+        assert result[0]["can_update"] is False
+
+    def test_compatible_plugin_can_update(self) -> None:
+        repo = PluginRepository()
+        available = [
+            RepositoryEntry(
+                name="good-plugin",
+                version="2.0.0",
+                url="https://example.com/good.zip",
+                min_resonance_version="0.0.1",
+            )
+        ]
+        installed = {"good-plugin": "1.0.0"}
+        result = repo.compare_with_installed(available, installed, set())
+        assert len(result) == 1
+        assert result[0]["compatible"] is True
+        assert result[0]["can_update"] is True
+
+    def test_core_plugin_still_not_installable_even_if_compatible(self) -> None:
+        repo = PluginRepository()
+        available = [
+            RepositoryEntry(
+                name="core-thing",
+                version="1.0.0",
+                url="https://example.com/core.zip",
+                min_resonance_version="0.0.1",
+            )
+        ]
+        result = repo.compare_with_installed(available, {"core-thing": "1.0.0"}, {"core-thing"})
+        assert len(result) == 1
+        assert result[0]["compatible"] is True
+        assert result[0]["can_install"] is False
+        assert result[0]["is_core"] is True
+
+    def test_no_min_version_is_always_compatible(self) -> None:
+        repo = PluginRepository()
+        available = [
+            RepositoryEntry(
+                name="simple",
+                version="1.0.0",
+                url="https://example.com/simple.zip",
+            )
+        ]
+        result = repo.compare_with_installed(available, {}, set())
+        assert len(result) == 1
+        assert result[0]["compatible"] is True
+        assert result[0]["can_install"] is True

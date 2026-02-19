@@ -25,7 +25,9 @@ from resonance.core.library_db import LibraryDb
 from resonance.core.playlist import PlaylistManager
 from resonance.display.manager import DisplayManager, set_display_manager
 from resonance.player.registry import PlayerRegistry
+from resonance.plugin_installer import PluginInstaller
 from resonance.plugin_manager import PluginManager
+from resonance.plugin_repository import PluginRepository
 from resonance.protocol.cli import CliServer
 from resonance.protocol.discovery import UDPDiscoveryServer
 from resonance.protocol.slimproto import SlimprotoServer
@@ -135,8 +137,13 @@ class ResonanceServer:
         self.cli_port = cli_port
         self.cors_origins = cors_origins
 
-        # Plugin manager (discovers/loads/starts plugins from plugins/ directory)
-        self.plugin_manager = PluginManager(plugins_dir=Path("plugins"))
+        # Plugin manager + installer + repository client
+        self.plugin_manager = PluginManager(
+            core_plugins_dir=Path("plugins"),
+            community_plugins_dir=Path("data/installed_plugins"),
+        )
+        self.plugin_installer = PluginInstaller(install_dir=Path("data/installed_plugins"))
+        self.plugin_repository = PluginRepository()
 
         # Content provider registry (Radio, Podcasts, external sources).
         # Plugins register providers during setup; the streaming/handler layer
@@ -292,6 +299,9 @@ class ResonanceServer:
             artwork_manager=self.artwork_manager,
             slimproto=self.slimproto,
             server_uuid=self.server_uuid,
+            plugin_manager=self.plugin_manager,
+            plugin_installer=self.plugin_installer,
+            plugin_repository=self.plugin_repository,
             cors_origins=self.cors_origins,
         )
         await self.web_server.start(host=self.host, port=self.web_port)

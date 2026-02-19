@@ -41,6 +41,9 @@ if TYPE_CHECKING:
     from resonance.core.library import MusicLibrary
     from resonance.core.playlist import PlaylistManager
     from resonance.player.registry import PlayerRegistry
+    from resonance.plugin_installer import PluginInstaller
+    from resonance.plugin_manager import PluginManager
+    from resonance.plugin_repository import PluginRepository
     from resonance.protocol.slimproto import SlimprotoServer
     from resonance.streaming.server import StreamingServer
 
@@ -93,6 +96,9 @@ class WebServer:
         streaming_server: StreamingServer | None = None,
         artwork_manager: ArtworkManager | None = None,
         slimproto: SlimprotoServer | None = None,
+        plugin_manager: PluginManager | None = None,
+        plugin_installer: PluginInstaller | None = None,
+        plugin_repository: PluginRepository | None = None,
         server_uuid: str = "resonance",
         cors_origins: str | list[str] = "*",
     ) -> None:
@@ -116,6 +122,9 @@ class WebServer:
         self.streaming_server = streaming_server
         self.artwork_manager = artwork_manager
         self.slimproto = slimproto
+        self.plugin_manager = plugin_manager
+        self.plugin_installer = plugin_installer
+        self.plugin_repository = plugin_repository
 
         # Create FastAPI app
         self.app = FastAPI(
@@ -170,6 +179,9 @@ class WebServer:
             streaming_server=streaming_server,
             slimproto=slimproto,
             artwork_manager=artwork_manager,
+            plugin_manager=plugin_manager,
+            plugin_installer=plugin_installer,
+            plugin_repository=plugin_repository,
             server_uuid=server_uuid,
         )
 
@@ -244,6 +256,9 @@ class WebServer:
             player_registry=self.player_registry,
             playlist_manager=self.playlist_manager,
             streaming_server=self.streaming_server,
+            plugin_manager=self.plugin_manager,
+            plugin_installer=self.plugin_installer,
+            plugin_repository=self.plugin_repository,
         )
 
         # Register streaming routes

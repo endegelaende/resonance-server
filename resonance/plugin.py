@@ -35,7 +35,9 @@ Usage (inside a plugin's ``__init__.py``):
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -51,6 +53,149 @@ if TYPE_CHECKING:
     from resonance.web.jsonrpc import CommandHandler
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Settings Definition
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SettingDefinition:
+    """One declared setting from plugin.toml [settings.*] section."""
+
+    key: str
+    type: str
+    label: str
+    description: str = ""
+    default: Any = None
+    secret: bool = False
+    required: bool = False
+    order: int = 0
+    restart_required: bool = False
+    min: int | float | None = None
+    max: int | float | None = None
+    min_length: int | None = None
+    max_length: int | None = None
+    pattern: str | None = None
+    options: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_toml(cls, key: str, data: dict[str, Any]) -> SettingDefinition:
+        """Parse a single [settings.<key>] table from plugin.toml."""
+        setting_type = str(data.get("type", "string"))
+        if setting_type not in ("string", "int", "float", "bool", "select"):
+            raise ValueError(f"Unknown setting type '{setting_type}' for key '{key}'")
+
+        if setting_type == "select":
+            options = data.get("options", [])
+            if not isinstance(options, list) or not options:
+                raise ValueError(f"Setting '{key}' of type 'select' requires non-empty 'options'")
+        else:
+            options = data.get("options", [])
+
+        default = data.get("default")
+        if default is None:
+            default = {"string": "", "int": 0, "float": 0.0, "bool": False, "select": ""}[setting_type]
+            if setting_type == "select" and options:
+                default = str(options[0])
+
+        return cls(
+            key=str(key),
+            type=setting_type,
+            label=str(data.get("label", key)),
+            description=str(data.get("description", "")),
+            default=default,
+            secret=bool(data.get("secret", False)),
+            required=bool(data.get("required", False)),
+            order=int(data.get("order", 0)),
+            restart_required=bool(data.get("restart_required", False)),
+            min=data.get("min"),
+            max=data.get("max"),
+            min_length=data.get("min_length"),
+            max_length=data.get("max_length"),
+            pattern=data.get("pattern"),
+            options=[str(v) for v in options] if isinstance(options, list) else [],
+        )
+
+    def validate(self, value: Any) -> tuple[bool, str]:
+        """Validate a value against this definition. Returns (ok, error_message)."""
+        if self.required and (value is None or value == ""):
+            return False, f"'{self.label}' is required"
+
+        if self.type == "int":
+            if not isinstance(value, int) or isinstance(value, bool):
+                return False, f"'{self.label}' must be an integer"
+            if self.min is not None and value < self.min:
+                return False, f"'{self.label}' must be >= {self.min}"
+            if self.max is not None and value > self.max:
+                return False, f"'{self.label}' must be <= {self.max}"
+
+        elif self.type == "float":
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                return False, f"'{self.label}' must be a number"
+            if self.min is not None and value < self.min:
+                return False, f"'{self.label}' must be >= {self.min}"
+            if self.max is not None and value > self.max:
+                return False, f"'{self.label}' must be <= {self.max}"
+
+        elif self.type == "bool":
+            if not isinstance(value, bool):
+                return False, f"'{self.label}' must be a boolean"
+
+        elif self.type == "string":
+            if not isinstance(value, str):
+                return False, f"'{self.label}' must be a string"
+            if self.min_length is not None and len(value) < self.min_length:
+                return False, f"'{self.label}' must be at least {self.min_length} characters"
+            if self.max_length is not None and len(value) > self.max_length:
+                return False, f"'{self.label}' must be at most {self.max_length} characters"
+            if self.pattern:
+                try:
+                    if re.fullmatch(self.pattern, value) is None:
+                        return False, f"'{self.label}' has invalid format"
+                except re.error:
+                    # Invalid patterns are treated as config bugs and skipped.
+                    return False, f"'{self.label}' has invalid pattern"
+
+        elif self.type == "select":
+            if not isinstance(value, str):
+                return False, f"'{self.label}' must be a string"
+            if value not in self.options:
+                return False, f"'{self.label}' must be one of: {', '.join(self.options)}"
+
+        return True, ""
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict for JSON-RPC / REST API responses."""
+        d: dict[str, Any] = {
+            "key": self.key,
+            "type": self.type,
+            "label": self.label,
+            "default": self.default,
+            "order": self.order,
+        }
+        if self.description:
+            d["description"] = self.description
+        if self.secret:
+            d["secret"] = True
+        if self.required:
+            d["required"] = True
+        if self.restart_required:
+            d["restart_required"] = True
+        if self.min is not None:
+            d["min"] = self.min
+        if self.max is not None:
+            d["max"] = self.max
+        if self.min_length is not None:
+            d["min_length"] = self.min_length
+        if self.max_length is not None:
+            d["max_length"] = self.max_length
+        if self.pattern is not None:
+            d["pattern"] = self.pattern
+        if self.options:
+            d["options"] = list(self.options)
+        return d
 
 
 # ---------------------------------------------------------------------------
@@ -91,11 +236,30 @@ class PluginManifest:
     min_resonance_version: str = ""
     """Minimum Resonance server version required (informational for now)."""
 
+    category: str = ""
+    """Optional plugin category (e.g. musicservices, radio, tools)."""
+
+    icon: str = ""
+    """Optional icon key for plugin UIs."""
+
+    plugin_type: str = "core"
+    """Origin type: ``core`` (plugins/) or ``community`` (data/installed_plugins/)."""
+
     plugin_dir: Path = field(default_factory=lambda: Path("."))
     """Absolute path to the plugin directory (set by the loader, not by TOML)."""
 
+    settings_defs: tuple[SettingDefinition, ...] = ()
+    """Declared settings from ``[settings.*]`` in plugin.toml."""
+
     @classmethod
-    def from_toml(cls, data: dict[str, Any], plugin_dir: Path) -> PluginManifest:
+    def from_toml(
+        cls,
+        data: dict[str, Any],
+        plugin_dir: Path,
+        *,
+        settings_defs: tuple[SettingDefinition, ...] = (),
+        plugin_type: str = "core",
+    ) -> PluginManifest:
         """Create a manifest from a parsed TOML ``[plugin]`` table.
 
         Args:
@@ -118,7 +282,11 @@ class PluginManifest:
             description=str(data.get("description", "")),
             author=str(data.get("author", "")),
             min_resonance_version=str(data.get("min_resonance_version", "")),
+            category=str(data.get("category", "")),
+            icon=str(data.get("icon", "")),
+            plugin_type=str(plugin_type or "core"),
             plugin_dir=plugin_dir,
+            settings_defs=tuple(settings_defs),
         )
 
 
@@ -182,6 +350,8 @@ class PluginContext:
         _route_register: Any = None,
         _content_registry: ContentProviderRegistry | None = None,
         data_dir: Path | None = None,
+        settings_defs: tuple[SettingDefinition, ...] = (),
+        plugin_version: str = "unknown",
     ) -> None:
         self.plugin_id = plugin_id
         """Unique identifier for this plugin (matches manifest *name*)."""
@@ -213,6 +383,13 @@ class PluginContext:
         self._registered_menu_item_ids: list[str] = []
         self._registered_event_handlers: list[tuple[str, Any]] = []
         self._registered_content_providers: list[str] = []
+
+        # Plugin settings loaded from plugin.toml [settings.*]
+        self._settings_defs: tuple[SettingDefinition, ...] = tuple(settings_defs)
+        self._settings_values: dict[str, Any] = {}
+        self._plugin_version = str(plugin_version)
+        self._settings_path = self.data_dir / "settings.json"
+        self._load_settings()
 
     # -- Command registration ------------------------------------------------
 
@@ -358,6 +535,131 @@ class PluginContext:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         return self.data_dir
 
+    # -- Settings API -------------------------------------------------------
+
+    def get_setting(self, key: str) -> Any:
+        """Get a setting value. Returns default if not explicitly set."""
+        definition = self._get_setting_def(key)
+        return self._settings_values.get(key, definition.default)
+
+    def set_setting(self, key: str, value: Any) -> None:
+        """Set a setting value. Validates against the definition."""
+        definition = self._get_setting_def(key)
+        ok, error = definition.validate(value)
+        if not ok:
+            raise ValueError(error)
+        self._settings_values[key] = value
+        self._save_settings()
+
+    def set_settings(self, values: dict[str, Any]) -> list[str]:
+        """Set multiple settings atomically and return changed keys."""
+        changed: list[str] = []
+        staged = dict(self._settings_values)
+
+        for key, value in values.items():
+            definition = self._get_setting_def(key)
+            ok, error = definition.validate(value)
+            if not ok:
+                raise ValueError(error)
+            if staged.get(key, definition.default) != value:
+                changed.append(key)
+            staged[key] = value
+
+        self._settings_values = staged
+        self._save_settings()
+        return changed
+
+    def get_all_settings(self) -> dict[str, Any]:
+        """Get all settings as key→value dict (with defaults for unset keys)."""
+        return {
+            definition.key: self._settings_values.get(definition.key, definition.default)
+            for definition in self._settings_defs
+        }
+
+    def get_all_settings_masked(self) -> dict[str, Any]:
+        """Get settings values while masking secrets (for external responses)."""
+        values = self.get_all_settings()
+        for definition in self._settings_defs:
+            if definition.secret:
+                raw = values.get(definition.key)
+                if isinstance(raw, str) and raw:
+                    values[definition.key] = self._mask_secret(raw)
+                elif raw is not None:
+                    values[definition.key] = "****"
+        return values
+
+    def get_settings_definitions(self) -> list[dict[str, Any]]:
+        """Get all setting definitions as dicts (for API responses)."""
+        return [definition.to_dict() for definition in self._settings_defs]
+
+    @property
+    def has_settings(self) -> bool:
+        """True if this plugin has declared any settings."""
+        return bool(self._settings_defs)
+
+    def _get_setting_def(self, key: str) -> SettingDefinition:
+        """Look up a setting definition by key. Raises KeyError if not found."""
+        for definition in self._settings_defs:
+            if definition.key == key:
+                return definition
+        raise KeyError(
+            f"Plugin '{self.plugin_id}' has no setting '{key}'. "
+            f"Available: {[d.key for d in self._settings_defs]}"
+        )
+
+    def _load_settings(self) -> None:
+        """Load settings from disk. Missing/invalid values keep defaults."""
+        if not self._settings_defs:
+            return
+        if not self._settings_path.is_file():
+            return
+        try:
+            with open(self._settings_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for definition in self._settings_defs:
+                if definition.key not in data:
+                    continue
+                value = data[definition.key]
+                ok, _ = definition.validate(value)
+                if ok:
+                    self._settings_values[definition.key] = value
+        except Exception as exc:
+            logger.warning("[%s] Failed to load settings: %s", self.plugin_id, exc)
+
+    def _save_settings(self) -> None:
+        """Persist current settings to disk (atomic write)."""
+        if not self._settings_defs:
+            return
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, Any] = {
+            "_version": 1,
+            "_plugin_version": self._plugin_version,
+        }
+        for definition in self._settings_defs:
+            payload[definition.key] = self._settings_values.get(
+                definition.key,
+                definition.default,
+            )
+
+        tmp_path = self._settings_path.with_suffix(".tmp")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+            tmp_path.replace(self._settings_path)
+        except Exception as exc:
+            logger.error("[%s] Failed to save settings: %s", self.plugin_id, exc)
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _mask_secret(value: str) -> str:
+        """Mask secret values while preserving suffix for debugging."""
+        if len(value) <= 4:
+            return "*" * len(value)
+        return "*" * max(4, len(value) - 4) + value[-4:]
+
     # -- Cleanup (called by PluginManager) -----------------------------------
 
     async def _cleanup(self) -> None:
@@ -427,5 +729,6 @@ class PluginContext:
             f"commands={len(self._registered_commands)}, "
             f"menu_nodes={len(self._registered_menu_node_ids)}, "
             f"menu_items={len(self._registered_menu_item_ids)}, "
-            f"content_providers={len(self._registered_content_providers)})"
+            f"content_providers={len(self._registered_content_providers)}, "
+            f"settings={len(self._settings_defs)})"
         )

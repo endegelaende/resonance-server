@@ -23,6 +23,9 @@ if TYPE_CHECKING:
     from resonance.core.library import MusicLibrary
     from resonance.core.playlist import PlaylistManager
     from resonance.player.registry import PlayerRegistry
+    from resonance.plugin_installer import PluginInstaller
+    from resonance.plugin_manager import PluginManager
+    from resonance.plugin_repository import PluginRepository
     from resonance.protocol.slimproto import SlimprotoServer
     from resonance.streaming.server import StreamingServer
 
@@ -57,6 +60,15 @@ class CommandContext:
 
     artwork_manager: ArtworkManager | None = None
     """Artwork extraction and caching."""
+
+    plugin_manager: PluginManager | None = None
+    """Plugin manager used by pluginsettings/pluginmanager commands."""
+
+    plugin_installer: PluginInstaller | None = None
+    """Plugin installer for install/uninstall operations."""
+
+    plugin_repository: PluginRepository | None = None
+    """Plugin repository client for available plugin index."""
 
     server_host: str = "127.0.0.1"
     """Server hostname for generating URLs."""

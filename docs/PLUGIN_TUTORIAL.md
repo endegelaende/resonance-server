@@ -646,7 +646,69 @@ def _parse_tagged(command: list[Any], start: int = 1) -> dict[str, str]:
 
 ---
 
-## Step 6: Write Tests
+## Step 6: Adding Settings to Your Plugin
+
+Now make the plugin configurable without changing Python code.
+
+### 1) Add settings to `plugin.toml`
+
+```toml
+[plugin]
+name = "nowplaying"
+version = "0.1.0"
+description = "Now Playing stats plugin"
+
+[settings.max_entries]
+type = "int"
+label = "Maximum history entries"
+default = 200
+min = 20
+max = 2000
+restart_required = true
+
+[settings.show_timestamps]
+type = "bool"
+label = "Show timestamps in recent list"
+default = true
+```
+
+### 2) Read settings in your plugin code
+
+Use `ctx.get_setting()` in `setup()` and/or handlers:
+
+```python
+async def setup(ctx: PluginContext) -> None:
+    global _store
+    data_dir = ctx.ensure_data_dir()
+    max_entries = int(ctx.get_setting("max_entries"))
+    _store = PlayHistory(data_dir, max_entries=max_entries)
+    _store.load()
+```
+
+Store frequently used settings in module-level state and use them in handlers:
+
+```python
+_show_timestamps = bool(ctx.get_setting("show_timestamps"))
+...
+if _show_timestamps and entry.get("timestamp"):
+    text += f" ({entry['timestamp'][11:19]})"
+```
+
+### 3) Update settings via API
+
+- REST:
+  - `GET /api/plugins/nowplaying/settings`
+  - `PUT /api/plugins/nowplaying/settings` with JSON body, e.g. `{ "max_entries": 500 }`
+- JSON-RPC:
+  - `["pluginsettings", "get", "nowplaying"]`
+  - `["pluginsettings", "set", "nowplaying", "max_entries:500"]`
+
+Settings are validated against the schema and persisted in
+`data/plugins/nowplaying/settings.json`. Secret settings are masked in responses.
+
+---
+
+## Step 7: Write Tests
 
 Now let's secure everything with tests. Create `tests/test_nowplaying_plugin.py`:
 
@@ -1091,7 +1153,7 @@ tests/test_nowplaying_plugin.py::TestPlayHistory::test_record_multiple PASSED
 
 ---
 
-## Step 7: What the Plugin Can Do Now
+## Step 8: What the Plugin Can Do Now
 
 Congratulations! The tutorial plugin is complete. Here is the summary:
 

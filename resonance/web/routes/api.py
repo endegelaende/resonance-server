@@ -11,11 +11,15 @@ Provides REST endpoints for the web UI and external integrations:
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 
+from resonance.plugin import PluginManifest, SettingDefinition
 from resonance.web.handlers.status import _lms_song_elapsed_seconds
 from resonance.web.jsonrpc_helpers import build_player_item, to_dict
 
@@ -23,6 +27,9 @@ if TYPE_CHECKING:
     from resonance.core.library import MusicLibrary
     from resonance.core.playlist import PlaylistManager
     from resonance.player.registry import PlayerRegistry
+    from resonance.plugin_installer import PluginInstaller
+    from resonance.plugin_manager import PluginManager
+    from resonance.plugin_repository import PluginRepository
     from resonance.streaming.server import StreamingServer
 
 logger = logging.getLogger(__name__)
@@ -34,6 +41,9 @@ _music_library: MusicLibrary | None = None
 _player_registry: PlayerRegistry | None = None
 _playlist_manager: PlaylistManager | None = None
 _streaming_server: StreamingServer | None = None
+_plugin_manager: PluginManager | None = None
+_plugin_installer: PluginInstaller | None = None
+_plugin_repository: PluginRepository | None = None
 
 
 def register_api_routes(
@@ -42,6 +52,9 @@ def register_api_routes(
     player_registry: PlayerRegistry,
     playlist_manager: PlaylistManager | None = None,
     streaming_server: StreamingServer | None = None,
+    plugin_manager: PluginManager | None = None,
+    plugin_installer: PluginInstaller | None = None,
+    plugin_repository: PluginRepository | None = None,
 ) -> None:
     """
     Register API routes with the FastAPI app.
@@ -54,11 +67,116 @@ def register_api_routes(
         streaming_server: Optional StreamingServer for start_offset lookup
     """
     global _music_library, _player_registry, _playlist_manager, _streaming_server
+    global _plugin_manager, _plugin_installer, _plugin_repository
     _music_library = music_library
     _player_registry = player_registry
     _playlist_manager = playlist_manager
     _streaming_server = streaming_server
+    _plugin_manager = plugin_manager
+    _plugin_installer = plugin_installer
+    _plugin_repository = plugin_repository
     app.include_router(router)
+
+
+def _require_plugin_manager() -> PluginManager:
+    if _plugin_manager is None:
+        raise HTTPException(status_code=503, detail="Plugin manager not initialized")
+    return _plugin_manager
+
+
+def _require_plugin_installer() -> PluginInstaller:
+    if _plugin_installer is None:
+        raise HTTPException(status_code=503, detail="Plugin installer not initialized")
+    return _plugin_installer
+
+
+def _require_plugin_repository() -> PluginRepository:
+    if _plugin_repository is None:
+        raise HTTPException(status_code=503, detail="Plugin repository not initialized")
+    return _plugin_repository
+
+
+def _settings_path_for(plugin_name: str) -> Path:
+    return Path("data/plugins") / plugin_name / "settings.json"
+
+
+def _load_settings_from_disk(manifest: PluginManifest) -> dict[str, Any]:
+    values = {definition.key: definition.default for definition in manifest.settings_defs}
+    path = _settings_path_for(manifest.name)
+    if not path.is_file():
+        return values
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        for definition in manifest.settings_defs:
+            if definition.key not in payload:
+                continue
+            value = payload[definition.key]
+            ok, _ = definition.validate(value)
+            if ok:
+                values[definition.key] = value
+    except Exception as exc:
+        logger.warning("Failed to load plugin settings for %s: %s", manifest.name, exc)
+    return values
+
+
+def _save_settings_to_disk(manifest: PluginManifest, values: dict[str, Any]) -> None:
+    path = _settings_path_for(manifest.name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {"_version": 1, "_plugin_version": manifest.version}
+    for definition in manifest.settings_defs:
+        payload[definition.key] = values.get(definition.key, definition.default)
+    tmp = path.with_suffix(".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+        tmp.replace(path)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _parse_typed_value(definition: SettingDefinition, raw: Any) -> Any:
+    if definition.type == "int":
+        if isinstance(raw, int) and not isinstance(raw, bool):
+            return raw
+        return int(str(raw))
+    if definition.type == "float":
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            return float(raw)
+        return float(str(raw))
+    if definition.type == "bool":
+        if isinstance(raw, bool):
+            return raw
+        text = str(raw).strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+        raise ValueError(f"Invalid boolean value for '{definition.key}': {raw}")
+    if definition.type in {"string", "select"}:
+        return str(raw)
+    return raw
+
+
+def _mask_secret(value: Any) -> Any:
+    if not isinstance(value, str):
+        return "****" if value is not None else value
+    if not value:
+        return value
+    if len(value) <= 4:
+        return "*" * len(value)
+    return "*" * max(4, len(value) - 4) + value[-4:]
+
+
+def _mask_values(definitions: tuple[SettingDefinition, ...], values: dict[str, Any]) -> dict[str, Any]:
+    masked = dict(values)
+    for definition in definitions:
+        if definition.secret:
+            masked[definition.key] = _mask_secret(masked.get(definition.key))
+    return masked
 
 
 # =============================================================================
@@ -80,6 +198,233 @@ async def server_status() -> dict[str, Any]:
         "players_connected": len(players),
         "library_initialized": _music_library.initialized,
         "playlist_manager_available": _playlist_manager is not None,
+    }
+
+
+# =============================================================================
+# Plugins
+# =============================================================================
+
+
+@router.get("/api/plugins")
+async def list_plugins() -> dict[str, Any]:
+    manager = _require_plugin_manager()
+    plugins = manager.list_plugin_info()
+    return {
+        "count": len(plugins),
+        "plugins": plugins,
+        "restart_required": manager.restart_required,
+    }
+
+
+@router.get("/api/plugins/{plugin_name}/settings")
+async def get_plugin_settings(plugin_name: str) -> dict[str, Any]:
+    manager = _require_plugin_manager()
+    manifest = manager.get_manifest(plugin_name)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
+
+    values = _load_settings_from_disk(manifest)
+    return {
+        "plugin_name": plugin_name,
+        "definitions": [definition.to_dict() for definition in manifest.settings_defs],
+        "values": _mask_values(manifest.settings_defs, values),
+    }
+
+
+@router.put("/api/plugins/{plugin_name}/settings")
+async def update_plugin_settings(plugin_name: str, request: Request) -> dict[str, Any]:
+    manager = _require_plugin_manager()
+    manifest = manager.get_manifest(plugin_name)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+
+    current_values = _load_settings_from_disk(manifest)
+    defs_by_key = {definition.key: definition for definition in manifest.settings_defs}
+    changed_keys: list[str] = []
+    restart_required = False
+
+    try:
+        for key, raw_value in body.items():
+            definition = defs_by_key.get(key)
+            if definition is None:
+                raise KeyError(key)
+            typed_value = _parse_typed_value(definition, raw_value)
+            ok, error = definition.validate(typed_value)
+            if not ok:
+                raise ValueError(error)
+            if current_values.get(key, definition.default) != typed_value:
+                changed_keys.append(key)
+                if definition.restart_required:
+                    restart_required = True
+            current_values[key] = typed_value
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown setting for plugin '{plugin_name}': {exc}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    _save_settings_to_disk(manifest, current_values)
+    plugin_ctx = manager.get_context(plugin_name)
+    if plugin_ctx is not None and changed_keys:
+        try:
+            plugin_ctx.set_settings({key: current_values[key] for key in changed_keys})
+        except Exception:
+            pass
+
+    if restart_required:
+        manager.mark_restart_required()
+
+    return {
+        "plugin_name": plugin_name,
+        "updated": sorted(changed_keys),
+        "restart_required": restart_required,
+        "definitions": [definition.to_dict() for definition in manifest.settings_defs],
+        "values": _mask_values(manifest.settings_defs, current_values),
+    }
+
+
+@router.post("/api/plugins/{plugin_name}/enable")
+async def enable_plugin(plugin_name: str) -> dict[str, Any]:
+    manager = _require_plugin_manager()
+    if manager.get_manifest(plugin_name) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
+    manager.set_plugin_enabled(plugin_name, True)
+    return {
+        "name": plugin_name,
+        "state": manager.get_plugin_state(plugin_name),
+        "restart_required": manager.restart_required,
+    }
+
+
+@router.post("/api/plugins/{plugin_name}/disable")
+async def disable_plugin(plugin_name: str) -> dict[str, Any]:
+    manager = _require_plugin_manager()
+    if manager.get_manifest(plugin_name) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
+    manager.set_plugin_enabled(plugin_name, False)
+    return {
+        "name": plugin_name,
+        "state": manager.get_plugin_state(plugin_name),
+        "restart_required": manager.restart_required,
+    }
+
+
+@router.post("/api/plugins/install")
+async def install_plugin(request: Request) -> dict[str, Any]:
+    manager = _require_plugin_manager()
+    installer = _require_plugin_installer()
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+    url = body.get("url")
+    sha256 = body.get("sha256")
+    if not isinstance(url, str) or not isinstance(sha256, str):
+        raise HTTPException(status_code=400, detail="Request body must include 'url' and 'sha256'")
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            zip_data = response.content
+        plugin_name = installer.install_from_zip(zip_data, sha256)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Install failed: {exc}")
+
+    manager.state_manager.set_enabled(plugin_name, True)
+    manager.mark_restart_required()
+    await manager.discover()
+
+    return {
+        "name": plugin_name,
+        "installed": True,
+        "restart_required": True,
+    }
+
+
+@router.post("/api/plugins/{plugin_name}/uninstall")
+async def uninstall_plugin(plugin_name: str) -> dict[str, Any]:
+    manager = _require_plugin_manager()
+    installer = _require_plugin_installer()
+
+    if manager.is_core_plugin(plugin_name):
+        raise HTTPException(status_code=400, detail=f"Core plugin cannot be uninstalled: {plugin_name}")
+    if not installer.uninstall(plugin_name):
+        raise HTTPException(status_code=404, detail=f"Plugin not installed: {plugin_name}")
+
+    manager.mark_restart_required()
+    await manager.discover()
+    return {
+        "name": plugin_name,
+        "uninstalled": True,
+        "restart_required": True,
+    }
+
+
+@router.get("/api/plugins/repository")
+async def get_repository(force_refresh: bool = False) -> dict[str, Any]:
+    manager = _require_plugin_manager()
+    repository = _require_plugin_repository()
+
+    available = await repository.fetch_available(force_refresh=force_refresh)
+    installed = {manifest.name: manifest.version for manifest in manager.manifests}
+    core_plugins = {manifest.name for manifest in manager.manifests if manifest.plugin_type == "core"}
+    compared = repository.compare_with_installed(available, installed, core_plugins)
+    return {"count": len(compared), "plugins": compared}
+
+
+@router.post("/api/plugins/install-from-repo")
+async def install_from_repository(request: Request) -> dict[str, Any]:
+    manager = _require_plugin_manager()
+    installer = _require_plugin_installer()
+    repository = _require_plugin_repository()
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+    plugin_name = body.get("name")
+    if not isinstance(plugin_name, str) or not plugin_name.strip():
+        raise HTTPException(status_code=400, detail="Request body must include 'name'")
+
+    if manager.is_core_plugin(plugin_name):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Core plugin cannot be installed from repository: {plugin_name}",
+        )
+
+    try:
+        available = await repository.fetch_available()
+        entry = next((item for item in available if item.name == plugin_name), None)
+        if entry is None:
+            raise HTTPException(status_code=404, detail=f"Plugin not found in repository: {plugin_name}")
+
+        compatible, reason = repository.check_compatible(entry)
+        if not compatible:
+            raise HTTPException(status_code=400, detail=reason)
+
+        zip_data = await repository.download_plugin(entry)
+        installed_name = installer.install_from_zip(zip_data, entry.sha256)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Install from repository failed: {exc}")
+
+    manager.state_manager.set_enabled(installed_name, True)
+    manager.mark_restart_required()
+    await manager.discover()
+
+    return {
+        "name": installed_name,
+        "version": entry.version,
+        "installed": True,
+        "restart_required": True,
     }
 
 

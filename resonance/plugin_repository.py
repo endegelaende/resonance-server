@@ -7,6 +7,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import resonance
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_REPOSITORY_URL = "https://endegelaende.github.io/resonance-community-plugins/repository/index.json"
@@ -167,12 +169,15 @@ class PluginRepository:
                 and not is_core
                 and self._version_gt(entry.version, installed_version)
             )
+            compatible, incompatible_reason = self.check_compatible(entry)
             info = entry.to_dict()
             info["installed_version"] = installed_version
             info["update_available"] = update_available
             info["is_core"] = is_core
-            info["can_install"] = not is_core and installed_version is None
-            info["can_update"] = update_available
+            info["compatible"] = compatible
+            info["incompatible_reason"] = incompatible_reason
+            info["can_install"] = compatible and not is_core and installed_version is None
+            info["can_update"] = compatible and update_available
             result.append(info)
         return result
 
@@ -184,6 +189,27 @@ class PluginRepository:
             response = await client.get(entry.url)
             response.raise_for_status()
             return response.content
+
+    @staticmethod
+    def check_compatible(entry: RepositoryEntry) -> tuple[bool, str]:
+        """Check whether a repository plugin is compatible with this server.
+
+        Returns:
+            A ``(compatible, reason)`` tuple.  *compatible* is ``True`` when
+            the plugin can be installed; *reason* contains a human-readable
+            explanation when it cannot.
+        """
+        required = entry.min_resonance_version.strip()
+        if not required:
+            return True, ""
+
+        server_version = resonance.__version__
+        if PluginRepository._version_gt(required, server_version):
+            return False, (
+                f"Plugin requires Resonance >= {required}, "
+                f"but this server is {server_version}"
+            )
+        return True, ""
 
     @staticmethod
     def _version_gt(a: str, b: str) -> bool:

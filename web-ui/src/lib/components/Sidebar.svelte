@@ -9,6 +9,7 @@
     Users,
     X,
     Radio,
+    Puzzle,
   } from "lucide-svelte";
 
   // Navigation items configuration
@@ -28,6 +29,12 @@
   ] as const;
 
   const secondaryNavItems = [
+    {
+      id: "plugins",
+      label: "Plugins",
+      icon: Puzzle,
+      view: "plugins" as View,
+    },
     {
       id: "settings",
       label: "Settings",
