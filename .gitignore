@@ -74,6 +74,7 @@ audiotest/
 artifacts/
 docs/dev/
 data/
+resonance.toml
 
 # === Community Plugin Repo (separate git repo) ===
 community-repo/
