@@ -119,6 +119,12 @@ def parse_args() -> argparse.Namespace:
              "[security] auth_password_hash, then exit.",
     )
 
+    parser.add_argument(
+        "--outgoing-frame-diag",
+        action="store_true",
+        help="Enable 'outgoing frame diagnostic' output in stderr even if the slimproto logger is not set to DEBUG",
+    )
+
     return parser.parse_args()
 
 
@@ -142,6 +148,8 @@ def _build_cli_overrides(args: argparse.Namespace) -> dict[str, object]:
         overrides["cli_port"] = args.cli_port
     if args.cors_origins is not None:
         overrides["cors_origins"] = args.cors_origins
+    if args.outgoing_frame_diag is not None:
+        overrides["outgoing_frame_diag"] = args.outgoing_frame_diag
 
     return overrides
 
@@ -198,6 +206,11 @@ def main() -> int:
 
     # Load settings: TOML config + CLI overrides
     cli_overrides = _build_cli_overrides(args)
+
+    outgoing_frame_diag = cli_overrides.pop('outgoing_frame_diag', None)
+    if outgoing_frame_diag is not None:
+        from resonance.protocol import slimproto
+        slimproto.OUTGOING_FRAME_DEBUG = outgoing_frame_diag
 
     try:
         settings = load_settings(
