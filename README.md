@@ -61,7 +61,7 @@
 git clone https://github.com/endegelaende/resonance-server.git
 cd resonance-server
 python3 -m venv .venv
-.venv/bin/python -m pip install mutagen aiosqlite fastapi uvicorn
+.venv/bin/python -m pip install mutagen aiosqlite fastapi uvicorn httpx
 .venv/bin/python -m resonance
 ```
 
@@ -71,7 +71,7 @@ python3 -m venv .venv
 git clone https://github.com/endegelaende/resonance-server.git
 cd resonance-server
 python -m venv .venv
-.venv\Scripts\python.exe -m pip install mutagen aiosqlite fastapi uvicorn
+.venv\Scripts\python.exe -m pip install mutagen aiosqlite fastapi uvicorn httpx
 .venv\Scripts\python.exe -m resonance
 ```
 
@@ -189,12 +189,14 @@ Go to https://github.com/endegelaende/resonance-server → green **Code** button
 
 ### Python Dependencies
 
-| Package     | Purpose                                              |
-| ----------- | ---------------------------------------------------- |
-| `mutagen`   | Read audio file metadata (tags, duration, cover art) |
-| `aiosqlite` | Async SQLite for the music library database          |
-| `fastapi`   | Web framework for JSON-RPC, REST API, streaming      |
-| `uvicorn`   | ASGI server that runs FastAPI                        |
+| Package     | Purpose                                               |
+|-------------|-------------------------------------------------------|
+| `mutagen`   | Read audio file metadata (tags, duration, cover art)  |
+| `aiosqlite` | Async SQLite for the music library database           |
+| `fastapi`   | Web framework for JSON-RPC, REST API, streaming       |
+| `uvicorn`   | ASGI server that runs FastAPI                         |
+| `httpx`     | Fully featured HTTP client for Python 3               |
+
 
 ### Optional Dependencies
 
