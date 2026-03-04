@@ -1056,6 +1056,16 @@ async def put_settings(request: Request) -> dict[str, Any]:
         warnings.append(f"Settings applied in memory but could not be saved to disk: {exc}")
         config_path = None
 
+    # Sync music_folders to the library DB so the scanner picks them up.
+    # Without this, changing music_folders via Settings only writes to the
+    # TOML file but the scanner reads folders from the DB — see issue #7.
+    if "music_folders" in updates and _music_library is not None:
+        try:
+            await _music_library.set_music_folders(settings.music_folders)
+        except Exception as exc:
+            logger.error("Failed to sync music_folders to library DB: %s", exc)
+            warnings.append(f"Music folders saved to config but failed to sync to library: {exc}")
+
     return {
         "settings": settings.to_dict(),
         "warnings": warnings,
