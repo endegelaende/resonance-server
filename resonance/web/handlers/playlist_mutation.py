@@ -88,6 +88,15 @@ async def _playlist_add(
 
     playlist.add(track)
 
+    # Publish playlist event so Cometd/Web-UI see the change immediately.
+    await event_bus.publish(
+        PlayerPlaylistEvent(
+            player_id=ctx.player_id,
+            action="add",
+            count=len(playlist),
+        )
+    )
+
     return {"count": len(playlist)}
 
 
@@ -122,6 +131,15 @@ async def _playlist_insert(
         return {"error": f"Track not found: {track_ref}"}
 
     playlist.insert(position, track)
+
+    # Publish playlist event so Cometd/Web-UI see the change immediately.
+    await event_bus.publish(
+        PlayerPlaylistEvent(
+            player_id=ctx.player_id,
+            action="insert",
+            count=len(playlist),
+        )
+    )
 
     return {"count": len(playlist)}
 
@@ -286,6 +304,17 @@ async def _playlist_clear(
         if hasattr(player, "flush"):
             await player.flush()
 
+    # Publish playlist event so Cometd/Web-UI see the change immediately.
+    # Without this, JiveLite/jivelite-py never receive a status update after
+    # clearing the playlist and the UI stays stale.
+    await event_bus.publish(
+        PlayerPlaylistEvent(
+            player_id=ctx.player_id,
+            action="clear",
+            count=0,
+        )
+    )
+
     return {"count": 0}
 
 
@@ -313,6 +342,16 @@ async def _playlist_move(
         from_idx = int(params[2])
         to_idx = int(params[3])
         playlist.move(from_idx, to_idx)
+
+        # Publish playlist event so Cometd/Web-UI see the change immediately.
+        await event_bus.publish(
+            PlayerPlaylistEvent(
+                player_id=ctx.player_id,
+                action="move",
+                count=len(playlist),
+            )
+        )
+
         return {"count": len(playlist)}
     except (ValueError, TypeError, IndexError) as e:
         return {"error": str(e)}
@@ -348,12 +387,21 @@ async def _playlist_shuffle(
     try:
         value = int(params[2])
         playlist.set_shuffle(value)
-        return {"_shuffle": playlist.shuffle_mode.value}
     except (ValueError, TypeError):
         # Toggle
         new_value = 0 if playlist.shuffle_mode.value else 1
         playlist.set_shuffle(new_value)
-        return {"_shuffle": playlist.shuffle_mode.value}
+
+    # Publish playlist event so Cometd/Web-UI see the change immediately.
+    await event_bus.publish(
+        PlayerPlaylistEvent(
+            player_id=ctx.player_id,
+            action="shuffle",
+            count=len(playlist),
+        )
+    )
+
+    return {"_shuffle": playlist.shuffle_mode.value}
 
 
 async def _playlist_repeat(
@@ -386,9 +434,19 @@ async def _playlist_repeat(
     try:
         value = int(params[2])
         playlist.set_repeat(value)
-        return {"_repeat": playlist.repeat_mode.value}
     except (ValueError, TypeError):
         return {"error": f"Invalid repeat value: {params[2]}"}
+
+    # Publish playlist event so Cometd/Web-UI see the change immediately.
+    await event_bus.publish(
+        PlayerPlaylistEvent(
+            player_id=ctx.player_id,
+            action="repeat",
+            count=len(playlist),
+        )
+    )
+
+    return {"_repeat": playlist.repeat_mode.value}
 
 
 # =============================================================================
