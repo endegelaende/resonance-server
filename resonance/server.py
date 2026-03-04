@@ -6,6 +6,7 @@ import os
 import signal
 import uuid
 from pathlib import Path
+from typing import Any
 
 from resonance.content_provider import ContentProviderRegistry
 from resonance.core.alarm_runtime import AlarmRuntime
@@ -394,6 +395,7 @@ class ResonanceServer:
             command_unregister=unregister_command,
             route_register=lambda r: self.web_server.app.include_router(r) if self.web_server else None,
             content_registry=self.content_registry,
+            server_info=self.server_info,
         )
 
         # Notify listeners that the server is fully operational
@@ -495,6 +497,18 @@ class ResonanceServer:
     def is_running(self) -> bool:
         """Check if the server is currently running."""
         return self._running
+
+    @property
+    def server_info(self) -> dict[str, Any]:
+        """Networking info about this server instance (host + port).
+
+        Passed to ``PluginContext.server_info`` so plugins that spawn
+        external processes (e.g. squeeze2raop) know where to connect.
+        """
+        return {
+            "host": self.host,
+            "port": self.port,
+        }
 
     @property
     def connected_players(self) -> int:

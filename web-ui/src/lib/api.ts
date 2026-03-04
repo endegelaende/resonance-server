@@ -330,7 +330,7 @@ interface JsonRpcResponse<T = unknown> {
 // =============================================================================
 
 class ResonanceAPI {
-  private baseUrl: string;
+  protected readonly baseUrl: string;
   private requestId = 0;
 
   constructor(baseUrl = "") {

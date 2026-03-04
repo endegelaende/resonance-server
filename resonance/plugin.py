@@ -352,6 +352,7 @@ class PluginContext:
         data_dir: Path | None = None,
         settings_defs: tuple[SettingDefinition, ...] = (),
         plugin_version: str = "unknown",
+        server_info: dict[str, Any] | None = None,
     ) -> None:
         self.plugin_id = plugin_id
         """Unique identifier for this plugin (matches manifest *name*)."""
@@ -370,6 +371,15 @@ class PluginContext:
 
         self.data_dir: Path = data_dir or Path(f"data/plugins/{plugin_id}")
         """Per-plugin data directory (created automatically if needed)."""
+
+        self.server_info: dict[str, Any] = server_info or {}
+        """Networking info about the server instance (host, port).
+
+        Plugins that need to know the server's listen address (e.g. to
+        pass it to an external subprocess) can read ``ctx.server_info``
+        which contains at least ``{"host": …, "port": …}`` when
+        available.
+        """
 
         # Internal callbacks wired by PluginManager ---------------------------
         self._command_register = _command_register

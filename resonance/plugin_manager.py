@@ -226,6 +226,7 @@ class PluginManager:
         command_unregister: Callable[[str], None] | None = None,
         route_register: Callable[[APIRouter], None] | None = None,
         content_registry: ContentProviderRegistry | None = None,
+        server_info: dict[str, Any] | None = None,
     ) -> int:
         """Call setup() on every loaded and enabled plugin."""
         started = 0
@@ -251,6 +252,7 @@ class PluginManager:
                 settings_defs=loaded.manifest.settings_defs,
                 plugin_version=loaded.manifest.version,
                 data_dir=Path(f"data/plugins/{name}"),
+                server_info=server_info,
             )
             loaded.context = ctx
 
