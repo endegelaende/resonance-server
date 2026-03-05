@@ -32,6 +32,7 @@ from resonance.web.security import (
     MAX_QUERY_START,
     AuthMiddleware,
     RateLimitMiddleware,
+    SecurityHeadersMiddleware,
     _TokenBucket,
     clamp_paging,
     clamp_playlist_index,
@@ -1011,3 +1012,217 @@ class TestPlaylistPathTraversal:
         result = await _resolve_track(ctx, "/music/album/track.mp3", {})
         # Just verify it didn't raise; result is None because track not in DB
         assert result is None
+
+
+# =============================================================================
+# Security Headers Middleware Tests (C5)
+# =============================================================================
+
+
+class TestSecurityHeadersMiddleware:
+    """Tests for SecurityHeadersMiddleware (CSP + hardening headers)."""
+
+    async def test_health_endpoint_has_security_headers(
+        self,
+        registry: PlayerRegistry,
+        library: MusicLibrary,
+    ) -> None:
+        """The /health endpoint is exempt — no security headers added."""
+        server = WebServer(player_registry=registry, music_library=library)
+        transport = ASGITransport(app=server.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/health")
+            assert resp.status_code == 200
+            # /health is exempt — should NOT have CSP
+            assert "Content-Security-Policy" not in resp.headers
+
+    async def test_api_endpoint_has_security_headers(
+        self,
+        registry: PlayerRegistry,
+        library: MusicLibrary,
+    ) -> None:
+        """Regular API endpoints (not under /api/plugins/) should get headers."""
+        server = WebServer(player_registry=registry, music_library=library)
+        transport = ASGITransport(app=server.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/status")
+            assert resp.status_code == 200
+            assert "Content-Security-Policy" in resp.headers
+            assert "X-Content-Type-Options" in resp.headers
+            assert "X-Frame-Options" in resp.headers
+            assert "Referrer-Policy" in resp.headers
+            assert "Permissions-Policy" in resp.headers
+            assert "X-XSS-Protection" in resp.headers
+
+    async def test_csp_policy_content(
+        self,
+        registry: PlayerRegistry,
+        library: MusicLibrary,
+    ) -> None:
+        """CSP header should contain expected directives."""
+        server = WebServer(player_registry=registry, music_library=library)
+        transport = ASGITransport(app=server.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/status")
+            csp = resp.headers["Content-Security-Policy"]
+            assert "default-src 'none'" in csp
+            assert "script-src 'self'" in csp
+            assert "style-src 'self'" in csp
+            assert "img-src 'self' data:" in csp
+            assert "font-src 'self'" in csp
+            assert "connect-src 'self'" in csp
+            assert "frame-ancestors 'none'" in csp
+
+    async def test_x_frame_options_deny(
+        self,
+        registry: PlayerRegistry,
+        library: MusicLibrary,
+    ) -> None:
+        """X-Frame-Options should be DENY to prevent clickjacking."""
+        server = WebServer(player_registry=registry, music_library=library)
+        transport = ASGITransport(app=server.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/status")
+            assert resp.headers["X-Frame-Options"] == "DENY"
+
+    async def test_x_content_type_nosniff(
+        self,
+        registry: PlayerRegistry,
+        library: MusicLibrary,
+    ) -> None:
+        """X-Content-Type-Options should be nosniff."""
+        server = WebServer(player_registry=registry, music_library=library)
+        transport = ASGITransport(app=server.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/status")
+            assert resp.headers["X-Content-Type-Options"] == "nosniff"
+
+    async def test_referrer_policy(
+        self,
+        registry: PlayerRegistry,
+        library: MusicLibrary,
+    ) -> None:
+        """Referrer-Policy should limit referrer leakage."""
+        server = WebServer(player_registry=registry, music_library=library)
+        transport = ASGITransport(app=server.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/status")
+            assert resp.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+
+    async def test_permissions_policy(
+        self,
+        registry: PlayerRegistry,
+        library: MusicLibrary,
+    ) -> None:
+        """Permissions-Policy should disable unnecessary browser APIs."""
+        server = WebServer(player_registry=registry, music_library=library)
+        transport = ASGITransport(app=server.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/status")
+            pp = resp.headers["Permissions-Policy"]
+            assert "camera=()" in pp
+            assert "microphone=()" in pp
+            assert "geolocation=()" in pp
+
+    async def test_xss_protection_disabled(
+        self,
+        registry: PlayerRegistry,
+        library: MusicLibrary,
+    ) -> None:
+        """X-XSS-Protection should be 0 (legacy auditor disabled, CSP supersedes)."""
+        server = WebServer(player_registry=registry, music_library=library)
+        transport = ASGITransport(app=server.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/status")
+            assert resp.headers["X-XSS-Protection"] == "0"
+
+    async def test_jsonrpc_exempt(
+        self,
+        registry: PlayerRegistry,
+        library: MusicLibrary,
+    ) -> None:
+        """JSON-RPC endpoints should be exempt from security headers."""
+        server = WebServer(player_registry=registry, music_library=library)
+        transport = ASGITransport(app=server.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/jsonrpc.js", json={
+                "id": 1, "method": "slim.request",
+                "params": ["-", ["serverstatus", 0, 10]],
+            })
+            assert resp.status_code == 200
+            assert "Content-Security-Policy" not in resp.headers
+
+    async def test_stream_path_exempt(
+        self,
+        registry: PlayerRegistry,
+        library: MusicLibrary,
+    ) -> None:
+        """Stream paths should be exempt from security headers."""
+        server = WebServer(player_registry=registry, music_library=library)
+        transport = ASGITransport(app=server.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # /stream won't actually work without a streaming server,
+            # but the middleware exemption is checked before routing.
+            resp = await client.get("/stream/test.mp3")
+            # Even if it 404s, the security headers should NOT be present
+            assert "Content-Security-Policy" not in resp.headers
+
+    async def test_plugin_events_exempt(
+        self,
+        registry: PlayerRegistry,
+        library: MusicLibrary,
+    ) -> None:
+        """Plugin API paths (/api/plugins/) should be exempt (SSE streams)."""
+        server = WebServer(player_registry=registry, music_library=library)
+        transport = ASGITransport(app=server.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/plugins/ui-registry")
+            # Status may be 503 if no plugin manager — that's fine;
+            # we only care that the middleware did NOT add CSP headers.
+            assert "Content-Security-Policy" not in resp.headers
+
+    async def test_disabled_middleware_adds_no_headers(
+        self,
+        registry: PlayerRegistry,
+        library: MusicLibrary,
+    ) -> None:
+        """When enabled=False, no security headers should be added."""
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.add_middleware(SecurityHeadersMiddleware, enabled=False)
+
+        @app.get("/test")
+        async def _test_endpoint():
+            return {"ok": True}
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/test")
+            assert resp.status_code == 200
+            assert "Content-Security-Policy" not in resp.headers
+            assert "X-Frame-Options" not in resp.headers
+            assert "X-Content-Type-Options" not in resp.headers
+
+    async def test_enabled_middleware_on_custom_app(
+        self,
+        registry: PlayerRegistry,
+        library: MusicLibrary,
+    ) -> None:
+        """When enabled=True on a standalone app, headers should be added."""
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.add_middleware(SecurityHeadersMiddleware, enabled=True)
+
+        @app.get("/test")
+        async def _test_endpoint():
+            return {"ok": True}
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/test")
+            assert resp.status_code == 200
+            assert "Content-Security-Policy" in resp.headers
+            assert "X-Frame-Options" in resp.headers
+            assert resp.headers["X-Content-Type-Options"] == "nosniff"

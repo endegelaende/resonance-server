@@ -1,6 +1,98 @@
 [plugin]
 name = "podcast"
-version = "1.0.0"
-description = "Podcasts — browse, search, subscribe, and stream podcast episodes with resume support and full Jive menu integration"
+version = "2.0.0"
+description = "Podcasts — browse, search, subscribe, and stream podcast episodes with resume support, What's New aggregation, OPML import/export, multiple search providers, skip controls, progress tracking, and full Jive menu integration"
 author = "Resonance"
 min_resonance_version = "0.1.0"
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+
+[settings.skip_back_seconds]
+type = "int"
+label = "Skip Back (seconds)"
+description = "Number of seconds to skip backward during podcast playback. Matches the rewind button on Jive remotes."
+default = 15
+min = 5
+max = 120
+order = 10
+
+[settings.skip_forward_seconds]
+type = "int"
+label = "Skip Forward (seconds)"
+description = "Number of seconds to skip forward during podcast playback."
+default = 30
+min = 5
+max = 120
+order = 20
+
+[settings.search_provider]
+type = "select"
+label = "Search Provider"
+description = "Which podcast directory to use when searching for new podcasts."
+default = "podcastindex"
+options = ["podcastindex", "gpodder", "itunes"]
+order = 30
+
+[settings.new_since_days]
+type = "int"
+label = "What's New — Days"
+description = "Show episodes published within this many days in the What's New feed."
+default = 7
+min = 1
+max = 90
+order = 40
+
+[settings.max_new_episodes]
+type = "int"
+label = "What's New — Max Episodes"
+description = "Maximum number of episodes to show in the What's New aggregated feed."
+default = 50
+min = 10
+max = 500
+order = 50
+
+[settings.auto_mark_played_percent]
+type = "int"
+label = "Auto Mark Played (%)"
+description = "Automatically mark an episode as played when this percentage of the episode has been listened to. Set to 100 to disable auto-marking."
+default = 90
+min = 50
+max = 100
+order = 60
+
+[settings.feed_cache_ttl]
+type = "int"
+label = "Feed Cache (seconds)"
+description = "How long parsed RSS feeds are cached in memory before re-fetching. Lower values mean fresher data but more network requests."
+default = 600
+min = 60
+max = 7200
+order = 70
+
+[settings.max_recent]
+type = "int"
+label = "Max Recently Played"
+description = "Maximum number of recently played episodes to remember."
+default = 50
+min = 10
+max = 200
+order = 80
+
+[settings.auto_refresh_minutes]
+type = "int"
+label = "Auto-Refresh Interval (minutes)"
+description = "Background interval for refreshing subscribed feeds to detect new episodes. Set to 0 to disable auto-refresh."
+default = 60
+min = 0
+max = 1440
+order = 90
+
+[settings.default_playback_speed]
+type = "select"
+label = "Default Playback Speed"
+description = "Default playback speed for podcast episodes (hardware support varies)."
+default = "1.0"
+options = ["0.5", "0.75", "1.0", "1.25", "1.5", "1.75", "2.0"]
+order = 100

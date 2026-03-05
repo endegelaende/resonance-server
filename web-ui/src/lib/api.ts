@@ -263,6 +263,7 @@ export interface PluginInfo {
   type: "core" | "community";
   has_settings: boolean;
   can_uninstall: boolean;
+  ui_enabled: boolean;
 }
 
 export interface PluginSettingDefinition {
@@ -308,6 +309,30 @@ export interface RepositoryPlugin {
   incompatible_reason: string;
   can_install: boolean;
   can_update: boolean;
+}
+
+// ---- Plugin UI (Server-Driven UI) ----
+export interface PluginUIRegistryEntry {
+  id: string;
+  label: string;
+  icon: string;
+  path: string;
+}
+
+export interface PluginUIPage {
+  schema_version: string;
+  plugin_id: string;
+  title: string;
+  icon?: string;
+  refresh_interval?: number;
+  components: UIComponent[];
+}
+
+export interface UIComponent {
+  type: string;
+  props: Record<string, any>;
+  children?: UIComponent[];
+  fallback_text?: string;
 }
 
 // JSON-RPC types
@@ -1824,6 +1849,43 @@ class ResonanceAPI {
       `playlist_id:${playlistId}`,
       `newname:${newName}`,
     ]);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Plugin UI (Server-Driven UI)
+  // ---------------------------------------------------------------------------
+
+  async getPluginUIRegistry(): Promise<PluginUIRegistryEntry[]> {
+    const response = await fetch(`${this.baseUrl}/api/plugins/ui-registry`);
+    if (!response.ok) return [];
+    return response.json();
+  }
+
+  async getPluginUI(pluginId: string): Promise<PluginUIPage> {
+    const response = await fetch(
+      `${this.baseUrl}/api/plugins/${pluginId}/ui`,
+    );
+    if (!response.ok)
+      throw new Error(`Failed to load plugin UI: ${response.statusText}`);
+    return response.json();
+  }
+
+  async dispatchPluginAction(
+    pluginId: string,
+    action: string,
+    params: Record<string, any> = {},
+  ): Promise<any> {
+    const response = await fetch(
+      `${this.baseUrl}/api/plugins/${pluginId}/actions/${action}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(params),
+      },
+    );
+    if (!response.ok)
+      throw new Error(`Action failed: ${response.statusText}`);
+    return response.json();
   }
 }
 

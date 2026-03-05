@@ -1276,6 +1276,93 @@ await ctx.subscribe("player.*", _on_any_player_event)
 
 This is useful for monitoring or debug plugins.
 
+### Idea 6: UI Page in the Web UI (SDUI)
+
+Your plugin can have its own page in the web UI sidebar — no JavaScript
+required. You describe the UI as a Python data structure and the frontend
+renders it automatically.
+
+**1. Add `[ui]` to `plugin.toml`:**
+
+```toml
+[ui]
+enabled = true
+sidebar_label = "Now Playing Stats"
+sidebar_icon = "activity"
+```
+
+**2. Write a `get_ui()` function:**
+
+```python
+from resonance.ui import (
+    Page, Card, KeyValue, KVItem, StatusBadge, Button, Row, Table, TableColumn,
+)
+
+async def get_ui(ctx):
+    total = _store.total if _store else 0
+    recent = _store.entries[:5] if _store else []
+
+    components = [
+        Card(title="Statistics", children=[
+            StatusBadge(
+                label=f"{total} tracks played",
+                color="green" if total > 0 else "gray",
+            ),
+            KeyValue(items=[
+                KVItem("Total Played", str(total)),
+                KVItem("Recent Count", str(len(recent))),
+            ]),
+        ]),
+        Row(children=[
+            Button("Clear History", action="clear", style="danger", confirm=True),
+        ]),
+    ]
+
+    if recent:
+        components.append(Table(
+            title="Recent Tracks",
+            columns=[
+                TableColumn(key="player_id", label="Player"),
+                TableColumn(key="timestamp", label="Time"),
+                TableColumn(key="play_number", label="#"),
+            ],
+            rows=recent,
+        ))
+
+    return Page(
+        title="Now Playing Stats",
+        icon="activity",
+        refresh_interval=10,
+        components=components,
+    )
+```
+
+**3. Write a `handle_action()` function:**
+
+```python
+async def handle_action(action: str, params: dict) -> dict:
+    if action == "clear" and _store:
+        _store.clear()
+        return {"message": "History cleared"}
+    return {"error": f"Unknown action: {action}"}
+```
+
+**4. Register both in `setup()`:**
+
+```python
+async def setup(ctx):
+    # ... existing registrations ...
+    ctx.register_ui_handler(get_ui)
+    ctx.register_action_handler(handle_action)
+```
+
+Now "Now Playing Stats" appears in the sidebar. Clicking it shows your
+statistics card, recent tracks table, and a "Clear History" button — all
+rendered from JSON, no Svelte code needed.
+
+For the full SDUI widget reference, see
+[`PLUGIN_API.md` §19](PLUGIN_API.md#19-server-driven-ui-sdui).
+
 ---
 
 ## Checklist: Starting Your Own Plugin
@@ -1291,6 +1378,7 @@ When you want to build your own plugin (not the tutorial plugin):
 - [ ] Atomic save (write-to-tmp → rename)
 - [ ] Reset module-level state in `teardown()`
 - [ ] Check `playlist_manager` for `None`
+- [ ] Optional: `[ui]` section + `get_ui()` / `handle_action()` for a web UI page
 - [ ] Tests in `tests/test_<name>_plugin.py`
 - [ ] Start the server and test manually
 - [ ] `python -m pytest` — all tests must pass
@@ -1302,12 +1390,14 @@ When you want to build your own plugin (not the tutorial plugin):
 | Document | Content |
 |---|---|
 | [`PLUGINS.md`](PLUGINS.md) | General overview for all audiences |
-| [`PLUGIN_API.md`](PLUGIN_API.md) | Complete API reference |
+| [`PLUGIN_API.md`](PLUGIN_API.md) | Complete API reference (including §19 SDUI) |
+| [`dev/SDUI_ARCHITECTURE.md`](dev/SDUI_ARCHITECTURE.md) | SDUI architecture deep-dive (archived planning document) |
 | `plugins/example/` | Minimal template |
 | `plugins/favorites/` | Complete reference plugin (commands, menus, persistence) |
 | `plugins/radio/` | Reference ContentProvider plugin (radio-browser.info, remote streaming) |
 | `plugins/podcast/` | Reference ContentProvider plugin (RSS feeds, subscriptions, resume) |
+| `community-repo/plugins/raopbridge/` | Reference SDUI consumer (AirPlay bridge with UI page) |
 
 ---
 
-*Last updated: February 2026 (Podcast plugin reference added)*
+*Last updated: June 2025 (SDUI tutorial idea and references added)*

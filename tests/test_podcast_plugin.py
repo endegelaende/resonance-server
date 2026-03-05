@@ -33,8 +33,9 @@ from plugins.podcast.feed_parser import (
     strip_html,
 )
 from plugins.podcast.store import (
-    MAX_RECENT,
-    RESUME_THRESHOLD,
+    DEFAULT_MAX_RECENT,
+    DEFAULT_RESUME_THRESHOLD,
+    EpisodeProgress,
     PodcastStore,
     RecentEpisode,
     Subscription,
@@ -706,12 +707,12 @@ class TestPodcastStore:
 
     def test_resume_threshold_boundary(self, store: PodcastStore):
         # Exactly at threshold — should be cleared
-        store.set_resume_position("https://example.com/ep.mp3", RESUME_THRESHOLD - 1)
+        store.set_resume_position("https://example.com/ep.mp3", DEFAULT_RESUME_THRESHOLD - 1)
         assert store.get_resume_position("https://example.com/ep.mp3") == 0
 
         # Just above threshold — should be stored
-        store.set_resume_position("https://example.com/ep.mp3", RESUME_THRESHOLD)
-        assert store.get_resume_position("https://example.com/ep.mp3") == RESUME_THRESHOLD
+        store.set_resume_position("https://example.com/ep.mp3", DEFAULT_RESUME_THRESHOLD)
+        assert store.get_resume_position("https://example.com/ep.mp3") == DEFAULT_RESUME_THRESHOLD
 
     # -- Recently played -----------------------------------------------------
 
@@ -739,9 +740,9 @@ class TestPodcastStore:
         assert store.recent[1].title == "Episode 1"
 
     def test_record_played_max_limit(self, store: PodcastStore):
-        for i in range(MAX_RECENT + 10):
+        for i in range(DEFAULT_MAX_RECENT + 10):
             store.record_played(url=f"https://example.com/ep{i}.mp3", title=f"Ep {i}")
-        assert store.recent_count == MAX_RECENT
+        assert store.recent_count == DEFAULT_MAX_RECENT
 
     def test_record_played_timestamp(self, store: PodcastStore):
         before = time.time()
@@ -885,12 +886,15 @@ class TestPodcastProvider:
         try:
             mock_store = MagicMock()
             mock_store.recent_count = 0
+            mock_store.subscription_count = 0
+            mock_store.total_new_episodes = 0
+            mock_store.get_in_progress_episodes.return_value = []
             mock_store.subscriptions = []
             podcast_mod._store = mock_store
 
             provider = self._make_provider()
             items = await provider.browse("")
-            # Should have at least the search item
+            # Should have at least the search item and trending
             assert any(item.type == "search" for item in items)
         finally:
             podcast_mod._store = old_store
@@ -903,6 +907,9 @@ class TestPodcastProvider:
         try:
             mock_store = MagicMock()
             mock_store.recent_count = 0
+            mock_store.subscription_count = 1
+            mock_store.total_new_episodes = 0
+            mock_store.get_in_progress_episodes.return_value = []
             mock_store.subscriptions = [
                 Subscription(name="My Podcast", url="https://example.com/feed.xml", image="img.jpg"),
             ]
@@ -911,10 +918,11 @@ class TestPodcastProvider:
             provider = self._make_provider()
             items = await provider.browse("")
 
-            folder_items = [i for i in items if i.type == "folder"]
-            assert len(folder_items) == 1
-            assert folder_items[0].title == "My Podcast"
-            assert folder_items[0].url == "https://example.com/feed.xml"
+            # Filter to only subscription folders (exclude __whatsnew__, __trending__, etc.)
+            sub_items = [i for i in items if i.type == "folder" and not i.id.startswith("__")]
+            assert len(sub_items) == 1
+            assert sub_items[0].title == "My Podcast"
+            assert sub_items[0].url == "https://example.com/feed.xml"
         finally:
             podcast_mod._store = old_store
 
@@ -926,6 +934,9 @@ class TestPodcastProvider:
         try:
             mock_store = MagicMock()
             mock_store.recent_count = 3
+            mock_store.subscription_count = 0
+            mock_store.total_new_episodes = 0
+            mock_store.get_in_progress_episodes.return_value = []
             mock_store.subscriptions = []
             podcast_mod._store = mock_store
 
@@ -1123,6 +1134,8 @@ class TestJiveMenuBuilders:
         try:
             mock_store = MagicMock()
             mock_store.get_resume_position.return_value = 600  # 10 minutes in
+            mock_store.get_progress_percentage.return_value = 16.7
+            mock_store.is_played.return_value = False
             podcast_mod._store = mock_store
 
             from plugins.podcast import _build_jive_episode_item
@@ -1137,64 +1150,98 @@ class TestJiveMenuBuilders:
         finally:
             podcast_mod._store = old_store
 
-    def test_build_jive_episode_favorites_action(self):
+    def test_build_jive_episode_info_action(self):
         import plugins.podcast as podcast_mod
 
         old_store = podcast_mod._store
         try:
             mock_store = MagicMock()
             mock_store.get_resume_position.return_value = 0
+            mock_store.get_progress_percentage.return_value = 0.0
+            mock_store.is_played.return_value = False
             podcast_mod._store = mock_store
 
             from plugins.podcast import _build_jive_episode_item
 
             ep = self._make_episode()
             item = _build_jive_episode_item(ep)
-            assert item["actions"]["more"]["cmd"] == ["jivefavorites", "add"]
-            assert item["actions"]["more"]["params"]["title"] == "Test Episode"
+            assert item["actions"]["more"]["cmd"] == ["podcast", "info"]
+            assert item["actions"]["more"]["params"]["name"] == "Test Episode"
         finally:
             podcast_mod._store = old_store
 
     def test_build_jive_feed_item(self):
-        from plugins.podcast import _build_jive_feed_item
+        import plugins.podcast as podcast_mod
 
-        feed_data = {
-            "name": "Test Podcast",
-            "url": "https://example.com/feed.xml",
-            "image": "https://example.com/cover.jpg",
-            "author": "Test Author",
-        }
-        item = _build_jive_feed_item(feed_data)
-        assert item["text"] == "Test Podcast"
-        assert item["hasitems"] == 1
-        assert item["icon"] == "https://example.com/cover.jpg"
-        assert item["textkey"] == "Test Author"
-        assert item["actions"]["go"]["cmd"] == ["podcast", "items"]
-        assert item["actions"]["go"]["params"]["url"] == "https://example.com/feed.xml"
-        # Subscribe context menu
-        assert item["actions"]["more"]["cmd"] == ["podcast", "addshow"]
+        old_store = podcast_mod._store
+        try:
+            mock_store = MagicMock()
+            mock_store.is_subscribed.return_value = False
+            podcast_mod._store = mock_store
+
+            from plugins.podcast import _build_jive_feed_item
+
+            feed_data = {
+                "name": "Test Podcast",
+                "url": "https://example.com/feed.xml",
+                "image": "https://example.com/cover.jpg",
+                "author": "Test Author",
+            }
+            item = _build_jive_feed_item(feed_data)
+            assert item["text"] == "Test Podcast"
+            assert item["hasitems"] == 1
+            assert item["icon"] == "https://example.com/cover.jpg"
+            assert "Test Author" in item.get("textkey", "")
+            assert item["actions"]["go"]["cmd"] == ["podcast", "items"]
+            assert item["actions"]["go"]["params"]["url"] == "https://example.com/feed.xml"
+            # Info context menu
+            assert item["actions"]["more"]["cmd"] == ["podcast", "info"]
+        finally:
+            podcast_mod._store = old_store
 
     def test_build_jive_feed_item_no_image(self):
-        from plugins.podcast import _build_jive_feed_item
+        import plugins.podcast as podcast_mod
 
-        feed_data = {"name": "No Image", "url": "https://example.com/feed.xml"}
-        item = _build_jive_feed_item(feed_data)
-        assert "icon" not in item
+        old_store = podcast_mod._store
+        try:
+            mock_store = MagicMock()
+            mock_store.is_subscribed.return_value = False
+            podcast_mod._store = mock_store
+
+            from plugins.podcast import _build_jive_feed_item
+
+            feed_data = {"name": "No Image", "url": "https://example.com/feed.xml"}
+            item = _build_jive_feed_item(feed_data)
+            assert "icon" not in item
+        finally:
+            podcast_mod._store = old_store
 
     def test_build_jive_recent_item(self):
-        from plugins.podcast import _build_jive_recent_item
+        import plugins.podcast as podcast_mod
 
-        ep = RecentEpisode(
-            url="https://example.com/ep.mp3",
-            title="Recent Episode",
-            show="My Show",
-            image="cover.jpg",
-        )
-        item = _build_jive_recent_item(ep)
-        assert item["text"] == "Recent Episode"
-        assert item["type"] == "audio"
-        assert item["textkey"] == "My Show"
-        assert item["actions"]["play"]["params"]["url"] == "https://example.com/ep.mp3"
+        old_store = podcast_mod._store
+        try:
+            mock_store = MagicMock()
+            mock_store.get_resume_position.return_value = 0
+            mock_store.get_progress_percentage.return_value = 0.0
+            mock_store.is_played.return_value = False
+            podcast_mod._store = mock_store
+
+            from plugins.podcast import _build_jive_recent_item
+
+            ep = RecentEpisode(
+                url="https://example.com/ep.mp3",
+                title="Recent Episode",
+                show="My Show",
+                image="cover.jpg",
+            )
+            item = _build_jive_recent_item(ep)
+            assert item["text"] == "Recent Episode"
+            assert item["type"] == "audio"
+            assert "My Show" in item.get("textkey", "")
+            assert item["actions"]["play"]["params"]["url"] == "https://example.com/ep.mp3"
+        finally:
+            podcast_mod._store = old_store
 
 
 # =============================================================================
@@ -1210,6 +1257,8 @@ class TestCLIItemBuilders:
         try:
             mock_store = MagicMock()
             mock_store.get_resume_position.return_value = 0
+            mock_store.get_progress_percentage.return_value = 0.0
+            mock_store.is_played.return_value = False
             podcast_mod._store = mock_store
 
             from plugins.podcast import _build_cli_episode_item
@@ -1234,13 +1283,15 @@ class TestCLIItemBuilders:
         finally:
             podcast_mod._store = old_store
 
-    def test_build_cli_episode_item_with_resume(self):
+    def test_build_cli_episode_item_with_resume_and_progress(self):
         import plugins.podcast as podcast_mod
 
         old_store = podcast_mod._store
         try:
             mock_store = MagicMock()
             mock_store.get_resume_position.return_value = 300
+            mock_store.get_progress_percentage.return_value = 8.3
+            mock_store.is_played.return_value = False
             podcast_mod._store = mock_store
 
             from plugins.podcast import _build_cli_episode_item
@@ -1334,11 +1385,17 @@ class TestCmdPodcast:
         import plugins.podcast as podcast_mod
 
         old_store = podcast_mod._store
+        old_ctx = podcast_mod._ctx
         try:
             mock_store = MagicMock()
             mock_store.recent_count = 0
+            mock_store.subscription_count = 0
+            mock_store.total_new_episodes = 0
+            mock_store.get_in_progress_episodes.return_value = []
             mock_store.subscriptions = []
             podcast_mod._store = mock_store
+            podcast_mod._ctx = MagicMock()
+            podcast_mod._ctx.get_setting.return_value = "podcastindex"
 
             from plugins.podcast import cmd_podcast
 
@@ -1348,15 +1405,20 @@ class TestCmdPodcast:
             assert "count" in result
         finally:
             podcast_mod._store = old_store
+            podcast_mod._ctx = old_ctx
 
     @pytest.mark.asyncio
     async def test_dispatch_items(self):
         import plugins.podcast as podcast_mod
 
         old_store = podcast_mod._store
+        old_ctx = podcast_mod._ctx
         try:
             mock_store = MagicMock()
             mock_store.recent_count = 0
+            mock_store.subscription_count = 0
+            mock_store.total_new_episodes = 0
+            mock_store.get_in_progress_episodes.return_value = []
             mock_store.subscriptions = []
             podcast_mod._store = mock_store
 
@@ -1373,8 +1435,13 @@ class TestCmdPodcast:
         import plugins.podcast as podcast_mod
 
         old_store = podcast_mod._store
+        old_ctx = podcast_mod._ctx
         try:
-            podcast_mod._store = MagicMock()
+            mock_store = MagicMock()
+            mock_store.subscription_count = 0
+            podcast_mod._store = mock_store
+            podcast_mod._ctx = MagicMock()
+            podcast_mod._ctx.get_setting.return_value = "podcastindex"
 
             from plugins.podcast import cmd_podcast
 
@@ -1391,8 +1458,11 @@ class TestCmdPodcast:
         import plugins.podcast as podcast_mod
 
         old_store = podcast_mod._store
+        old_ctx = podcast_mod._ctx
         try:
-            podcast_mod._store = MagicMock()
+            mock_store = MagicMock()
+            mock_store.subscription_count = 0
+            podcast_mod._store = mock_store
 
             from plugins.podcast import cmd_podcast
 
@@ -1434,9 +1504,13 @@ class TestPodcastItems:
         import plugins.podcast as podcast_mod
 
         old_store = podcast_mod._store
+        old_ctx = podcast_mod._ctx
         try:
             mock_store = MagicMock()
             mock_store.recent_count = 2
+            mock_store.subscription_count = 2
+            mock_store.total_new_episodes = 0
+            mock_store.get_in_progress_episodes.return_value = []
             mock_store.subscriptions = [
                 Subscription(name="Podcast A", url="https://a.com/feed.xml", image="a.jpg"),
                 Subscription(name="Podcast B", url="https://b.com/feed.xml"),
@@ -1450,32 +1524,43 @@ class TestPodcastItems:
 
             assert "item_loop" in result
             items = result["item_loop"]
-            # Should have: search + recently played + 2 subscriptions
-            assert result["count"] == 4
+            # Should have: search + what's new + recently played + trending + 2 subscriptions = 6
+            assert result["count"] == 6
 
             # First item: search
             assert "input" in items[0]
 
-            # Second item: recently played
-            assert items[1]["text"] == "Recently Played"
+            # Second item: What's New
+            assert "What's New" in items[1]["text"]
+
+            # Third item: recently played
+            assert items[2]["text"] == "Recently Played"
+
+            # Fourth item: trending
+            assert items[3]["text"] == "Trending Podcasts"
 
             # Subscriptions
-            assert items[2]["text"] == "Podcast A"
-            assert items[3]["text"] == "Podcast B"
+            assert items[4]["text"] == "Podcast A"
+            assert items[5]["text"] == "Podcast B"
 
             # Base actions
             assert "base" in result
         finally:
             podcast_mod._store = old_store
+            podcast_mod._ctx = old_ctx
 
     @pytest.mark.asyncio
     async def test_items_root_cli_mode(self):
         import plugins.podcast as podcast_mod
 
         old_store = podcast_mod._store
+        old_ctx = podcast_mod._ctx
         try:
             mock_store = MagicMock()
             mock_store.recent_count = 0
+            mock_store.subscription_count = 2
+            mock_store.total_new_episodes = 0
+            mock_store.get_in_progress_episodes.return_value = []
             mock_store.subscriptions = [
                 Subscription(name="Test", url="https://example.com/feed.xml"),
             ]
@@ -1498,9 +1583,13 @@ class TestPodcastItems:
 
         old_store = podcast_mod._store
         old_cache = podcast_mod._feed_cache.copy()
+        old_ctx = podcast_mod._ctx
         try:
             mock_store = MagicMock()
             mock_store.get_resume_position.return_value = 0
+            mock_store.get_progress_percentage.return_value = 0.0
+            mock_store.is_played.return_value = False
+            mock_store.is_subscribed.return_value = True
             podcast_mod._store = mock_store
 
             # Pre-populate feed cache
@@ -1535,6 +1624,7 @@ class TestPodcastItems:
             assert items[0]["text"] == "Episode 1"
         finally:
             podcast_mod._store = old_store
+            podcast_mod._ctx = old_ctx
             podcast_mod._feed_cache.clear()
             podcast_mod._feed_cache.update(old_cache)
 
@@ -1543,8 +1633,13 @@ class TestPodcastItems:
         import plugins.podcast as podcast_mod
 
         old_store = podcast_mod._store
+        old_ctx = podcast_mod._ctx
         try:
             mock_store = MagicMock()
+            mock_store.subscription_count = 0
+            mock_store.get_resume_position.return_value = 0
+            mock_store.get_progress_percentage.return_value = 0.0
+            mock_store.is_played.return_value = False
             mock_store.recent = [
                 RecentEpisode(
                     url="https://example.com/ep.mp3",
@@ -1567,18 +1662,23 @@ class TestPodcastItems:
             assert result["item_loop"][0]["text"] == "Recent Ep"
         finally:
             podcast_mod._store = old_store
+            podcast_mod._ctx = old_ctx
 
     @pytest.mark.asyncio
     async def test_items_pagination(self):
         import plugins.podcast as podcast_mod
 
         old_store = podcast_mod._store
+        old_ctx = podcast_mod._ctx
         try:
             mock_store = MagicMock()
             mock_store.recent_count = 0
+            mock_store.subscription_count = 5
+            mock_store.total_new_episodes = 0
+            mock_store.get_in_progress_episodes.return_value = []
             mock_store.subscriptions = [
-                Subscription(name=f"Podcast {i}", url=f"https://example.com/feed{i}.xml")
-                for i in range(10)
+                Subscription(name=f"Sub {i}", url=f"https://example.com/feed{i}.xml")
+                for i in range(5)
             ]
             podcast_mod._store = mock_store
 
@@ -1587,8 +1687,8 @@ class TestPodcastItems:
             ctx = self._make_ctx()
             result = await _podcast_items(ctx, ["podcast", "items", 3, 5, "menu:1"])
 
-            # count is total (search + 10 subs = 11), but we get 5 items from offset 3
-            assert result["count"] == 11
+            # count is total: search + what's new + trending + 5 subs = 8
+            assert result["count"] == 8
             assert result["offset"] == 3
             assert len(result["item_loop"]) == 5
         finally:
@@ -1599,9 +1699,13 @@ class TestPodcastItems:
         import plugins.podcast as podcast_mod
 
         old_store = podcast_mod._store
+        old_ctx = podcast_mod._ctx
         try:
             mock_store = MagicMock()
             mock_store.recent_count = 0
+            mock_store.subscription_count = 0
+            mock_store.total_new_episodes = 0
+            mock_store.get_in_progress_episodes.return_value = []
             mock_store.subscriptions = []
             podcast_mod._store = mock_store
 
@@ -1610,8 +1714,8 @@ class TestPodcastItems:
             ctx = self._make_ctx()
             result = await _podcast_items(ctx, ["podcast", "items", 0, 100, "menu:1"])
 
-            # Just the search entry
-            assert result["count"] == 1
+            # Search + Trending = 2 items (no subscriptions → no What's New)
+            assert result["count"] == 2
         finally:
             podcast_mod._store = old_store
 
@@ -1622,6 +1726,7 @@ class TestPodcastItems:
         old_store = podcast_mod._store
         old_cache = podcast_mod._feed_cache.copy()
         old_client = podcast_mod._http_client
+        old_ctx = podcast_mod._ctx
         try:
             mock_store = MagicMock()
             mock_store.is_subscribed.return_value = False
@@ -1644,6 +1749,7 @@ class TestPodcastItems:
             podcast_mod._feed_cache.clear()
             podcast_mod._feed_cache.update(old_cache)
             podcast_mod._http_client = old_client
+            podcast_mod._ctx = old_ctx
 
 
 # =============================================================================
@@ -1660,8 +1766,11 @@ class TestPodcastSearch:
         import plugins.podcast as podcast_mod
 
         old_store = podcast_mod._store
+        old_ctx = podcast_mod._ctx
         try:
-            podcast_mod._store = MagicMock()
+            mock_store = MagicMock()
+            mock_store.is_subscribed.return_value = False
+            podcast_mod._store = mock_store
 
             from plugins.podcast import _podcast_search
 
@@ -1670,18 +1779,28 @@ class TestPodcastSearch:
             assert result["count"] == 0
         finally:
             podcast_mod._store = old_store
+            podcast_mod._ctx = old_ctx
 
     @pytest.mark.asyncio
     async def test_search_with_term(self):
         import plugins.podcast as podcast_mod
 
         old_store = podcast_mod._store
+        old_ctx = podcast_mod._ctx
         try:
-            podcast_mod._store = MagicMock()
+            mock_store = MagicMock()
+            mock_store.is_subscribed.return_value = False
+            podcast_mod._store = mock_store
+            podcast_mod._ctx = MagicMock()
+            podcast_mod._ctx.get_setting.return_value = "podcastindex"
 
-            with patch("plugins.podcast._search_podcastindex", return_value=[
-                {"name": "Found Podcast", "url": "https://example.com/feed.xml", "image": "img.jpg", "author": "Author"},
-            ]):
+            from plugins.podcast.providers import PodcastSearchResult
+
+            mock_results = [
+                PodcastSearchResult(name="Found Podcast", url="https://example.com/feed.xml", image="img.jpg", author="Author", provider="podcastindex"),
+            ]
+
+            with patch("plugins.podcast.providers.PodcastIndexProvider.search", new_callable=AsyncMock, return_value=mock_results):
                 from plugins.podcast import _podcast_search
 
                 ctx = self._make_ctx()
@@ -1698,12 +1817,21 @@ class TestPodcastSearch:
         import plugins.podcast as podcast_mod
 
         old_store = podcast_mod._store
+        old_ctx = podcast_mod._ctx
         try:
-            podcast_mod._store = MagicMock()
+            mock_store = MagicMock()
+            mock_store.is_subscribed.return_value = False
+            podcast_mod._store = mock_store
+            podcast_mod._ctx = MagicMock()
+            podcast_mod._ctx.get_setting.return_value = "podcastindex"
 
-            with patch("plugins.podcast._search_podcastindex", return_value=[
-                {"name": "CLI Podcast", "url": "https://example.com/feed.xml"},
-            ]):
+            from plugins.podcast.providers import PodcastSearchResult
+
+            mock_results = [
+                PodcastSearchResult(name="CLI Podcast", url="https://example.com/feed.xml", provider="podcastindex"),
+            ]
+
+            with patch("plugins.podcast.providers.PodcastIndexProvider.search", new_callable=AsyncMock, return_value=mock_results):
                 from plugins.podcast import _podcast_search
 
                 ctx = self._make_ctx()
@@ -1720,17 +1848,22 @@ class TestPodcastSearch:
         import plugins.podcast as podcast_mod
 
         old_store = podcast_mod._store
+        old_ctx = podcast_mod._ctx
         try:
-            podcast_mod._store = MagicMock()
+            mock_store = MagicMock()
+            mock_store.is_subscribed.return_value = False
+            podcast_mod._store = mock_store
+            podcast_mod._ctx = MagicMock()
+            podcast_mod._ctx.get_setting.return_value = "podcastindex"
 
-            with patch("plugins.podcast._search_podcastindex", return_value=[]) as mock_search:
+            with patch("plugins.podcast.providers.PodcastIndexProvider.search", new_callable=AsyncMock, return_value=[]) as mock_search:
                 from plugins.podcast import _podcast_search
 
                 ctx = self._make_ctx()
                 result = await _podcast_search(ctx, [
                     "podcast", "search", 0, 100, "query:my podcast",
                 ])
-                mock_search.assert_called_once_with("my podcast")
+                mock_search.assert_called_once_with("my podcast", client=podcast_mod._http_client)
         finally:
             podcast_mod._store = old_store
 
@@ -2137,102 +2270,70 @@ class TestPodcastDelshow:
 class TestPodcastIndexSearch:
     @pytest.mark.asyncio
     async def test_search_no_client(self):
-        import plugins.podcast as podcast_mod
+        from plugins.podcast.providers import PodcastIndexProvider
 
-        old_client = podcast_mod._http_client
-        try:
-            podcast_mod._http_client = None
-
-            from plugins.podcast import _search_podcastindex
-
-            results = await _search_podcastindex("test")
+        provider = PodcastIndexProvider()
+        # Search with no client — should create its own internally
+        # We mock the internal _pi_get to avoid real network
+        with patch("plugins.podcast.providers._pi_get", new_callable=AsyncMock, return_value={}):
+            results = await provider.search("test", client=None)
             assert results == []
-        finally:
-            podcast_mod._http_client = old_client
 
     @pytest.mark.asyncio
     async def test_search_success(self):
-        import plugins.podcast as podcast_mod
+        from plugins.podcast.providers import PodcastIndexProvider
 
-        old_client = podcast_mod._http_client
-        try:
-            mock_response = MagicMock()
-            mock_response.json.return_value = {
-                "feeds": [
-                    {
-                        "title": "Found Podcast",
-                        "url": "https://example.com/feed.xml",
-                        "artwork": "https://example.com/art.jpg",
-                        "description": "A great podcast",
-                        "author": "Author",
-                        "language": "en",
-                    },
-                    {
-                        "title": "No URL",
-                        # Missing url — should be filtered
-                    },
-                ],
-            }
-            mock_response.raise_for_status = MagicMock()
+        mock_response = {
+            "feeds": [
+                {
+                    "title": "Found Podcast",
+                    "url": "https://example.com/feed.xml",
+                    "artwork": "https://example.com/art.jpg",
+                    "description": "A great podcast",
+                    "author": "Author",
+                    "language": "en",
+                },
+                {
+                    "title": "No URL",
+                    # Missing url — should be filtered
+                },
+            ],
+        }
 
-            mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=mock_response)
-            podcast_mod._http_client = mock_client
-
-            from plugins.podcast import _search_podcastindex
-
-            results = await _search_podcastindex("test query")
+        provider = PodcastIndexProvider()
+        with patch("plugins.podcast.providers._pi_get", new_callable=AsyncMock, return_value=mock_response):
+            results = await provider.search("test query")
             assert len(results) == 1
-            assert results[0]["name"] == "Found Podcast"
-            assert results[0]["url"] == "https://example.com/feed.xml"
-            assert results[0]["image"] == "https://example.com/art.jpg"
-        finally:
-            podcast_mod._http_client = old_client
+            assert results[0].name == "Found Podcast"
+            assert results[0].url == "https://example.com/feed.xml"
+            assert results[0].image == "https://example.com/art.jpg"
 
     @pytest.mark.asyncio
     async def test_search_network_error(self):
-        import plugins.podcast as podcast_mod
+        from plugins.podcast.providers import PodcastIndexProvider
 
-        old_client = podcast_mod._http_client
-        try:
-            mock_client = AsyncMock()
-            mock_client.get = AsyncMock(side_effect=Exception("Network error"))
-            podcast_mod._http_client = mock_client
-
-            from plugins.podcast import _search_podcastindex
-
-            results = await _search_podcastindex("test")
+        provider = PodcastIndexProvider()
+        with patch("plugins.podcast.providers._pi_get", new_callable=AsyncMock, return_value={}):
+            results = await provider.search("test")
             assert results == []
-        finally:
-            podcast_mod._http_client = old_client
 
     @pytest.mark.asyncio
     async def test_search_image_fallback(self):
-        import plugins.podcast as podcast_mod
+        from plugins.podcast.providers import PodcastIndexProvider
 
-        old_client = podcast_mod._http_client
-        try:
-            mock_response = MagicMock()
-            mock_response.json.return_value = {
-                "feeds": [{
-                    "title": "Test",
-                    "url": "https://example.com/feed.xml",
-                    "image": "https://example.com/image.jpg",
-                    # No "artwork" field — should fall back to "image"
-                }],
-            }
-            mock_response.raise_for_status = MagicMock()
+        mock_response = {
+            "feeds": [{
+                "title": "Test",
+                "url": "https://example.com/feed.xml",
+                "image": "https://example.com/image.jpg",
+                # No "artwork" field — should fall back to "image"
+            }],
+        }
 
-            mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=mock_response)
-            podcast_mod._http_client = mock_client
-
-            from plugins.podcast import _search_podcastindex
-
-            results = await _search_podcastindex("test")
-            assert results[0]["image"] == "https://example.com/image.jpg"
-        finally:
-            podcast_mod._http_client = old_client
+        provider = PodcastIndexProvider()
+        with patch("plugins.podcast.providers._pi_get", new_callable=AsyncMock, return_value=mock_response):
+            results = await provider.search("test")
+            assert results[0].image == "https://example.com/image.jpg"
 
 
 # =============================================================================
@@ -2242,7 +2343,7 @@ class TestPodcastIndexSearch:
 
 class TestPodcastIndexHeaders:
     def test_headers_structure(self):
-        from plugins.podcast import _podcastindex_headers
+        from plugins.podcast.providers import _podcastindex_headers
 
         headers = _podcastindex_headers()
         assert "User-Agent" in headers
@@ -2288,8 +2389,10 @@ class TestFeedCache:
         old_cache = podcast_mod._feed_cache.copy()
         old_store = podcast_mod._store
         old_client = podcast_mod._http_client
+        old_ctx = podcast_mod._ctx
         try:
             podcast_mod._store = None
+            podcast_mod._ctx = None
             # Expired cache entry
             feed = PodcastFeed(title="Old", url="https://example.com/feed.xml")
             podcast_mod._feed_cache["https://example.com/feed.xml"] = (feed, time.time() - 1)
@@ -2306,6 +2409,7 @@ class TestFeedCache:
             podcast_mod._feed_cache.update(old_cache)
             podcast_mod._store = old_store
             podcast_mod._http_client = old_client
+            podcast_mod._ctx = old_ctx
 
     def test_clear_feed_cache(self):
         import plugins.podcast as podcast_mod
@@ -2338,12 +2442,16 @@ class TestPluginLifecycle:
         old_client = podcast_mod._http_client
         old_event_bus = podcast_mod._event_bus
         old_provider = podcast_mod._provider
+        old_ctx = podcast_mod._ctx
+        old_refresh = podcast_mod._refresh_task
 
         try:
             ctx = MagicMock()
             ctx.plugin_id = "podcast"
             ctx.event_bus = MagicMock()
             ctx.ensure_data_dir.return_value = Path("/tmp/test_podcast")
+            ctx.get_setting.return_value = 50
+            ctx.subscribe = AsyncMock()
 
             with patch.object(PodcastStore, "load"):
                 with patch("httpx.AsyncClient"):
@@ -2362,15 +2470,28 @@ class TestPluginLifecycle:
             node_args = ctx.register_menu_node.call_args
             assert node_args[1]["node_id"] == "podcasts" or node_args.kwargs.get("node_id") == "podcasts"
 
+            # Should subscribe to player events
+            ctx.subscribe.assert_called_once()
+
             # Module state should be set
             assert podcast_mod._store is not None
             assert podcast_mod._provider is not None
             assert podcast_mod._event_bus is not None
+            assert podcast_mod._ctx is not None
         finally:
+            # Cancel any background task created during test
+            if podcast_mod._refresh_task is not None and podcast_mod._refresh_task is not old_refresh:
+                podcast_mod._refresh_task.cancel()
+                try:
+                    await podcast_mod._refresh_task
+                except BaseException:
+                    pass
             podcast_mod._store = old_store
             podcast_mod._http_client = old_client
             podcast_mod._event_bus = old_event_bus
             podcast_mod._provider = old_provider
+            podcast_mod._ctx = old_ctx
+            podcast_mod._refresh_task = old_refresh
 
     @pytest.mark.asyncio
     async def test_teardown_clears_state(self):
@@ -2380,6 +2501,8 @@ class TestPluginLifecycle:
         old_client = podcast_mod._http_client
         old_event_bus = podcast_mod._event_bus
         old_provider = podcast_mod._provider
+        old_ctx = podcast_mod._ctx
+        old_refresh = podcast_mod._refresh_task
 
         try:
             mock_store = MagicMock()
@@ -2388,7 +2511,10 @@ class TestPluginLifecycle:
             podcast_mod._http_client = mock_client
             podcast_mod._event_bus = MagicMock()
             podcast_mod._provider = MagicMock()
+            podcast_mod._ctx = MagicMock()
+            podcast_mod._refresh_task = None
             podcast_mod._feed_cache["test"] = ("data", time.time() + 600)
+            podcast_mod._player_tracking.clear()
 
             ctx = MagicMock()
             await podcast_mod.teardown(ctx)
@@ -2397,6 +2523,7 @@ class TestPluginLifecycle:
             assert podcast_mod._http_client is None
             assert podcast_mod._event_bus is None
             assert podcast_mod._provider is None
+            assert podcast_mod._ctx is None
             assert len(podcast_mod._feed_cache) == 0
 
             mock_store.save.assert_called_once()
@@ -2406,6 +2533,8 @@ class TestPluginLifecycle:
             podcast_mod._http_client = old_client
             podcast_mod._event_bus = old_event_bus
             podcast_mod._provider = old_provider
+            podcast_mod._ctx = old_ctx
+            podcast_mod._refresh_task = old_refresh
 
     @pytest.mark.asyncio
     async def test_setup_menu_weight(self):
@@ -2415,12 +2544,16 @@ class TestPluginLifecycle:
         old_client = podcast_mod._http_client
         old_event_bus = podcast_mod._event_bus
         old_provider = podcast_mod._provider
+        old_ctx = podcast_mod._ctx
+        old_refresh = podcast_mod._refresh_task
 
         try:
             ctx = MagicMock()
             ctx.plugin_id = "podcast"
             ctx.event_bus = MagicMock()
             ctx.ensure_data_dir.return_value = Path("/tmp/test_podcast")
+            ctx.get_setting.return_value = 50
+            ctx.subscribe = AsyncMock()
 
             with patch.object(PodcastStore, "load"):
                 with patch("httpx.AsyncClient"):
@@ -2430,10 +2563,19 @@ class TestPluginLifecycle:
             # Weight should be 50 (between Radio=45 and Favorites=55)
             assert node_call.kwargs.get("weight") == 50 or node_call[1].get("weight") == 50
         finally:
+            # Cancel any background task created during test
+            if podcast_mod._refresh_task is not None and podcast_mod._refresh_task is not old_refresh:
+                podcast_mod._refresh_task.cancel()
+                try:
+                    await podcast_mod._refresh_task
+                except BaseException:
+                    pass
             podcast_mod._store = old_store
             podcast_mod._http_client = old_client
             podcast_mod._event_bus = old_event_bus
             podcast_mod._provider = old_provider
+            podcast_mod._ctx = old_ctx
+            podcast_mod._refresh_task = old_refresh
 
 
 # =============================================================================
@@ -2449,16 +2591,24 @@ class TestIntegration:
 
         old_store = podcast_mod._store
         old_cache = podcast_mod._feed_cache.copy()
+        old_ctx = podcast_mod._ctx
         try:
             mock_store = MagicMock()
             mock_store.add_subscription.return_value = True
             mock_store.is_subscribed.return_value = True
             mock_store.recent_count = 0
+            mock_store.subscription_count = 1
+            mock_store.total_new_episodes = 0
+            mock_store.get_in_progress_episodes.return_value = []
             mock_store.subscriptions = [
                 Subscription(name="Test Podcast", url="https://example.com/feed.xml"),
             ]
             mock_store.get_resume_position.return_value = 0
+            mock_store.get_progress_percentage.return_value = 0.0
+            mock_store.is_played.return_value = False
             podcast_mod._store = mock_store
+            podcast_mod._ctx = MagicMock()
+            podcast_mod._ctx.get_setting.return_value = "podcastindex"
 
             # Subscribe
             from plugins.podcast import _podcast_addshow, _podcast_items
@@ -2505,6 +2655,7 @@ class TestIntegration:
             podcast_mod._store = old_store
             podcast_mod._feed_cache.clear()
             podcast_mod._feed_cache.update(old_cache)
+            podcast_mod._ctx = old_ctx
 
     @pytest.mark.asyncio
     async def test_search_then_subscribe_flow(self):
@@ -2512,24 +2663,31 @@ class TestIntegration:
         import plugins.podcast as podcast_mod
 
         old_store = podcast_mod._store
+        old_ctx = podcast_mod._ctx
         try:
             mock_store = MagicMock()
             mock_store.add_subscription.return_value = True
+            mock_store.is_subscribed.return_value = False
             podcast_mod._store = mock_store
+            podcast_mod._ctx = MagicMock()
+            podcast_mod._ctx.get_setting.return_value = "podcastindex"
 
             from plugins.podcast import _podcast_addshow, _podcast_search
+            from plugins.podcast.providers import PodcastSearchResult
 
             ctx = _FakeCommandContext()
 
             # Search
-            with patch("plugins.podcast._search_podcastindex", return_value=[
-                {
-                    "name": "Discovered Podcast",
-                    "url": "https://example.com/found.xml",
-                    "image": "cover.jpg",
-                    "author": "Author",
-                },
-            ]):
+            mock_results = [
+                PodcastSearchResult(
+                    name="Discovered Podcast",
+                    url="https://example.com/found.xml",
+                    image="cover.jpg",
+                    author="Author",
+                    provider="podcastindex",
+                ),
+            ]
+            with patch("plugins.podcast.providers.PodcastIndexProvider.search", new_callable=AsyncMock, return_value=mock_results):
                 result = await _podcast_search(ctx, [
                     "podcast", "search", 0, 100, "term:test", "menu:1",
                 ])
@@ -2545,6 +2703,7 @@ class TestIntegration:
             assert result["subscribed"] is True
         finally:
             podcast_mod._store = old_store
+            podcast_mod._ctx = old_ctx
 
     @pytest.mark.asyncio
     async def test_store_persistence_roundtrip(self, tmp_path: Path):
@@ -2592,3 +2751,1021 @@ class TestIntegration:
         assert store2.recent_count == 2
         assert store2.recent[0].title == "B Episode 1"  # newest first
         assert store2.recent[1].title == "Episode 1"
+
+
+# =============================================================================
+# v2 feature tests — Episode progress tracking
+# =============================================================================
+
+
+class TestEpisodeProgress:
+    @pytest.fixture
+    def store(self, tmp_path: Path) -> PodcastStore:
+        return PodcastStore(tmp_path)
+
+    def test_no_progress_by_default(self, store: PodcastStore):
+        assert store.get_progress("https://example.com/ep.mp3") is None
+        assert store.get_progress_percentage("https://example.com/ep.mp3") == 0.0
+        assert store.progress_count == 0
+
+    def test_update_progress(self, store: PodcastStore):
+        store.update_progress("https://example.com/ep.mp3", 300, 3600)
+        prog = store.get_progress("https://example.com/ep.mp3")
+        assert prog is not None
+        assert prog.position == 300
+        assert prog.duration == 3600
+        assert prog.percentage == pytest.approx(8.3, abs=0.1)
+        assert prog.updated_at > 0
+
+    def test_progress_percentage(self, store: PodcastStore):
+        store.update_progress("https://example.com/ep.mp3", 1800, 3600)
+        assert store.get_progress_percentage("https://example.com/ep.mp3") == pytest.approx(50.0, abs=0.1)
+
+    def test_progress_100_percent(self, store: PodcastStore):
+        store.update_progress("https://example.com/ep.mp3", 3600, 3600)
+        assert store.get_progress_percentage("https://example.com/ep.mp3") == 100.0
+
+    def test_progress_zero_duration_ignored(self, store: PodcastStore):
+        store.update_progress("https://example.com/ep.mp3", 300, 0)
+        assert store.get_progress("https://example.com/ep.mp3") is None
+
+    def test_clear_progress(self, store: PodcastStore):
+        store.update_progress("https://example.com/ep.mp3", 300, 3600)
+        store.clear_progress("https://example.com/ep.mp3")
+        assert store.get_progress("https://example.com/ep.mp3") is None
+
+    def test_get_all_progress(self, store: PodcastStore):
+        store.update_progress("https://example.com/ep1.mp3", 100, 1000)
+        store.update_progress("https://example.com/ep2.mp3", 500, 2000)
+        all_prog = store.get_all_progress()
+        assert len(all_prog) == 2
+        assert "https://example.com/ep1.mp3" in all_prog
+        assert "https://example.com/ep2.mp3" in all_prog
+
+    def test_auto_mark_played_at_threshold(self, store: PodcastStore):
+        """Progress past the auto-mark threshold should mark as played."""
+        # Default threshold is 90%
+        store.update_progress("https://example.com/ep.mp3", 910, 1000)
+        assert store.is_played("https://example.com/ep.mp3")
+
+    def test_no_auto_mark_below_threshold(self, store: PodcastStore):
+        store.update_progress("https://example.com/ep.mp3", 500, 1000)
+        assert not store.is_played("https://example.com/ep.mp3")
+
+    def test_custom_auto_mark_threshold(self, tmp_path: Path):
+        store = PodcastStore(tmp_path, auto_mark_played_percent=100)
+        store.update_progress("https://example.com/ep.mp3", 950, 1000)
+        # At 95%, should NOT be marked played with threshold=100
+        assert not store.is_played("https://example.com/ep.mp3")
+        store.update_progress("https://example.com/ep.mp3", 1000, 1000)
+        assert store.is_played("https://example.com/ep.mp3")
+
+    def test_progress_persists_across_save_load(self, tmp_path: Path):
+        store = PodcastStore(tmp_path)
+        store.update_progress("https://example.com/ep.mp3", 600, 3600)
+        store.save()
+
+        store2 = PodcastStore(tmp_path)
+        store2.load()
+        prog = store2.get_progress("https://example.com/ep.mp3")
+        assert prog is not None
+        assert prog.position == 600
+        assert prog.duration == 3600
+        assert prog.percentage == pytest.approx(16.7, abs=0.1)
+
+    def test_episode_progress_from_dict(self):
+        data = {"position": 300, "duration": 3600, "percentage": 8.3, "updated_at": 1234567890.0}
+        ep = EpisodeProgress.from_dict(data)
+        assert ep.position == 300
+        assert ep.duration == 3600
+        assert ep.percentage == 8.3
+        assert ep.updated_at == 1234567890.0
+
+    def test_episode_progress_to_dict(self):
+        ep = EpisodeProgress(position=300, duration=3600, percentage=8.3, updated_at=1234567890.0)
+        d = ep.to_dict()
+        assert d["position"] == 300
+        assert d["duration"] == 3600
+        assert d["percentage"] == 8.3
+        assert d["updated_at"] == 1234567890.0
+
+
+# =============================================================================
+# v2 feature tests — Played / unplayed state
+# =============================================================================
+
+
+class TestPlayedUnplayed:
+    @pytest.fixture
+    def store(self, tmp_path: Path) -> PodcastStore:
+        return PodcastStore(tmp_path)
+
+    def test_not_played_by_default(self, store: PodcastStore):
+        assert not store.is_played("https://example.com/ep.mp3")
+        assert store.played_count == 0
+
+    def test_mark_played(self, store: PodcastStore):
+        store.mark_played("https://example.com/ep.mp3")
+        assert store.is_played("https://example.com/ep.mp3")
+        assert store.played_count == 1
+
+    def test_mark_played_idempotent(self, store: PodcastStore):
+        store.mark_played("https://example.com/ep.mp3")
+        store.mark_played("https://example.com/ep.mp3")
+        assert store.played_count == 1
+
+    def test_mark_unplayed(self, store: PodcastStore):
+        store.mark_played("https://example.com/ep.mp3")
+        store.set_resume_position("https://example.com/ep.mp3", 300)
+        store.update_progress("https://example.com/ep.mp3", 300, 3600)
+
+        store.mark_unplayed("https://example.com/ep.mp3")
+        assert not store.is_played("https://example.com/ep.mp3")
+        assert store.get_resume_position("https://example.com/ep.mp3") == 0
+        assert store.get_progress("https://example.com/ep.mp3") is None
+
+    def test_mark_all_played(self, store: PodcastStore):
+        urls = [f"https://example.com/ep{i}.mp3" for i in range(5)]
+        changed = store.mark_all_played(urls)
+        assert changed == 5
+        for url in urls:
+            assert store.is_played(url)
+
+    def test_mark_all_played_partial(self, store: PodcastStore):
+        store.mark_played("https://example.com/ep0.mp3")
+        urls = [f"https://example.com/ep{i}.mp3" for i in range(3)]
+        changed = store.mark_all_played(urls)
+        assert changed == 2  # ep0 was already played
+
+    def test_played_episodes_property(self, store: PodcastStore):
+        store.mark_played("https://example.com/ep1.mp3")
+        store.mark_played("https://example.com/ep2.mp3")
+        played = store.played_episodes
+        assert len(played) == 2
+        assert "https://example.com/ep1.mp3" in played
+        assert isinstance(played, set)
+
+    def test_played_persists_across_save_load(self, tmp_path: Path):
+        store = PodcastStore(tmp_path)
+        store.mark_played("https://example.com/ep1.mp3")
+        store.mark_played("https://example.com/ep2.mp3")
+        store.save()
+
+        store2 = PodcastStore(tmp_path)
+        store2.load()
+        assert store2.is_played("https://example.com/ep1.mp3")
+        assert store2.is_played("https://example.com/ep2.mp3")
+        assert store2.played_count == 2
+
+    def test_resume_near_end_auto_marks_played(self, store: PodcastStore):
+        """Setting resume position near the end should auto-mark as played."""
+        store.set_resume_position("https://example.com/ep.mp3", 3590, duration=3600)
+        assert store.is_played("https://example.com/ep.mp3")
+
+
+# =============================================================================
+# v2 feature tests — Continue listening
+# =============================================================================
+
+
+class TestContinueListening:
+    @pytest.fixture
+    def store(self, tmp_path: Path) -> PodcastStore:
+        return PodcastStore(tmp_path)
+
+    def test_empty_when_no_progress(self, store: PodcastStore):
+        assert store.get_in_progress_episodes() == []
+
+    def test_in_progress_episodes(self, store: PodcastStore):
+        store.update_progress("https://example.com/ep1.mp3", 300, 3600)
+        store.update_progress("https://example.com/ep2.mp3", 600, 1800)
+
+        in_prog = store.get_in_progress_episodes()
+        assert len(in_prog) == 2
+        # Should contain url, position, duration, percentage
+        urls = {e["url"] for e in in_prog}
+        assert "https://example.com/ep1.mp3" in urls
+        assert "https://example.com/ep2.mp3" in urls
+
+    def test_played_episodes_excluded(self, store: PodcastStore):
+        store.update_progress("https://example.com/ep1.mp3", 300, 3600)
+        store.mark_played("https://example.com/ep1.mp3")
+
+        in_prog = store.get_in_progress_episodes()
+        assert len(in_prog) == 0
+
+    def test_minimal_progress_excluded(self, store: PodcastStore):
+        """Episodes with less than threshold seconds are excluded."""
+        store.update_progress("https://example.com/ep.mp3", 5, 3600)
+        in_prog = store.get_in_progress_episodes()
+        assert len(in_prog) == 0
+
+    def test_sorted_by_most_recent(self, store: PodcastStore):
+        store.update_progress("https://example.com/ep1.mp3", 300, 3600)
+        store.update_progress("https://example.com/ep2.mp3", 600, 1800)
+
+        in_prog = store.get_in_progress_episodes()
+        # ep2 was updated last, should be first
+        assert in_prog[0]["url"] == "https://example.com/ep2.mp3"
+
+    def test_enriched_with_recent_metadata(self, store: PodcastStore):
+        store.record_played(
+            url="https://example.com/ep.mp3",
+            title="Test Episode",
+            show="My Show",
+            image="cover.jpg",
+            feed_url="https://example.com/feed.xml",
+        )
+        store.update_progress("https://example.com/ep.mp3", 300, 3600)
+
+        in_prog = store.get_in_progress_episodes()
+        assert len(in_prog) == 1
+        assert in_prog[0]["title"] == "Test Episode"
+        assert in_prog[0]["show"] == "My Show"
+        assert in_prog[0]["image"] == "cover.jpg"
+
+
+# =============================================================================
+# v2 feature tests — Subscription management extras
+# =============================================================================
+
+
+class TestSubscriptionExtras:
+    @pytest.fixture
+    def store(self, tmp_path: Path) -> PodcastStore:
+        return PodcastStore(tmp_path)
+
+    def test_move_subscription_down(self, store: PodcastStore):
+        store.add_subscription(url="https://a.com/feed.xml", name="A")
+        store.add_subscription(url="https://b.com/feed.xml", name="B")
+        store.add_subscription(url="https://c.com/feed.xml", name="C")
+
+        result = store.move_subscription("https://a.com/feed.xml", 1)
+        assert result is True
+        names = [s.name for s in store.subscriptions]
+        assert names == ["B", "A", "C"]
+
+    def test_move_subscription_up(self, store: PodcastStore):
+        store.add_subscription(url="https://a.com/feed.xml", name="A")
+        store.add_subscription(url="https://b.com/feed.xml", name="B")
+        store.add_subscription(url="https://c.com/feed.xml", name="C")
+
+        result = store.move_subscription("https://c.com/feed.xml", -1)
+        assert result is True
+        names = [s.name for s in store.subscriptions]
+        assert names == ["A", "C", "B"]
+
+    def test_move_subscription_boundary(self, store: PodcastStore):
+        store.add_subscription(url="https://a.com/feed.xml", name="A")
+        store.add_subscription(url="https://b.com/feed.xml", name="B")
+
+        # Can't move first item up
+        assert store.move_subscription("https://a.com/feed.xml", -1) is False
+        # Can't move last item down
+        assert store.move_subscription("https://b.com/feed.xml", 1) is False
+
+    def test_move_nonexistent_subscription(self, store: PodcastStore):
+        assert store.move_subscription("https://nope.com/feed.xml", 1) is False
+
+    def test_import_subscriptions(self, store: PodcastStore):
+        feeds = [
+            {"url": "https://a.com/feed.xml", "name": "Podcast A", "image": "a.jpg"},
+            {"url": "https://b.com/feed.xml", "name": "Podcast B"},
+            {"url": "https://c.com/feed.xml", "name": "Podcast C"},
+        ]
+        added, skipped = store.import_subscriptions(feeds)
+        assert added == 3
+        assert skipped == 0
+        assert store.subscription_count == 3
+
+    def test_import_subscriptions_dedup(self, store: PodcastStore):
+        store.add_subscription(url="https://a.com/feed.xml", name="Existing")
+        feeds = [
+            {"url": "https://a.com/feed.xml", "name": "Podcast A"},
+            {"url": "https://b.com/feed.xml", "name": "Podcast B"},
+        ]
+        added, skipped = store.import_subscriptions(feeds)
+        assert added == 1
+        assert skipped == 1
+
+    def test_import_subscriptions_empty_url_skipped(self, store: PodcastStore):
+        feeds = [{"url": "", "name": "Bad"}, {"name": "No URL"}]
+        added, skipped = store.import_subscriptions(feeds)
+        assert added == 0
+        assert skipped == 2
+
+    def test_mark_feed_browsed(self, store: PodcastStore):
+        store.add_subscription(url="https://a.com/feed.xml", name="A")
+        store.set_new_episode_count("https://a.com/feed.xml", 5)
+        assert store.get_subscription("https://a.com/feed.xml").new_episode_count == 5
+
+        store.mark_feed_browsed("https://a.com/feed.xml")
+        sub = store.get_subscription("https://a.com/feed.xml")
+        assert sub.new_episode_count == 0
+        assert sub.last_browsed_at > 0
+
+    def test_set_new_episode_count(self, store: PodcastStore):
+        store.add_subscription(url="https://a.com/feed.xml", name="A")
+        store.set_new_episode_count("https://a.com/feed.xml", 3)
+        assert store.get_subscription("https://a.com/feed.xml").new_episode_count == 3
+
+    def test_total_new_episodes(self, store: PodcastStore):
+        store.add_subscription(url="https://a.com/feed.xml", name="A")
+        store.add_subscription(url="https://b.com/feed.xml", name="B")
+        store.set_new_episode_count("https://a.com/feed.xml", 3)
+        store.set_new_episode_count("https://b.com/feed.xml", 7)
+        assert store.total_new_episodes == 10
+
+    def test_export_subscriptions(self, store: PodcastStore):
+        store.add_subscription(url="https://a.com/feed.xml", name="A", image="a.jpg")
+        store.add_subscription(url="https://b.com/feed.xml", name="B")
+        exported = store.export_subscriptions()
+        assert len(exported) == 2
+        assert exported[0]["url"] == "https://a.com/feed.xml"
+        assert exported[0]["name"] == "A"
+
+
+# =============================================================================
+# v2 feature tests — Store stats
+# =============================================================================
+
+
+class TestStoreStats:
+    def test_get_stats(self, tmp_path: Path):
+        store = PodcastStore(tmp_path)
+        store.add_subscription(url="https://a.com/feed.xml", name="A")
+        store.set_resume_position("https://a.com/ep1.mp3", 300)
+        store.record_played(url="https://a.com/ep1.mp3", title="Ep 1")
+        store.mark_played("https://a.com/ep2.mp3")
+        store.update_progress("https://a.com/ep3.mp3", 100, 1000)
+
+        stats = store.get_stats()
+        assert stats["subscriptions"] == 1
+        assert stats["resume_positions"] == 1
+        assert stats["recent_episodes"] == 1
+        assert stats["played_episodes"] == 1
+        assert stats["total_progress_entries"] == 1
+
+    def test_clear_all_v2(self, tmp_path: Path):
+        store = PodcastStore(tmp_path)
+        store.add_subscription(url="https://a.com/feed.xml", name="A")
+        store.set_resume_position("https://a.com/ep.mp3", 300)
+        store.record_played(url="https://a.com/ep.mp3", title="Ep")
+        store.mark_played("https://a.com/ep.mp3")
+        store.update_progress("https://a.com/ep.mp3", 300, 3600)
+
+        store.clear_all()
+        assert store.subscription_count == 0
+        assert store.recent_count == 0
+        assert store.played_count == 0
+        assert store.progress_count == 0
+        assert len(store.resume_positions) == 0
+
+
+# =============================================================================
+# v2 feature tests — OPML import / export
+# =============================================================================
+
+
+class TestOPML:
+    def test_parse_opml_basic(self):
+        from plugins.podcast.opml import parse_opml
+
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <head><title>My Podcasts</title></head>
+  <body>
+    <outline type="rss" text="Podcast A" xmlUrl="https://a.com/feed.xml"/>
+    <outline type="rss" text="Podcast B" xmlUrl="https://b.com/feed.xml" htmlUrl="https://b.com"/>
+  </body>
+</opml>"""
+
+        doc = parse_opml(xml)
+        assert doc.title == "My Podcasts"
+        assert doc.feed_count == 2
+        assert doc.feeds[0].url == "https://a.com/feed.xml"
+        assert doc.feeds[0].name == "Podcast A"
+        assert doc.feeds[1].url == "https://b.com/feed.xml"
+        assert doc.feeds[1].html_url == "https://b.com"
+
+    def test_parse_opml_nested_folders(self):
+        from plugins.podcast.opml import parse_opml
+
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <head><title>Organized</title></head>
+  <body>
+    <outline text="Tech">
+      <outline type="rss" text="Tech Pod" xmlUrl="https://tech.com/feed.xml"/>
+    </outline>
+    <outline text="Comedy">
+      <outline type="rss" text="Fun Pod" xmlUrl="https://fun.com/feed.xml"/>
+    </outline>
+  </body>
+</opml>"""
+
+        doc = parse_opml(xml)
+        assert doc.feed_count == 2
+        assert doc.feeds[0].categories == ["Tech"]
+        assert doc.feeds[1].categories == ["Comedy"]
+
+    def test_parse_opml_deduplication(self):
+        from plugins.podcast.opml import parse_opml
+
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <head><title>Dupes</title></head>
+  <body>
+    <outline type="rss" text="Pod A" xmlUrl="https://a.com/feed.xml"/>
+    <outline type="rss" text="Pod A Copy" xmlUrl="https://a.com/feed.xml"/>
+  </body>
+</opml>"""
+
+        doc = parse_opml(xml)
+        assert doc.feed_count == 1
+
+    def test_parse_opml_no_body_raises(self):
+        from plugins.podcast.opml import parse_opml
+
+        xml = '<?xml version="1.0"?><opml version="2.0"><head/></opml>'
+        with pytest.raises(ValueError, match="No <body>"):
+            parse_opml(xml)
+
+    def test_parse_opml_safe_returns_none_on_error(self):
+        from plugins.podcast.opml import parse_opml_safe
+
+        assert parse_opml_safe("not xml at all") is None
+
+    def test_generate_opml(self):
+        from plugins.podcast.opml import generate_opml
+
+        feeds = [
+            {"url": "https://a.com/feed.xml", "name": "Podcast A", "image": "a.jpg"},
+            {"url": "https://b.com/feed.xml", "name": "Podcast B"},
+        ]
+        xml = generate_opml(feeds, title="Test Export")
+        assert '<?xml version="1.0" encoding="UTF-8"?>' in xml
+        assert 'xmlUrl="https://a.com/feed.xml"' in xml
+        assert 'xmlUrl="https://b.com/feed.xml"' in xml
+        assert "Test Export" in xml
+        assert 'type="rss"' in xml
+
+    def test_generate_opml_skips_empty_url(self):
+        from plugins.podcast.opml import generate_opml
+
+        feeds = [
+            {"url": "", "name": "Bad"},
+            {"url": "https://a.com/feed.xml", "name": "Good"},
+        ]
+        xml = generate_opml(feeds)
+        assert "Bad" not in xml
+        assert "Good" in xml
+
+    def test_roundtrip_opml(self):
+        from plugins.podcast.opml import generate_opml, parse_opml
+
+        feeds = [
+            {"url": "https://a.com/feed.xml", "name": "Podcast A"},
+            {"url": "https://b.com/feed.xml", "name": "Podcast B", "description": "Great show"},
+        ]
+        xml = generate_opml(feeds)
+        doc = parse_opml(xml)
+        assert doc.feed_count == 2
+        assert doc.feeds[0].url == "https://a.com/feed.xml"
+        assert doc.feeds[0].name == "Podcast A"
+        assert doc.feeds[1].url == "https://b.com/feed.xml"
+
+    def test_opml_file_roundtrip(self, tmp_path: Path):
+        from plugins.podcast.opml import export_opml_file, import_opml_file
+
+        feeds = [
+            {"url": "https://a.com/feed.xml", "name": "Podcast A"},
+            {"url": "https://b.com/feed.xml", "name": "Podcast B"},
+        ]
+        out_path = tmp_path / "subs.opml"
+        export_opml_file(out_path, feeds)
+        assert out_path.is_file()
+
+        doc = import_opml_file(out_path)
+        assert doc.feed_count == 2
+        assert doc.feeds[0].url == "https://a.com/feed.xml"
+
+    def test_opml_document_to_dict(self):
+        from plugins.podcast.opml import OPMLDocument, OPMLFeed
+
+        doc = OPMLDocument(
+            title="Test",
+            feeds=[
+                OPMLFeed(url="https://a.com/feed.xml", name="A"),
+            ],
+        )
+        d = doc.to_dict()
+        assert d["title"] == "Test"
+        assert d["feed_count"] == 1
+        assert d["feeds"][0]["url"] == "https://a.com/feed.xml"
+
+
+# =============================================================================
+# v2 feature tests — Search providers
+# =============================================================================
+
+
+class TestProviders:
+    def test_provider_registry(self):
+        from plugins.podcast.providers import get_all_providers, get_provider, list_provider_names
+
+        names = list_provider_names()
+        assert "podcastindex" in names
+        assert "gpodder" in names
+        assert "itunes" in names
+
+        providers = get_all_providers()
+        assert len(providers) >= 3
+
+    def test_get_provider_default(self):
+        from plugins.podcast.providers import get_provider
+
+        provider = get_provider("podcastindex")
+        assert provider.name == "podcastindex"
+        assert provider.display_name == "PodcastIndex"
+        assert provider.supports_trending is True
+        assert provider.supports_new_episodes is True
+
+    def test_get_provider_gpodder(self):
+        from plugins.podcast.providers import get_provider
+
+        provider = get_provider("gpodder")
+        assert provider.name == "gpodder"
+        assert provider.display_name == "GPodder"
+        assert provider.supports_trending is True
+
+    def test_get_provider_itunes(self):
+        from plugins.podcast.providers import get_provider
+
+        provider = get_provider("itunes")
+        assert provider.name == "itunes"
+        assert provider.display_name == "iTunes / Apple Podcasts"
+        assert provider.supports_trending is True
+
+    def test_get_provider_unknown_fallback(self):
+        from plugins.podcast.providers import get_provider
+
+        provider = get_provider("nonexistent")
+        assert provider.name == "podcastindex"  # falls back
+
+    def test_search_result_to_dict(self):
+        from plugins.podcast.providers import PodcastSearchResult
+
+        result = PodcastSearchResult(
+            name="Test Pod",
+            url="https://example.com/feed.xml",
+            image="img.jpg",
+            author="Author",
+            categories=["Tech", "News"],
+            episode_count=42,
+            provider="podcastindex",
+        )
+        d = result.to_dict()
+        assert d["name"] == "Test Pod"
+        assert d["url"] == "https://example.com/feed.xml"
+        assert d["image"] == "img.jpg"
+        assert d["categories"] == ["Tech", "News"]
+        assert d["episode_count"] == 42
+        assert d["provider"] == "podcastindex"
+
+    def test_search_result_to_dict_minimal(self):
+        from plugins.podcast.providers import PodcastSearchResult
+
+        result = PodcastSearchResult(name="Minimal", url="https://example.com/feed.xml")
+        d = result.to_dict()
+        assert d == {"name": "Minimal", "url": "https://example.com/feed.xml"}
+
+    def test_new_episode_result_to_dict(self):
+        from plugins.podcast.providers import NewEpisodeResult
+
+        ep = NewEpisodeResult(
+            title="New Ep",
+            url="https://example.com/ep.mp3",
+            feed_url="https://example.com/feed.xml",
+            feed_title="My Show",
+            published_epoch=1700000000.0,
+            duration_seconds=3600,
+        )
+        d = ep.to_dict()
+        assert d["title"] == "New Ep"
+        assert d["url"] == "https://example.com/ep.mp3"
+        assert d["feed_url"] == "https://example.com/feed.xml"
+        assert d["duration_seconds"] == 3600
+
+    @pytest.mark.asyncio
+    async def test_podcastindex_empty_search(self):
+        from plugins.podcast.providers import PodcastIndexProvider
+
+        provider = PodcastIndexProvider()
+        results = await provider.search("", client=MagicMock())
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_gpodder_empty_search(self):
+        from plugins.podcast.providers import GPodderProvider
+
+        provider = GPodderProvider()
+        results = await provider.search("", client=MagicMock())
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_itunes_empty_search(self):
+        from plugins.podcast.providers import ITunesSearchProvider
+
+        provider = ITunesSearchProvider()
+        results = await provider.search("", client=MagicMock())
+        assert results == []
+
+
+# =============================================================================
+# v2 feature tests — Resume submenu
+# =============================================================================
+
+
+class TestResumeSubmenu:
+    @pytest.mark.asyncio
+    async def test_resume_submenu_menu_mode(self):
+        from plugins.podcast import _build_resume_submenu
+
+        tagged = {
+            "ep_url": "https://example.com/ep.mp3",
+            "ep_title": "Test Episode",
+            "ep_icon": "cover.jpg",
+            "feed_url": "https://example.com/feed.xml",
+            "feed_title": "My Show",
+            "duration": "3600",
+            "resume_pos": "600",
+            "content_type": "audio/mpeg",
+        }
+        result = _build_resume_submenu(tagged, is_menu=True)
+        assert result["count"] == 3  # resume + beginning + mark played
+        items = result["item_loop"]
+        assert "Resume" in items[0]["text"]
+        assert "10:00" in items[0]["text"]
+        assert items[1]["text"] == "Play from beginning"
+        assert items[2]["text"] == "Mark as played"
+
+    @pytest.mark.asyncio
+    async def test_resume_submenu_cli_mode(self):
+        from plugins.podcast import _build_resume_submenu
+
+        tagged = {
+            "ep_url": "https://example.com/ep.mp3",
+            "ep_title": "Test Episode",
+            "resume_pos": "600",
+            "duration": "3600",
+        }
+        result = _build_resume_submenu(tagged, is_menu=False)
+        assert result["count"] == 2
+        assert result["loop"][0]["from"] == 600
+        assert result["loop"][1]["from"] == 0
+
+
+# =============================================================================
+# v2 feature tests — What's New
+# =============================================================================
+
+
+class TestWhatsNew:
+    @pytest.mark.asyncio
+    async def test_whatsnew_aggregates_episodes(self):
+        import plugins.podcast as podcast_mod
+
+        old_store = podcast_mod._store
+        old_cache = podcast_mod._feed_cache.copy()
+        old_ctx = podcast_mod._ctx
+        try:
+            mock_store = MagicMock()
+            mock_store.subscription_count = 2
+            mock_store.total_new_episodes = 0
+            mock_store.get_in_progress_episodes.return_value = []
+            mock_store.subscriptions = [
+                Subscription(name="Pod A", url="https://a.com/feed.xml"),
+                Subscription(name="Pod B", url="https://b.com/feed.xml"),
+            ]
+            mock_store.get_resume_position.return_value = 0
+            mock_store.get_progress_percentage.return_value = 0.0
+            mock_store.is_played.return_value = False
+            podcast_mod._store = mock_store
+
+            podcast_mod._ctx = MagicMock()
+            podcast_mod._ctx.get_setting.side_effect = lambda key: {
+                "new_since_days": 7,
+                "max_new_episodes": 50,
+                "search_provider": "podcastindex",
+            }.get(key, 7)
+
+            now = time.time()
+            feed_a = PodcastFeed(
+                title="Pod A",
+                url="https://a.com/feed.xml",
+                episodes=[
+                    PodcastEpisode(
+                        title="A Recent",
+                        url="https://a.com/ep1.mp3",
+                        published_epoch=now - 3600,
+                    ),
+                ],
+            )
+            feed_b = PodcastFeed(
+                title="Pod B",
+                url="https://b.com/feed.xml",
+                episodes=[
+                    PodcastEpisode(
+                        title="B Recent",
+                        url="https://b.com/ep1.mp3",
+                        published_epoch=now - 7200,
+                    ),
+                ],
+            )
+            podcast_mod._feed_cache["https://a.com/feed.xml"] = (feed_a, now + 600)
+            podcast_mod._feed_cache["https://b.com/feed.xml"] = (feed_b, now + 600)
+
+            from plugins.podcast import _build_whatsnew
+
+            result = await _build_whatsnew(0, 100, is_menu=False)
+            assert result["count"] == 2
+            # Sorted newest first
+            assert result["loop"][0]["name"] == "A Recent"
+            assert result["loop"][1]["name"] == "B Recent"
+        finally:
+            podcast_mod._store = old_store
+            podcast_mod._feed_cache.clear()
+            podcast_mod._feed_cache.update(old_cache)
+            podcast_mod._ctx = old_ctx
+
+
+# =============================================================================
+# v2 feature tests — Stats command
+# =============================================================================
+
+
+class TestStatsCommand:
+    def test_podcast_stats(self):
+        import plugins.podcast as podcast_mod
+
+        old_store = podcast_mod._store
+        old_ctx = podcast_mod._ctx
+        try:
+            mock_store = MagicMock()
+            mock_store.get_stats.return_value = {
+                "subscriptions": 5,
+                "resume_positions": 3,
+                "recent_episodes": 10,
+                "played_episodes": 20,
+                "in_progress_episodes": 2,
+                "total_progress_entries": 15,
+                "total_new_episodes": 7,
+            }
+            podcast_mod._store = mock_store
+            podcast_mod._ctx = MagicMock()
+            podcast_mod._ctx.get_setting.return_value = "podcastindex"
+
+            from plugins.podcast import _podcast_stats
+
+            result = _podcast_stats()
+            assert result["subscriptions"] == 5
+            assert result["played_episodes"] == 20
+            assert result["provider"] == "podcastindex"
+            assert "cache_size" in result
+            assert "tracking_players" in result
+        finally:
+            podcast_mod._store = old_store
+            podcast_mod._ctx = old_ctx
+
+
+# =============================================================================
+# v2 feature tests — Mark played / unplayed commands
+# =============================================================================
+
+
+class TestMarkPlayedCommands:
+    @pytest.mark.asyncio
+    async def test_markplayed_single_episode(self):
+        import plugins.podcast as podcast_mod
+
+        old_store = podcast_mod._store
+        try:
+            mock_store = MagicMock()
+            podcast_mod._store = mock_store
+
+            from plugins.podcast import _podcast_markplayed
+
+            ctx = _FakeCommandContext()
+            result = await _podcast_markplayed(ctx, [
+                "podcast", "markplayed", "url:https://example.com/ep.mp3",
+            ])
+            mock_store.mark_played.assert_called_once_with("https://example.com/ep.mp3")
+            assert result["count"] == 1
+        finally:
+            podcast_mod._store = old_store
+
+    @pytest.mark.asyncio
+    async def test_markplayed_menu_mode(self):
+        import plugins.podcast as podcast_mod
+
+        old_store = podcast_mod._store
+        try:
+            mock_store = MagicMock()
+            podcast_mod._store = mock_store
+
+            from plugins.podcast import _podcast_markplayed
+
+            ctx = _FakeCommandContext()
+            result = await _podcast_markplayed(ctx, [
+                "podcast", "markplayed", "url:https://example.com/ep.mp3", "menu:1",
+            ])
+            assert "item_loop" in result
+            assert result["item_loop"][0]["showBriefly"] == 1
+
+        finally:
+            podcast_mod._store = old_store
+
+    @pytest.mark.asyncio
+    async def test_markplayed_missing_url(self):
+        import plugins.podcast as podcast_mod
+
+        old_store = podcast_mod._store
+        try:
+            podcast_mod._store = MagicMock()
+
+            from plugins.podcast import _podcast_markplayed
+
+            ctx = _FakeCommandContext()
+            result = await _podcast_markplayed(ctx, ["podcast", "markplayed"])
+            assert "error" in result
+        finally:
+            podcast_mod._store = old_store
+
+    @pytest.mark.asyncio
+    async def test_markunplayed(self):
+        import plugins.podcast as podcast_mod
+
+        old_store = podcast_mod._store
+        try:
+            mock_store = MagicMock()
+            podcast_mod._store = mock_store
+
+            from plugins.podcast import _podcast_markunplayed
+
+            ctx = _FakeCommandContext()
+            result = await _podcast_markunplayed(ctx, [
+                "podcast", "markunplayed", "url:https://example.com/ep.mp3",
+            ])
+            mock_store.mark_unplayed.assert_called_once_with("https://example.com/ep.mp3")
+            assert result["count"] == 1
+        finally:
+            podcast_mod._store = old_store
+
+
+# =============================================================================
+# v2 feature tests — Event-based resume tracking
+# =============================================================================
+
+
+class TestEventBasedResume:
+    @pytest.mark.asyncio
+    async def test_player_status_playing_podcast(self):
+        import plugins.podcast as podcast_mod
+
+        old_store = podcast_mod._store
+        old_tracking = dict(podcast_mod._player_tracking)
+        try:
+            mock_store = MagicMock()
+            podcast_mod._store = mock_store
+
+            from plugins.podcast import _on_player_status
+
+            event = MagicMock()
+            event.player_id = "aa:bb:cc:dd:ee:ff"
+            event.state = "playing"
+            event.elapsed_seconds = 120.0
+            event.duration = 3600.0
+            event.current_track = {
+                "source": "podcast",
+                "path": "https://example.com/ep.mp3",
+                "title": "Test Episode",
+                "artist": "My Show",
+            }
+
+            await _on_player_status(event)
+
+            # Should be tracking this player
+            assert "aa:bb:cc:dd:ee:ff" in podcast_mod._player_tracking
+            tracking = podcast_mod._player_tracking["aa:bb:cc:dd:ee:ff"]
+            assert tracking["url"] == "https://example.com/ep.mp3"
+            assert tracking["elapsed"] == 120.0
+        finally:
+            podcast_mod._store = old_store
+            podcast_mod._player_tracking.clear()
+            podcast_mod._player_tracking.update(old_tracking)
+
+    @pytest.mark.asyncio
+    async def test_player_status_stopped_saves_position(self):
+        import plugins.podcast as podcast_mod
+
+        old_store = podcast_mod._store
+        old_tracking = dict(podcast_mod._player_tracking)
+        try:
+            mock_store = MagicMock()
+            podcast_mod._store = mock_store
+
+            # Pre-populate tracking
+            podcast_mod._player_tracking["aa:bb:cc:dd:ee:ff"] = {
+                "url": "https://example.com/ep.mp3",
+                "elapsed": 300.0,
+                "duration": 3600.0,
+            }
+
+            from plugins.podcast import _on_player_status
+
+            event = MagicMock()
+            event.player_id = "aa:bb:cc:dd:ee:ff"
+            event.state = "stopped"
+            event.elapsed_seconds = 310.0
+            event.duration = 3600.0
+            event.current_track = {
+                "source": "podcast",
+                "path": "https://example.com/ep.mp3",
+            }
+
+            await _on_player_status(event)
+
+            # Should have saved the resume position
+            mock_store.set_resume_position.assert_called()
+            call_args = mock_store.set_resume_position.call_args
+            assert call_args[0][0] == "https://example.com/ep.mp3"
+            assert call_args[0][1] == 310
+
+            # Should have removed tracking
+            assert "aa:bb:cc:dd:ee:ff" not in podcast_mod._player_tracking
+        finally:
+            podcast_mod._store = old_store
+            podcast_mod._player_tracking.clear()
+            podcast_mod._player_tracking.update(old_tracking)
+
+    @pytest.mark.asyncio
+    async def test_player_status_non_podcast_ignored(self):
+        import plugins.podcast as podcast_mod
+
+        old_store = podcast_mod._store
+        old_tracking = dict(podcast_mod._player_tracking)
+        try:
+            mock_store = MagicMock()
+            podcast_mod._store = mock_store
+
+            from plugins.podcast import _on_player_status
+
+            event = MagicMock()
+            event.player_id = "aa:bb:cc:dd:ee:ff"
+            event.state = "playing"
+            event.elapsed_seconds = 120.0
+            event.duration = 300.0
+            event.current_track = {
+                "source": "radio",
+                "path": "https://radio.example.com/stream",
+            }
+
+            await _on_player_status(event)
+
+            # Should NOT be tracking a radio stream
+            assert "aa:bb:cc:dd:ee:ff" not in podcast_mod._player_tracking
+        finally:
+            podcast_mod._store = old_store
+            podcast_mod._player_tracking.clear()
+            podcast_mod._player_tracking.update(old_tracking)
+
+
+# =============================================================================
+# v2 feature tests — Store config updates
+# =============================================================================
+
+
+class TestStoreConfigUpdates:
+    def test_update_max_recent(self, tmp_path: Path):
+        store = PodcastStore(tmp_path, max_recent=50)
+        for i in range(30):
+            store.record_played(url=f"https://example.com/ep{i}.mp3", title=f"Ep {i}")
+        assert store.recent_count == 30
+
+        store.update_max_recent(20)
+        assert store.recent_count == 20
+
+    def test_update_auto_mark_played_percent(self, tmp_path: Path):
+        store = PodcastStore(tmp_path, auto_mark_played_percent=90)
+        store.update_auto_mark_played_percent(50)
+        # Now episodes at 50% should be marked played
+        store.update_progress("https://example.com/ep.mp3", 500, 1000)
+        assert store.is_played("https://example.com/ep.mp3")
+
+    def test_custom_resume_threshold(self, tmp_path: Path):
+        store = PodcastStore(tmp_path, resume_threshold=30)
+        store.set_resume_position("https://example.com/ep.mp3", 25)
+        assert store.get_resume_position("https://example.com/ep.mp3") == 0
+        store.set_resume_position("https://example.com/ep.mp3", 31)
+        assert store.get_resume_position("https://example.com/ep.mp3") == 31

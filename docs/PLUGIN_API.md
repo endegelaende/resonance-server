@@ -28,6 +28,7 @@ Step-by-step tutorial: → [`PLUGIN_TUTORIAL.md`](PLUGIN_TUTORIAL.md)
 16. [Content Providers](#16-content-providers)
 17. [Reference Plugins](#17-reference-plugins)
 18. [Plugin Settings & Management API](#18-plugin-settings--management-api)
+19. [Server-Driven UI (SDUI)](#19-server-driven-ui-sdui)
 
 ---
 
@@ -95,6 +96,24 @@ reads the `[plugin]` table and creates a `PluginManifest` object.
 | `min_resonance_version` | ❌ | string | Minimum server version (informational, not enforced). |
 | `category` | ❌ | string | Optional category for UIs/repository (`radio`, `podcast`, `tools`, ...). |
 | `icon` | ❌ | string | Optional icon key/URL hint for UIs. |
+
+### UI Page (`[ui]`)
+
+If your plugin wants to expose a page in the web UI sidebar, add a `[ui]`
+section to your manifest. See [§19 Server-Driven UI](#19-server-driven-ui-sdui) for the full guide.
+
+| Field | Required | Type | Description |
+|---|---|---|---|
+| `enabled` | ✅ | bool | Set `true` to enable the plugin UI page. |
+| `sidebar_label` | ❌ | string | Label shown in the sidebar (defaults to plugin name). |
+| `sidebar_icon` | ❌ | string | Lucide icon name for the sidebar entry (e.g. `"cast"`, `"radio"`, `"radar"`). Falls back to the plugin's `icon` field, then `"plug"`. |
+
+```toml
+[ui]
+enabled = true
+sidebar_label = "AirPlay"
+sidebar_icon = "cast"
+```
 
 ### Declarative Settings (`[settings.<key>]`)
 
@@ -165,6 +184,9 @@ class PluginManifest:
     plugin_type: str = "core"     # set by PluginManager (core/community)
     plugin_dir: Path = ...          # Set by loader, not from TOML
     settings_defs: tuple[SettingDefinition, ...] = ()
+    ui_enabled: bool = False        # from [ui].enabled
+    ui_sidebar_label: str = ""      # from [ui].sidebar_label
+    ui_sidebar_icon: str = ""       # from [ui].sidebar_icon
 ```
 
 **Error handling:** If `name` or `version` is missing, the plugin is
@@ -310,6 +332,8 @@ server functionality.
 | `register_content_provider` | `(provider_id: str, provider: ContentProvider) -> None` | External audio source (Radio, Podcast, …) |
 | `unregister_content_provider` | `(provider_id: str) -> None` | Remove a content provider |
 | `subscribe` | `async (event_type: str, handler) -> None` | Event with auto-cleanup |
+| `register_ui_handler` | `(handler: Callable) -> None` | SDUI page builder ([§19](#19-server-driven-ui-sdui)) |
+| `register_action_handler` | `(handler: Callable) -> None` | SDUI action dispatcher ([§19](#19-server-driven-ui-sdui)) |
 
 ### Utility Functions
 
@@ -333,6 +357,7 @@ after `teardown()`:
 - Menus → Entries with `_plugin_id` are removed from the global list
 - Events → `event_bus.unsubscribe()` for each subscribed handler
 - Content providers → `unregister_content_provider()` for each registered provider
+- UI handlers → `_ui_handler` and `_action_handler` are set to `None`
 - Routes → *Note: FastAPI routes cannot currently be cleanly removed (framework limitation)*
 
 **Manual cleanup in `teardown()` is not needed** — only for your own
@@ -1440,6 +1465,527 @@ Unknown plugins default to `enabled` for backwards compatibility.
 
 ---
 
+## 19) Server-Driven UI (SDUI)
+
+Plugins can expose pages in the web UI without writing any JavaScript.
+The plugin describes its UI as a Python data structure (a tree of typed
+components). The frontend has a generic renderer that maps each component
+`type` to a Svelte widget.
+
+**Plugins supply data. The frontend supplies presentation.**
+
+### Overview
+
+```
+Plugin (Python)           Server              Frontend (Svelte)
+─────────────────         ──────              ──────────────────
+get_ui(ctx) → Page   →   GET /api/plugins/{id}/ui   →   PluginRenderer
+                              ↓ JSON                       ↓
+                         { components: [...] }        Recursive render
+                                                      (Card, Table, Button, …)
+
+handle_action(action, params)  ←  POST /api/plugins/{id}/actions/{action}
+```
+
+### Quick Start
+
+**1. Add `[ui]` to `plugin.toml`:**
+
+```toml
+[plugin]
+name = "myplugin"
+version = "1.0.0"
+
+[ui]
+enabled = true
+sidebar_label = "My Plugin"
+sidebar_icon = "star"
+```
+
+**2. Write `get_ui()` — returns a `Page` describing your UI:**
+
+```python
+from resonance.ui import (
+    Page, Card, KeyValue, KVItem, StatusBadge, Button, Row, Alert, Table,
+    TableColumn, Text, Heading, Column, Progress, Markdown,
+)
+
+async def get_ui(ctx):
+    return Page(
+        title="My Plugin",
+        icon="star",
+        refresh_interval=10,  # auto-refresh every 10 seconds (0 = no polling)
+        components=[
+            Card(title="Status", children=[
+                StatusBadge(label="Running", color="green"),
+                KeyValue(items=[
+                    KVItem("Version", "1.0.0"),
+                    KVItem("Uptime", "3h 42m", color="blue"),
+                ]),
+            ]),
+            Row(children=[
+                Button("Restart", action="restart", style="danger", confirm=True),
+                Button("Refresh", action="refresh", style="secondary"),
+            ]),
+        ],
+    )
+```
+
+**3. Write `handle_action()` — dispatches button clicks:**
+
+```python
+async def handle_action(action: str, params: dict) -> dict:
+    match action:
+        case "restart":
+            await do_restart()
+            return {"message": "Restarted successfully"}
+        case "refresh":
+            return {"success": True}
+        case _:
+            return {"error": f"Unknown action: {action}"}
+```
+
+**4. Register both in `setup()`:**
+
+```python
+async def setup(ctx):
+    ctx.register_ui_handler(get_ui)
+    ctx.register_action_handler(handle_action)
+```
+
+That's it. The plugin now has a page in the web UI sidebar.
+
+### Available Widgets
+
+#### Display Widgets
+
+| Widget | Constructor | Key Props | Description |
+|---|---|---|---|
+| `heading` | `Heading(text, level=2)` | `text`, `level` (1–4) | Section heading |
+| `text` | `Text(content, color?, size?)` | `content`, `color`, `size` | Paragraph text |
+| `status_badge` | `StatusBadge(label, status?, color)` | `label`, `status`, `color` | Colored status indicator |
+| `key_value` | `KeyValue(items)` | `items: list[KVItem]` | Key-value pair list |
+| `table` | `Table(columns, rows, title?, edit_action?, row_key?)` | `columns`, `rows`, `title`, `edit_action`, `row_key` | Data table (supports row actions and inline editing) |
+| `button` | `Button(label, action, params?, style?, confirm?, icon?, disabled?)` | `label`, `action`, `style`, `confirm`, `disabled` | Action trigger |
+| `card` | `Card(title?, children?, collapsible?, collapsed?)` | `title`, `children`, `collapsible`, `collapsed` | Grouped content box with optional expand/collapse |
+| `row` | `Row(children?, gap?, justify?, align?)` | `children`, `gap` | Horizontal flex layout |
+| `column` | `Column(children?, gap?)` | `children`, `gap` | Vertical flex layout |
+| `alert` | `Alert(message, severity?, title?)` | `message`, `severity` | Info/warning/error/success banner |
+| `progress` | `Progress(value, label?, color?)` | `value` (0–100), `label` | Progress bar |
+| `markdown` | `Markdown(content)` | `content` | Rendered markdown text |
+
+#### Layout Widgets (Phase 2)
+
+| Widget | Constructor | Key Props | Description |
+|---|---|---|---|
+| `tabs` | `Tabs(tabs)` | `tabs: list[Tab]` | Tab-based navigation (client-side, no backend roundtrip) |
+
+Each `Tab` has: `label` (str), `children` (list of components), `icon` (optional str).
+
+#### Modal / Dialog Widget (Phase 2.5)
+
+| Widget | Constructor | Key Props | Description |
+|---|---|---|---|
+| `modal` | `Modal(title, trigger_label, children?, trigger_style?, trigger_icon?, size?)` | `title`, `trigger_label`, `size` | Modal dialog overlay triggered by a button |
+
+**Props:**
+
+- `title` (str, required) — shown in the modal header.
+- `trigger_label` (str, required) — text on the button that opens the modal.
+- `trigger_style` (str, default `"secondary"`) — button style: `"primary"`, `"secondary"`, `"danger"`.
+- `trigger_icon` (str, optional) — icon name for the trigger button.
+- `size` (str, default `"md"`) — modal width: `"sm"` (384px), `"md"` (512px), `"lg"` (672px), `"xl"` (896px).
+- `children` (list, optional) — components rendered inside the modal body.
+
+**Usage:** The modal renders a trigger button inline. When clicked, a dialog overlay
+appears with the header, close button, and the children components. Clicking the
+backdrop or pressing Escape closes the modal. Modals can contain any widget,
+including `Form`, `KeyValue`, `Table`, etc.
+
+#### Form Widgets (Phase 2)
+
+| Widget | Constructor | Key Props | Description |
+|---|---|---|---|
+| `form` | `Form(action, children?, submit_label?, submit_style?, disabled?)` | `action`, `submit_label`, `disabled` | Container that collects input values and submits as action params |
+| `text_input` | `TextInput(name, label, value?, placeholder?, required?, pattern?, disabled?)` | `name`, `label`, `value` | Single-line text field |
+| `textarea` | `Textarea(name, label, value?, placeholder?, rows?, maxlength?, required?, disabled?)` | `name`, `label`, `value`, `rows` | Multi-line text field with optional character limit |
+| `number_input` | `NumberInput(name, label, value?, min?, max?, step?, required?, disabled?)` | `name`, `label`, `value`, `min`, `max` | Numeric input with range constraints |
+| `select` | `Select(name, label, value?, options?, required?, disabled?)` | `name`, `label`, `options: list[SelectOption]` | Dropdown selection |
+| `toggle` | `Toggle(name, label, value?, disabled?)` | `name`, `label`, `value` (bool) | Boolean on/off switch |
+
+Each `SelectOption` has: `value` (str), `label` (str).
+
+**Textarea props:** `rows` (int, default 4) sets the visible height. `maxlength` (int, optional)
+limits the character count and shows a live counter in the UI. The textarea is vertically resizable.
+
+**Form behaviour:** On submit, the `Form` widget collects all child input values
+(identified by their `name` prop) into a `params` dict and sends it to
+`POST /api/plugins/{id}/actions/{action}`. The submit button is disabled until
+the user changes a value (dirty tracking). After a successful submission, the
+dirty state resets.
+
+### Color Values
+
+All color props accept: `"green"`, `"red"`, `"yellow"`, `"blue"`, `"gray"`.
+
+### Button Styles
+
+- `"primary"` — Accent-colored, for primary actions
+- `"secondary"` — Neutral, for secondary actions (default)
+- `"danger"` — Red, for destructive actions
+
+### Alert Severities
+
+`"info"` (default), `"warning"`, `"error"`, `"success"`.
+
+### Card: Collapsible Mode
+
+Cards can be made collapsible so the user can expand/collapse the body:
+
+```python
+# Always expanded (default)
+Card(title="Status", children=[...])
+
+# Collapsible, starts expanded
+Card(title="Details", collapsible=True, children=[...])
+
+# Collapsible, starts collapsed
+Card(title="Common Options (read-only)", collapsible=True, collapsed=True, children=[...])
+```
+
+- `collapsible` (bool, default `False`) — renders a toggle chevron in the header.
+- `collapsed` (bool, default `False`) — initial state; only used when `collapsible=True`.
+- When `collapsed=True` is set without `collapsible=True`, it is silently ignored.
+- Both flags are only serialised when `collapsible` is `True` to keep payloads compact.
+
+### Table Usage
+
+```python
+Table(
+    title="Detected Devices",
+    columns=[
+        TableColumn(key="name", label="Name"),
+        TableColumn(key="mac", label="MAC Address"),
+        TableColumn(key="enabled", label="Enabled", variant="badge"),
+        TableColumn(key="actions", label="", variant="actions"),
+    ],
+    rows=[
+        {
+            "name": "Kitchen Speaker",
+            "mac": "aa:bb:cc:dd:ee:ff",
+            "enabled": {"text": "Yes", "color": "green"},
+            "actions": [
+                TableAction(label="Delete", action="delete_device",
+                            params={"udn": "..."}, style="danger", confirm=True).to_dict(),
+            ],
+        },
+    ],
+)
+```
+
+Each row is a `dict` whose keys match the column `key` values.
+
+**Column variants:**
+- `"text"` (default) — plain text display
+- `"badge"` — renders cell as a colored badge; cell value must be `{"text": "...", "color": "..."}`
+- `"actions"` — renders `TableAction` buttons per row; cell value is a list of action dicts
+
+### Table: Inline Editing
+
+Columns with `variant="editable"` render as click-to-edit text fields. When the
+user commits an edit (Enter or blur), the table dispatches `edit_action` with the
+row identifier and the new value:
+
+```python
+Table(
+    columns=[
+        TableColumn(key="name", label="Name", variant="editable"),
+        TableColumn(key="mac", label="MAC Address"),
+        TableColumn(key="enabled", label="Enabled", variant="badge"),
+        TableColumn(key="actions", label="", variant="actions"),
+    ],
+    rows=device_rows,
+    title="Detected AirPlay Devices",
+    edit_action="update_device",
+    row_key="udn",
+)
+```
+
+- `edit_action` (str, optional) — plugin action to dispatch on edit commit.
+- `row_key` (str, default `"udn"`) — which column uniquely identifies a row.
+- On commit, the frontend dispatches: `{<row_key>: <row[row_key]>, <col.key>: <new_value>}`.
+- Pressing Escape cancels the edit. Only changed values trigger a dispatch.
+- The column variants are: `"text"` (default), `"badge"`, `"actions"`, `"editable"`.
+
+### Tabs Usage
+
+```python
+from resonance.ui import Tabs, Tab
+
+Tabs(tabs=[
+    Tab(label="Status", icon="activity", children=[
+        Card(title="Bridge Status", children=[...]),
+    ]),
+    Tab(label="Settings", icon="settings", children=[
+        Form(action="save_settings", children=[...]),
+    ]),
+])
+```
+
+Tab switching is purely client-side — no backend roundtrip on tab change.
+The `icon` parameter is optional and accepts any Lucide icon name.
+
+### Form Usage
+
+```python
+from resonance.ui import Form, TextInput, NumberInput, Select, SelectOption, Toggle
+
+Form(
+    action="save_settings",
+    submit_label="Save Settings",
+    disabled=is_active,  # disable when bridge is running
+    children=[
+        Select(
+            name="mode",
+            label="Volume Mode",
+            value="hardware",
+            options=[
+                SelectOption(value="hardware", label="Hardware"),
+                SelectOption(value="software", label="Software"),
+                SelectOption(value="disabled", label="Disabled"),
+            ],
+        ),
+        TextInput(
+            name="interface",
+            label="Network Interface",
+            value="127.0.0.1",
+            placeholder="e.g. 192.168.1.100",
+        ),
+        NumberInput(
+            name="port",
+            label="Port",
+            value=9000,
+            min=1,
+            max=65535,
+        ),
+        Toggle(
+            name="autostart",
+            label="Auto-start at server startup",
+            value=True,
+        ),
+    ],
+)
+```
+
+When submitted, `handle_action("save_settings", params)` receives:
+```python
+params = {
+    "mode": "hardware",
+    "interface": "127.0.0.1",
+    "port": 9000,
+    "autostart": True,
+}
+```
+
+**Disabled state:** Setting `disabled=True` on a `Form` disables all child
+inputs and the submit button. Individual inputs can also be disabled
+independently via their own `disabled` prop.
+
+### Conditional Rendering (`visible_when`)
+
+Any component inside a `Form` can be conditionally shown or hidden based on the
+current value of a sibling form field. Use the `.when()` method to attach a
+condition:
+
+```python
+Toggle(name="debug_enabled", label="Enable Debug", value=False),
+Select(
+    name="debug_category",
+    label="Debug Category",
+    value="all",
+    options=[SelectOption(value="all", label="All"), SelectOption(value="network", label="Network")],
+).when("debug_enabled", True),
+```
+
+The `Select` above is only rendered when the `debug_enabled` toggle is `True`.
+
+#### Operators
+
+By default `.when()` uses equality (`eq`). You can pass an `operator` argument
+to use a different comparison:
+
+| Operator | Meaning | Example |
+|----------|---------|---------|
+| `eq` | Equal (default) | `.when("mode", "hardware")` |
+| `ne` | Not equal | `.when("mode", "disabled", operator="ne")` |
+| `gt` | Greater than | `.when("port", 1024, operator="gt")` |
+| `lt` | Less than | `.when("volume", 10, operator="lt")` |
+| `gte` | Greater than or equal | `.when("level", 5, operator="gte")` |
+| `lte` | Less than or equal | `.when("level", 100, operator="lte")` |
+| `in` | Value is in list | `.when("codec", ["aac", "alac"], operator="in")` |
+| `not_in` | Value is not in list | `.when("codec", ["pcm", "wav"], operator="not_in")` |
+
+```python
+# Show a warning when port is below 1024
+Alert(message="Privileged port!", severity="warning").when("port", 1024, operator="lt"),
+
+# Show options only for specific codecs
+Text("Lossy codec selected").when("codec", ["aac", "mp3"], operator="in"),
+```
+
+#### Behaviour Notes
+
+- `.when()` returns `self`, so it is chainable.
+- Calling `.when()` multiple times on the same component replaces the previous
+  condition (last call wins).
+- Outside a `Form`, `visible_when` is silently ignored — the component is
+  always visible.
+- When `operator` is `"eq"` (the default), the `operator` key is omitted from
+  the serialised JSON to keep payloads compact.
+- The frontend evaluates conditions reactively: changing a form field
+  immediately shows/hides dependent components.
+
+### KeyValue Usage
+
+```python
+KeyValue(items=[
+    KVItem("Status", "Active", color="green"),
+    KVItem("Binary", "/usr/bin/squeeze2raop"),
+    KVItem("Server", "192.168.1.1:9000"),
+])
+```
+
+### Modal Usage
+
+```python
+from resonance.ui import Modal, Form, TextInput, Select, SelectOption, KeyValue, KVItem
+
+Modal(
+    title="Device Settings — Living Room",
+    trigger_label="Settings: Living Room",
+    trigger_style="secondary",
+    trigger_icon="settings",
+    size="md",
+    children=[
+        Form(
+            action="update_device",
+            submit_label="Save Device Settings",
+            children=[
+                TextInput(
+                    name="name",
+                    label="Display Name",
+                    value="Living Room",
+                    required=True,
+                ),
+                Select(
+                    name="volume_mode",
+                    label="Volume Mode",
+                    value="2",
+                    options=[
+                        SelectOption(value="2", label="Hardware"),
+                        SelectOption(value="1", label="Software"),
+                        SelectOption(value="0", label="Ignored"),
+                    ],
+                ),
+                KeyValue(items=[
+                    KVItem("MAC Address", "aa:bb:cc:dd:ee:ff"),
+                    KVItem("Enabled", "Yes", color="green"),
+                ]),
+            ],
+        ),
+    ],
+)
+```
+
+The modal renders a button labelled "Settings: Living Room". Clicking it opens
+a dialog overlay containing the form. The form collects `name` and
+`volume_mode` values and submits them to `handle_action("update_device", params)`.
+Clicking the backdrop or pressing Escape closes the modal.
+
+### Action Handler Details
+
+The `handle_action()` function receives:
+- `action` — the string from `Button(action="...")` or `Form(action="...")`
+- `params` — the dict from `Button(params={...})`, the merged row params from
+  `TableAction`, or the collected form input values from a `Form` submission.
+  Defaults to `{}` if none.
+
+It must return a `dict`. Special keys in the return value:
+- `{"message": "..."}` — shown as a success toast notification in the UI
+- `{"error": "..."}` — indicates failure (HTTP 500 if raised as exception)
+- `{"success": True}` — silent success (no toast)
+
+### Page Envelope
+
+The `Page` object wraps the component tree:
+
+```python
+Page(
+    title="My Plugin",          # Page heading (required)
+    icon="star",                # Lucide icon name (optional)
+    refresh_interval=10,        # Auto-poll interval in seconds (0 = off)
+    components=[...],           # List of UIComponent widgets
+)
+```
+
+### REST Endpoints
+
+These are automatically available for any plugin with `[ui] enabled = true`:
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/plugins/ui-registry` | GET | Sidebar entries (all UI-enabled plugins) |
+| `/api/plugins/{plugin_id}/ui` | GET | Full UI JSON schema for one plugin |
+| `/api/plugins/{plugin_id}/actions/{action}` | POST | Dispatch a button action |
+
+### Security
+
+- **No plugin JavaScript runs in the browser.** Plugins only provide data.
+- Event handler props (e.g. `onclick`) are rejected during validation.
+- URL props (`href`, `src`, `url`) must use `http:`, `https:`, or `mailto:` schemes.
+  `javascript:` and `data:` URLs are blocked.
+- The frontend never uses `{@html}` on plugin-provided content.
+
+### Sidebar Icon
+
+The sidebar icon is resolved in this order:
+1. `[ui].sidebar_icon` from `plugin.toml`
+2. `[plugin].icon` from `plugin.toml`
+3. Fallback: `"plug"`
+
+Supported icon names are any [Lucide](https://lucide.dev/icons/) icon name
+in kebab-case (e.g. `"cast"`, `"radio"`, `"hard-drive"`, `"refresh-cw"`).
+
+### Reference Implementation
+
+The `raopbridge` community plugin is the first SDUI consumer. Study its
+implementation for a complete real-world example:
+
+- `resonance-community-plugins-main/plugins/raopbridge/plugin.toml` — `[ui]` section
+- `resonance-community-plugins-main/plugins/raopbridge/__init__.py` — `get_ui()` and `handle_action()`
+
+It renders a tabbed interface with three tabs:
+
+- **Status tab:** Bridge status card with `StatusBadge` + `KeyValue`, control
+  buttons (`Activate` / `Deactivate` / `Restart`).
+- **Devices tab:** A device `Table` with badge columns (enabled status) and
+  row-level `TableAction` buttons (delete device with confirmation).
+- **Settings tab:** An editable `Form` with `Select` (binary selection),
+  `TextInput` (interface, server address), and multiple `Toggle` switches
+  (auto-start, auto-save, logging, debug). The form is disabled while the
+  bridge is active. A read-only `Card` shows configuration file info.
+
+Actions dispatch to existing bridge management functions (`save_settings`,
+`delete_device`, `activate`, `deactivate`, `restart`).
+
+### Architecture Details
+
+For the original architecture document including security model, schema
+specification, and design rationale, see the archived planning document
+[`dev/SDUI_ARCHITECTURE.md`](dev/SDUI_ARCHITECTURE.md).
+
+---
+
 ## Further Reading
 
 | Document | Content |
@@ -1448,9 +1994,11 @@ Unknown plugins default to `enabled` for backwards compatibility.
 | [`PLUGIN_TUTORIAL.md`](PLUGIN_TUTORIAL.md) | Step-by-step: Build your own plugin |
 | [`PLUGIN_REPOSITORY.md`](PLUGIN_REPOSITORY.md) | Publishing plugins and repository index format |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Resonance system architecture |
+| [`dev/SDUI_ARCHITECTURE.md`](dev/SDUI_ARCHITECTURE.md) | SDUI architecture deep-dive (archived planning document) |
 | `plugins/radio/` | Reference ContentProvider plugin (radio-browser.info, remote streaming) |
 | `plugins/podcast/` | Reference ContentProvider plugin (RSS feeds, subscriptions, resume) |
+| `community-repo/plugins/raopbridge/` | Reference SDUI consumer (AirPlay bridge with UI page) |
 
 ---
 
-*Last updated: February 2026 (plugin settings/management API added in §18)*
+*Last updated: June 2025 (SDUI documentation added in §19)*

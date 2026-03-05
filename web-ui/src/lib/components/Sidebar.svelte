@@ -1,5 +1,7 @@
 <script lang="ts">
   import { uiStore, type View } from "$lib/stores/ui.svelte";
+  import { api, type PluginUIRegistryEntry } from "$lib/api";
+  import DynamicIcon from "$lib/components/DynamicIcon.svelte";
   import {
     Library,
     Search,
@@ -11,6 +13,7 @@
     Radio,
     Puzzle,
   } from "lucide-svelte";
+  import { onMount } from "svelte";
 
   // Navigation items configuration
   const mainNavItems = [
@@ -43,9 +46,31 @@
     },
   ] as const;
 
+  // Dynamic plugin UI entries
+  let pluginNavItems = $state<PluginUIRegistryEntry[]>([]);
+
+  onMount(() => {
+    loadPluginNav();
+  });
+
+  async function loadPluginNav() {
+    try {
+      pluginNavItems = await api.getPluginUIRegistry();
+    } catch {
+      pluginNavItems = [];
+    }
+  }
+
   function handleNavigate(view: View) {
     uiStore.navigateTo(view);
     // Auto-close on mobile
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      uiStore.setSidebarOpen(false);
+    }
+  }
+
+  function handleNavigatePlugin(pluginId: string) {
+    uiStore.navigateToPlugin(pluginId);
     if (typeof window !== "undefined" && window.innerWidth < 1024) {
       uiStore.setSidebarOpen(false);
     }
@@ -226,6 +251,35 @@
       />
       <span>Radio</span>
     </button>
+
+    <!-- Dynamic Plugin Pages -->
+    {#if pluginNavItems.length > 0}
+      <div class="my-4 border-t border-surface-1 mx-3 opacity-50"></div>
+      <div
+        class="px-3 py-2 text-xs font-semibold text-overlay-0 uppercase tracking-wider mb-2"
+      >
+        Plugin Pages
+      </div>
+
+      {#each pluginNavItems as item}
+        <button
+          class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 group
+          {uiStore.currentView === `plugin:${item.id}`
+            ? 'bg-surface-0 text-accent dynamic-accent font-medium'
+            : 'text-overlay-1 hover:text-text hover:bg-surface-0'}"
+          onclick={() => handleNavigatePlugin(item.id)}
+        >
+          <DynamicIcon
+            name={item.icon}
+            size={20}
+            class="transition-colors {uiStore.currentView === `plugin:${item.id}`
+              ? 'text-accent dynamic-accent'
+              : 'group-hover:text-text'}"
+          />
+          <span>{item.label}</span>
+        </button>
+      {/each}
+    {/if}
   </nav>
 
   <!-- Footer / Settings -->

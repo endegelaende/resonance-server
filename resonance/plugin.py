@@ -35,6 +35,7 @@ Usage (inside a plugin's ``__init__.py``):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -251,6 +252,15 @@ class PluginManifest:
     settings_defs: tuple[SettingDefinition, ...] = ()
     """Declared settings from ``[settings.*]`` in plugin.toml."""
 
+    ui_enabled: bool = False
+    """Whether this plugin provides a UI page (from ``[ui]`` section)."""
+
+    ui_sidebar_label: str = ""
+    """Sidebar label for the plugin page (from ``[ui].sidebar_label``)."""
+
+    ui_sidebar_icon: str = ""
+    """Sidebar icon for the plugin page (from ``[ui].sidebar_icon``)."""
+
     @classmethod
     def from_toml(
         cls,
@@ -259,6 +269,9 @@ class PluginManifest:
         *,
         settings_defs: tuple[SettingDefinition, ...] = (),
         plugin_type: str = "core",
+        ui_enabled: bool = False,
+        ui_sidebar_label: str = "",
+        ui_sidebar_icon: str = "",
     ) -> PluginManifest:
         """Create a manifest from a parsed TOML ``[plugin]`` table.
 
@@ -287,6 +300,9 @@ class PluginManifest:
             plugin_type=str(plugin_type or "core"),
             plugin_dir=plugin_dir,
             settings_defs=tuple(settings_defs),
+            ui_enabled=bool(ui_enabled),
+            ui_sidebar_label=str(ui_sidebar_label),
+            ui_sidebar_icon=str(ui_sidebar_icon),
         )
 
 
@@ -386,6 +402,17 @@ class PluginContext:
         self._command_unregister = _command_unregister
         self._route_register = _route_register
         self._content_registry = _content_registry
+
+        # UI handlers for server-driven UI
+        self._ui_handler: Any = None
+        self._action_handler: Any = None
+
+        # SSE: monotonic counter + Condition for UI-refresh notifications.
+        # Each call to notify_ui_update() increments _ui_revision and wakes
+        # all waiters.  Waiters compare against their last-seen revision to
+        # decide whether a refresh occurred — no events can be missed.
+        self._ui_revision: int = 0
+        self._ui_condition: asyncio.Condition = asyncio.Condition()
 
         # Track what this plugin registered so teardown can clean up.
         self._registered_commands: list[str] = []
@@ -537,6 +564,90 @@ class PluginContext:
             raise RuntimeError("Route registration not available (test mode?)")
         self._route_register(router)
         logger.debug("[%s] Registered FastAPI router", self.plugin_id)
+
+    # -- UI handler registration ---------------------------------------------
+
+    def register_ui_handler(self, handler: Any) -> None:
+        """Register a function that returns the plugin's UI page.
+
+        The handler must be an async function with signature:
+        ``async def get_ui(ctx: PluginContext) -> Page``
+        """
+        self._ui_handler = handler
+        logger.debug("[%s] Registered UI handler", self.plugin_id)
+
+    def register_action_handler(self, handler: Any) -> None:
+        """Register a function that handles UI button actions.
+
+        The handler must be an async function with signature:
+        ``async def handle_action(action: str, params: dict) -> dict``
+        """
+        self._action_handler = handler
+        logger.debug("[%s] Registered action handler", self.plugin_id)
+
+    # -- UI update notifications (SSE) ---------------------------------------
+
+    def notify_ui_update(self) -> None:
+        """Signal that the plugin's UI state has changed.
+
+        Increments the internal revision counter and wakes **all** SSE
+        clients currently blocked in :meth:`wait_for_ui_update`.
+        Because waiters track the last-seen revision, no notification
+        can be lost — even if two calls happen back-to-back.
+
+        Plugins can call this explicitly, but the action-dispatch
+        endpoint also calls it automatically after every successful
+        action so that the UI reflects the new state without waiting
+        for the next polling interval.
+
+        This method is synchronous so it can be called from sync code.
+        It schedules the actual ``Condition.notify_all()`` on the
+        running event loop.
+        """
+        self._ui_revision += 1
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon(self._wake_ui_waiters)
+        except RuntimeError:
+            # No running loop (e.g. called from a non-async test).
+            pass
+
+    def _wake_ui_waiters(self) -> None:
+        """Schedule the async notify on the condition variable."""
+        asyncio.ensure_future(self._notify_ui_condition())
+
+    async def _notify_ui_condition(self) -> None:
+        async with self._ui_condition:
+            self._ui_condition.notify_all()
+
+    @property
+    def ui_revision(self) -> int:
+        """Current UI revision counter (monotonically increasing)."""
+        return self._ui_revision
+
+    async def wait_for_ui_update(
+        self, last_revision: int, timeout: float = 30.0
+    ) -> int:
+        """Block until the UI revision exceeds *last_revision* or *timeout* elapses.
+
+        Returns the current revision number.  If the returned value
+        equals *last_revision*, no update occurred (timeout).  Otherwise
+        the caller should re-fetch the UI.
+
+        Multiple SSE clients can call this concurrently — each tracks
+        its own ``last_revision`` independently.
+        """
+        async with self._ui_condition:
+            try:
+                await asyncio.wait_for(
+                    self._ui_condition.wait_for(
+                        lambda: self._ui_revision > last_revision
+                    ),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                pass
+        return self._ui_revision
 
     # -- Data directory ------------------------------------------------------
 
@@ -717,6 +828,10 @@ class PluginContext:
                     exc,
                 )
         self._registered_content_providers.clear()
+
+        # Clear UI handlers
+        self._ui_handler = None
+        self._action_handler = None
 
         logger.debug("[%s] Cleanup complete", self.plugin_id)
 

@@ -144,6 +144,7 @@ Resonance speaks the same protocols as LMS. The server gives commands, players e
 | HTTP Streaming (MP3, FLAC, OGG, WAV)          | Yes    |
 | On-the-fly Transcoding (M4A, M4B, AAC, ALAC)  | Yes    |
 | Internet Radio (radio-browser.info via plugin)  | Yes    |
+| Podcasts (RSS + PodcastIndex via plugin)        | Yes    |
 | Remote URL Proxy (HTTPS → HTTP for hardware)   | Yes    |
 | Gapless Playback                               | Yes    |
 | Crossfade (configurable overlap)               | Yes    |
@@ -162,6 +163,9 @@ Resonance speaks the same protocols as LMS. The server gives commands, players e
 | Alarm Scheduling (per-player)                          | Yes    |
 | Device Capabilities (volume curves, hardware flags)    | Yes    |
 | Plugin System (commands, menus, content providers)     | Yes    |
+| Server-Driven UI (plugins build web pages in Python)   | Yes    |
+| Security Headers (CSP, X-Frame-Options, etc.)          | Yes    |
+| Community Plugin Repository (one-click install)        | Yes    |
 
 ### Frontends
 
@@ -323,11 +327,12 @@ Make sure the backend is running first.
 
 The frontend communicates with Resonance via:
 
-| Protocol | Endpoint      | Purpose                                              |
-| -------- | ------------- | ---------------------------------------------------- |
-| JSON-RPC | `/jsonrpc.js` | LMS-compatible API (player control, library queries) |
-| REST     | `/api/*`      | Modern endpoints (folders, scan, artwork, delete)    |
-| Cometd   | `/cometd`     | Real-time updates (currently uses polling)           |
+| Protocol | Endpoint                        | Purpose                                              |
+| -------- | ------------------------------- | ---------------------------------------------------- |
+| JSON-RPC | `/jsonrpc.js`                   | LMS-compatible API (player control, library queries) |
+| REST     | `/api/*`                        | Modern endpoints (folders, scan, artwork, plugins)   |
+| Cometd   | `/cometd`                       | Real-time updates (currently uses polling)           |
+| SSE      | `/api/plugins/{id}/events`      | Server-Sent Events for plugin UI live updates        |
 
 ### Project Structure
 
@@ -347,6 +352,7 @@ web-ui/
 │   │   │   ├── NowPlaying.svelte         # Playback controls + progress
 │   │   │   ├── PlayerSelector.svelte     # Multi-player dropdown
 │   │   │   ├── PlaylistsView.svelte      # Saved playlists manage
+│   │   │   ├── PluginsView.svelte        # Plugin management UI
 │   │   │   ├── PodcastView.svelte        # Podcast browse + subscribe
 │   │   │   ├── QualityBadge.svelte       # Lossless / Hi-Res indicators
 │   │   │   ├── Queue.svelte              # Playlist sidebar
@@ -357,6 +363,14 @@ web-ui/
 │   │   │   ├── Sidebar.svelte            # Navigation sidebar
 │   │   │   ├── ToastContainer.svelte     # Toast notification renderer
 │   │   │   └── TrackList.svelte          # Track list with play/add actions
+│   │   ├── plugin-ui/                    # Server-Driven UI (SDUI) system
+│   │   │   ├── registry.ts              #   Widget type → Svelte component map
+│   │   │   ├── PluginRenderer.svelte    #   Recursive component renderer
+│   │   │   ├── PluginPageView.svelte    #   Page container (SSE + polling)
+│   │   │   ├── actions.svelte.ts        #   Generic action dispatcher
+│   │   │   └── widgets/                 #   20 widget components
+│   │   │       ├── ActionButton.svelte, Alert.svelte, Card.svelte, ...
+│   │   │       └── Toggle.svelte, Textarea.svelte, Modal.svelte, ...
 │   │   └── stores/
 │   │       ├── color.svelte.ts           # Dynamic accent colors (Vibrant)
 │   │       ├── player.svelte.ts          # Player state + polling
@@ -450,7 +464,7 @@ resonance-server/
 │   ├── radio/                    #   Internet Radio (radio-browser.info)
 │   └── podcast/                  #   Podcast (RSS + PodcastIndex)
 ├── web-ui/                       # Svelte 5 frontend
-├── tests/                        # pytest suite (2041 tests)
+├── tests/                        # pytest suite (2853 tests)
 ├── scripts/                      # Dev & test scripts
 ├── third_party/                  # External binaries
 │   ├── bin/                      #   faad, flac, lame, sox (Windows)
@@ -458,8 +472,10 @@ resonance-server/
 ├── docs/                         # Documentation
 │   ├── ARCHITECTURE.md           #   System architecture
 │   ├── CHANGELOG.md              #   Change log
+│   ├── HARDWARE_TESTING.md       #   Bitmap display hardware test runbook
 │   ├── PLUGINS.md                #   Plugin system overview
-│   ├── PLUGIN_API.md             #   Plugin API reference
+│   ├── PLUGIN_API.md             #   Plugin API reference (incl. SDUI §19)
+│   ├── PLUGIN_REPOSITORY.md      #   Community plugin publishing guide
 │   └── PLUGIN_TUTORIAL.md        #   Plugin tutorial (step by step)
 ├── pyproject.toml                # Python project config
 └── LICENSE                       # GPL-2.0
@@ -538,6 +554,7 @@ A huge thank-you to the Squeezebox community — you keep this wonderful platfor
 - [LMS Community Forums](https://forums.slimdevices.com/) — for keeping Squeezebox alive
 - [Squeezelite](https://github.com/ralph-irving/squeezelite) by Ralph Irving — excellent software player
 - [ralph-irving/faad2](https://github.com/ralph-irving/faad2) — patched faad binary with seeking and ALAC support
+- [Community Plugins](https://github.com/endegelaende/resonance-community-plugins) — community-contributed plugins (installable via the Plugin Manager)
 
 If you have feedback, ideas, or run into bugs — please
 [open an issue](https://github.com/endegelaende/resonance-server/issues) or start a discussion.

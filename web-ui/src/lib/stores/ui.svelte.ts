@@ -8,12 +8,16 @@ export type View =
   | "playlists"
   | "radio"
   | "plugins"
-  | "settings";
+  | "settings"
+  | `plugin:${string}`;
 export type ModalType = "none" | "add-folder";
 
 class UIStore {
   // Navigation State
   currentView = $state<View>("artists");
+
+  // Active plugin page (when currentView is "plugin:...")
+  activePluginId = $state<string | null>(null);
 
   // Selection Context
   selectedArtist = $state<Artist | null>(null);
@@ -26,6 +30,7 @@ class UIStore {
   // Navigation Actions
   navigateTo(view: View) {
     this.currentView = view;
+    this.activePluginId = null;
 
     // Reset selection context when navigating to root views
     // This ensures we start fresh when clicking main navigation items
@@ -40,6 +45,13 @@ class UIStore {
       this.selectedArtist = null;
       this.selectedAlbum = null;
     }
+  }
+
+  navigateToPlugin(pluginId: string) {
+    this.currentView = `plugin:${pluginId}` as View;
+    this.activePluginId = pluginId;
+    this.selectedArtist = null;
+    this.selectedAlbum = null;
   }
 
   // Drill down navigation helpers

@@ -34,7 +34,7 @@ from resonance.web.routes.api import register_api_routes
 from resonance.web.routes.artwork import register_artwork_routes
 from resonance.web.routes.cometd import register_cometd_routes
 from resonance.web.routes.streaming import register_streaming_routes
-from resonance.web.security import AuthMiddleware, RateLimitMiddleware
+from resonance.web.security import AuthMiddleware, RateLimitMiddleware, SecurityHeadersMiddleware
 
 if TYPE_CHECKING:
     from resonance.core.artwork import ArtworkManager
@@ -152,8 +152,12 @@ class WebServer:
 
         # Add security middleware (reads from ServerSettings if available).
         # Middleware execution order is LIFO — last added runs first.
-        # We add rate-limit first, then auth, so auth checks run before
-        # rate-limit accounting (rejected auth requests don't count).
+        # We add security-headers first, then rate-limit, then auth, so:
+        #   1. Auth checks run first (outermost)
+        #   2. Rate-limit accounting next (rejected auth requests don't count)
+        #   3. Security headers added last (innermost, runs on every response)
+        self.app.add_middleware(SecurityHeadersMiddleware, enabled=True)
+
         if settings_loaded():
             _settings = get_settings()
             self.app.add_middleware(

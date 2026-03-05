@@ -356,6 +356,7 @@ class PluginManager:
                     "type": manifest.plugin_type,
                     "has_settings": bool(manifest.settings_defs),
                     "can_uninstall": manifest.plugin_type == "community",
+                    "ui_enabled": manifest.ui_enabled,
                 }
             )
 
@@ -388,11 +389,24 @@ class PluginManager:
                     logger.warning("Invalid setting '%s' in %s: %s", key, toml_path, exc)
         settings_defs.sort(key=lambda definition: (definition.order, definition.key))
 
+        # Parse [ui] section
+        ui_table = full_data.get("ui", {})
+        ui_enabled = False
+        ui_sidebar_label = ""
+        ui_sidebar_icon = ""
+        if isinstance(ui_table, dict):
+            ui_enabled = bool(ui_table.get("enabled", False))
+            ui_sidebar_label = str(ui_table.get("sidebar_label", ""))
+            ui_sidebar_icon = str(ui_table.get("sidebar_icon", ""))
+
         return PluginManifest.from_toml(
             plugin_table,
             plugin_dir,
             settings_defs=tuple(settings_defs),
             plugin_type=plugin_type,
+            ui_enabled=ui_enabled,
+            ui_sidebar_label=ui_sidebar_label,
+            ui_sidebar_icon=ui_sidebar_icon,
         )
 
     @staticmethod

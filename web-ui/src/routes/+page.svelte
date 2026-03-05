@@ -16,6 +16,7 @@
   import RadioView from "$lib/components/RadioView.svelte";
   import PlaylistsView from "$lib/components/PlaylistsView.svelte";
   import PluginsView from "$lib/components/PluginsView.svelte";
+  import PluginPageView from "$lib/plugin-ui/PluginPageView.svelte";
   import {
     Library,
     Users,
@@ -567,7 +568,7 @@
       <!-- Library Browser -->
       <main class="flex-1 flex flex-col min-w-0 overflow-hidden relative">
         <!-- Library Header (Breadcrumbs & Actions) -->
-        {#if uiStore.currentView !== "settings" && uiStore.currentView !== "playlists" && uiStore.currentView !== "radio" && uiStore.currentView !== "plugins"}
+        {#if uiStore.currentView !== "settings" && uiStore.currentView !== "playlists" && uiStore.currentView !== "radio" && uiStore.currentView !== "plugins" && !uiStore.currentView.startsWith("plugin:")}
           <div
             class="flex items-center justify-between px-6 py-4 border-b border-border bg-base/50 backdrop-blur-sm z-10"
           >
@@ -928,6 +929,8 @@
             <RadioView />
           {:else if uiStore.currentView === "plugins"}
             <PluginsView />
+          {:else if uiStore.activePluginId}
+            <PluginPageView pluginId={uiStore.activePluginId} />
           {:else if uiStore.currentView === "settings"}
             <SettingsPanel />
           {/if}

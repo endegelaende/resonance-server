@@ -11,6 +11,7 @@ Provides REST endpoints for the web UI and external integrations:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -18,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from resonance.plugin import PluginManifest, SettingDefinition
 from resonance.web.handlers.status import _lms_song_elapsed_seconds
@@ -426,6 +428,150 @@ async def install_from_repository(request: Request) -> dict[str, Any]:
         "installed": True,
         "restart_required": True,
     }
+
+
+# =============================================================================
+# Plugin UI (Server-Driven UI)
+# =============================================================================
+
+
+@router.get("/api/plugins/ui-registry")
+async def get_ui_registry() -> list[dict[str, Any]]:
+    """Return plugins that have UI pages enabled (for sidebar rendering)."""
+    manager = _require_plugin_manager()
+    result: list[dict[str, Any]] = []
+
+    for name, loaded in manager.plugins.items():
+        if not loaded.started or not loaded.manifest.ui_enabled:
+            continue
+        ctx = loaded.context
+        if ctx is None or ctx._ui_handler is None:
+            continue
+        result.append(
+            {
+                "id": name,
+                "label": loaded.manifest.ui_sidebar_label or name,
+                "icon": loaded.manifest.ui_sidebar_icon or loaded.manifest.icon or "plug",
+                "path": f"/plugins/{name}",
+            }
+        )
+
+    return result
+
+
+@router.get("/api/plugins/{plugin_id}/ui")
+async def get_plugin_ui(plugin_id: str) -> dict[str, Any]:
+    """Return the full UI schema for a plugin page."""
+    manager = _require_plugin_manager()
+    loaded = manager.plugins.get(plugin_id)
+
+    if loaded is None:
+        raise HTTPException(status_code=404, detail=f"Plugin not found: {plugin_id}")
+    if not loaded.started:
+        raise HTTPException(status_code=503, detail=f"Plugin not started: {plugin_id}")
+
+    ctx = loaded.context
+    if ctx is None or ctx._ui_handler is None:
+        raise HTTPException(status_code=404, detail=f"Plugin has no UI handler: {plugin_id}")
+
+    try:
+        page = await ctx._ui_handler(ctx)
+        return page.to_dict(plugin_id=plugin_id)
+    except Exception as exc:
+        logger.error("Plugin UI handler error for '%s': %s", plugin_id, exc)
+        raise HTTPException(status_code=500, detail="Plugin UI handler error")
+
+
+@router.post("/api/plugins/{plugin_id}/actions/{action}")
+async def dispatch_plugin_action(
+    plugin_id: str, action: str, request: Request
+) -> dict[str, Any]:
+    """Dispatch a UI button action to a plugin's action handler."""
+    manager = _require_plugin_manager()
+    loaded = manager.plugins.get(plugin_id)
+
+    if loaded is None:
+        raise HTTPException(status_code=404, detail=f"Plugin not found: {plugin_id}")
+    if not loaded.started:
+        raise HTTPException(status_code=503, detail=f"Plugin not started: {plugin_id}")
+
+    ctx = loaded.context
+    if ctx is None or ctx._action_handler is None:
+        raise HTTPException(
+            status_code=404, detail=f"Plugin has no action handler: {plugin_id}"
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    try:
+        result = await ctx._action_handler(action, body)
+        if not isinstance(result, dict):
+            result = {"success": True}
+        # Auto-notify SSE clients so the UI refreshes immediately
+        ctx.notify_ui_update()
+        return result
+    except Exception as exc:
+        logger.error(
+            "Plugin action '%s' error for '%s': %s", action, plugin_id, exc
+        )
+        raise HTTPException(status_code=500, detail=f"Action failed: {exc}")
+
+
+@router.get("/api/plugins/{plugin_id}/events")
+async def plugin_ui_events(plugin_id: str, request: Request) -> StreamingResponse:
+    """SSE stream that emits ``ui_refresh`` events when plugin state changes.
+
+    The frontend connects to this endpoint instead of polling.  Each time
+    the plugin calls ``ctx.notify_ui_update()`` (or an action is dispatched),
+    a ``data: {"event": "ui_refresh", "revision": N}`` line is sent.
+
+    If no update occurs within 30 seconds a keep-alive comment is sent to
+    prevent proxy/browser timeouts.  The client should reconnect on error.
+    """
+    manager = _require_plugin_manager()
+    loaded = manager.plugins.get(plugin_id)
+
+    if loaded is None:
+        raise HTTPException(status_code=404, detail=f"Plugin not found: {plugin_id}")
+    if not loaded.started:
+        raise HTTPException(status_code=503, detail=f"Plugin not started: {plugin_id}")
+
+    ctx = loaded.context
+    if ctx is None:
+        raise HTTPException(status_code=404, detail=f"Plugin context not available: {plugin_id}")
+
+    async def event_generator():
+        """Yield SSE frames: data lines on update, comments as keep-alive."""
+        last_rev = ctx.ui_revision
+        try:
+            while True:
+                # Check if client disconnected
+                if await request.is_disconnected():
+                    break
+                new_rev = await ctx.wait_for_ui_update(
+                    last_revision=last_rev, timeout=25.0
+                )
+                if new_rev > last_rev:
+                    last_rev = new_rev
+                    yield f"data: {{\"event\": \"ui_refresh\", \"revision\": {new_rev}}}\n\n"
+                else:
+                    # Keep-alive comment to prevent proxy timeouts
+                    yield ": keepalive\n\n"
+        except asyncio.CancelledError:
+            pass
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # =============================================================================

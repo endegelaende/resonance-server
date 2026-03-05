@@ -398,6 +398,102 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 
 # ---------------------------------------------------------------------------
+# Security Headers Middleware (CSP + hardening)
+# ---------------------------------------------------------------------------
+
+# Paths that should NOT receive security headers (streaming, SSE, JSON-RPC).
+_SECURITY_HEADERS_EXEMPT_PREFIXES: tuple[str, ...] = (
+    "/stream",       # audio streaming to players
+    "/cometd",       # long-poll (Cometd)
+    "/jsonrpc",      # JSON-RPC for LMS clients
+    "/health",       # monitoring probes
+    "/api/plugins/", # SSE events endpoint (text/event-stream)
+)
+
+
+def _is_security_headers_exempt(path: str) -> bool:
+    """Return True if *path* should skip security headers."""
+    for prefix in _SECURITY_HEADERS_EXEMPT_PREFIXES:
+        if path == prefix or path.startswith(prefix):
+            return True
+    return False
+
+
+# The CSP policy.  SvelteKit's adapter-static emits an inline <script> for
+# client-side hydration and an inline ``style="display: contents"`` on a
+# wrapper <div>, so we must allow 'unsafe-inline' for both script-src and
+# style-src.  This is acceptable for a local music server that is not
+# exposed to the public internet.  A future improvement could compute a
+# SHA-256 hash of the inline script at build time and use hash-based CSP.
+_CSP_POLICY = "; ".join(
+    [
+        "default-src 'none'",
+        "script-src 'self' 'unsafe-inline'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data:",
+        "font-src 'self'",
+        "connect-src 'self'",
+        "media-src 'self'",
+        "frame-ancestors 'none'",
+    ]
+)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware that adds security-hardening HTTP headers to responses.
+
+    Applied headers:
+
+    - **Content-Security-Policy** — restricts resource origins, prevents XSS.
+    - **X-Content-Type-Options: nosniff** — prevents MIME-type sniffing.
+    - **X-Frame-Options: DENY** — prevents clickjacking via iframes.
+    - **Referrer-Policy: strict-origin-when-cross-origin** — limits referrer leakage.
+    - **Permissions-Policy** — disables unnecessary browser APIs.
+    - **X-XSS-Protection: 0** — disables legacy XSS auditor (CSP supersedes it;
+      the auditor itself can introduce vulnerabilities).
+
+    Streaming, SSE, and JSON-RPC endpoints are exempt because they serve
+    binary audio or machine-readable JSON, not HTML.
+
+    Usage::
+
+        app.add_middleware(SecurityHeadersMiddleware, enabled=True)
+    """
+
+    def __init__(self, app: Any, *, enabled: bool = True) -> None:
+        super().__init__(app)
+        self._enabled = enabled
+        if enabled:
+            logger.info("Security headers middleware enabled (CSP + hardening)")
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[..., Any],
+    ) -> Response:
+        response = await call_next(request)
+
+        if not self._enabled:
+            return response
+
+        path = request.url.path
+        if _is_security_headers_exempt(path):
+            return response
+
+        response.headers["Content-Security-Policy"] = _CSP_POLICY
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=(), interest-cohort=()"
+        )
+        response.headers["X-XSS-Protection"] = "0"
+
+        return response
+
+
+# ---------------------------------------------------------------------------
 # Input Validation Helpers
 # ---------------------------------------------------------------------------
 

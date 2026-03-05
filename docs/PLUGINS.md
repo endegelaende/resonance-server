@@ -73,7 +73,7 @@ but offer a modern Python API covering the same use cases.
 
 ## 3) What Can a Plugin Do?
 
-A plugin can register six things:
+A plugin can register seven things:
 
 ### 3.1) JSON-RPC Commands
 
@@ -134,6 +134,32 @@ where it can store files (configuration, cache, databases, …).
 > *Example:* The Favorites plugin stores `favorites.json` in
 > `data/plugins/favorites/`.
 
+### 3.7) Web UI Pages (Server-Driven UI)
+
+Plugins can provide full web UI pages in the Resonance frontend —
+without writing any JavaScript. The plugin describes its UI declaratively
+in Python using widget classes (`Heading`, `Table`, `Form`, `Button`, …),
+and the frontend renders it automatically via a generic recursive renderer.
+
+> *Example:* The raopbridge community plugin provides a 5-tab UI page
+> (Status, Devices, Settings, Advanced, About) with device management,
+> inline editing, settings forms, and per-device configuration modals —
+> all defined in Python, zero Svelte code.
+
+A SDUI plugin implements two functions:
+
+| Function | Purpose |
+|---|---|
+| `get_ui(ctx)` | Return a `Page` object describing the current UI state |
+| `handle_action(ctx, action, params)` | Process user interactions (button clicks, form submissions, etc.) |
+
+20+ widget types are available: display widgets (headings, tables, badges, cards, markdown),
+layout widgets (tabs, modals, rows, columns), and form widgets (text inputs, selects, toggles,
+number inputs, textareas). Widgets support conditional rendering via `visible_when` with
+8 comparison operators.
+
+For details, see [`PLUGIN_API.md` §19](PLUGIN_API.md#19-server-driven-ui-sdui).
+
 ---
 
 ## 4) How Does It Work? (Lifecycle)
@@ -189,7 +215,7 @@ where it can store files (configuration, cache, databases, …).
 
 ---
 
-## 5) Included Plugins
+## 5) Included & Community Plugins
 
 ### 5.1) Example Plugin
 
@@ -302,8 +328,20 @@ plugin are implemented:
 - ✅ JSON-RPC management commands (`pluginsettings`, `pluginmanager`)
 - ✅ Svelte PluginsView with Installed / Available / Settings tabs
 
-### Phase 4 — Ecosystem Growth (ongoing)
+### Phase 4 — Server-Driven UI (SDUI) ✅ Complete
 
+- ✅ 20+ widget types (display, layout, form) in `resonance/ui/__init__.py`
+- ✅ Recursive frontend renderer with `visible_when` conditional rendering (8 operators)
+- ✅ SSE real-time updates (`EventSource` + polling fallback)
+- ✅ Inline-editable table columns, collapsible cards, modal dialogs
+- ✅ Form widgets with dirty tracking and disabled state
+- ✅ Security headers middleware (CSP, X-Frame-Options, etc.)
+- ✅ raopbridge as first SDUI consumer (5-tab UI, device management, settings)
+- ✅ 184 SDUI tests + 166 raopbridge tests + 98 security tests
+
+### Phase 5 — Ecosystem Growth (ongoing)
+
+- SDUI adoption for more plugins (favorites, radio, podcast)
 - Native reimplementation of popular LMS plugin functionality (Spotify, YouTube, …)
 - External plugin publishing workflow and CI/CD for repository releases
 
@@ -351,14 +389,24 @@ entire process.
 **Yes.** Plugins are written in Python. Basic knowledge of
 asyncio (async/await) is helpful since all handlers are asynchronous.
 
+### Can a plugin have a Web UI page?
+
+**Yes.** Using the Server-Driven UI (SDUI) system, a plugin can provide
+a full web UI page without writing any JavaScript. The plugin describes
+its UI in Python and the Resonance frontend renders it automatically.
+See [`PLUGIN_API.md` §19](PLUGIN_API.md#19-server-driven-ui-sdui) for details
+and the raopbridge community plugin as a reference implementation.
+
 ### Where can I find help for developing my own plugins?
 
 → [`PLUGIN_TUTORIAL.md`](PLUGIN_TUTORIAL.md) — Step-by-step guide
-→ [`PLUGIN_API.md`](PLUGIN_API.md) — Complete API reference
+→ [`PLUGIN_API.md`](PLUGIN_API.md) — Complete API reference (including §19 SDUI)
+→ [`PLUGIN_REPOSITORY.md`](PLUGIN_REPOSITORY.md) — How to publish community plugins
 → `plugins/example/` — Minimal template
 → `plugins/favorites/` — Reference plugin (commands, menus, persistence)
 → `plugins/radio/` — Reference ContentProvider plugin (radio-browser.info, remote streaming)
 → `plugins/podcast/` — Reference ContentProvider plugin (RSS feeds, subscriptions, resume)
+→ `community-repo/plugins/raopbridge/` — Reference SDUI plugin (AirPlay bridge with full UI)
 
 ---
 
@@ -390,4 +438,4 @@ and [`PLUGIN_REPOSITORY.md`](PLUGIN_REPOSITORY.md).
 
 ---
 
-*Last updated: February 2026 (Plugin management phases A-E completed)*
+*Last updated: June 2025 (SDUI Phase 1–3 complete, raopbridge community plugin added)*

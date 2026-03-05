@@ -4,9 +4,75 @@ All notable changes to the project are documented here.
 
 ---
 
-## [Unreleased] — Phase 3 + Plugin Modernization Completed ✅
+## [Unreleased] — SDUI + Plugin Modernization Completed ✅
 
-**Status:** 2071 passed, 2 skipped | Plugin-System Modernisierung (Phasen A-E) umgesetzt
+**Status:** 2853 passed, 2 skipped | SDUI Phase 1–3 feature-complete, Plugin-System Phasen A-E umgesetzt
+
+### 🎨 Server-Driven UI (SDUI) — Phase 1–3 + UX Polish (June 2025)
+
+Plugins can now build full web UI pages declaratively in Python — no JavaScript required.
+The Resonance frontend renders plugin UIs generically via a recursive widget renderer.
+
+- **20+ widget types** in `resonance/ui/__init__.py`:
+  - Display: `Heading`, `Text`, `StatusBadge`, `KeyValue`, `Table`, `Button`, `Card`, `Row`, `Column`, `Alert`, `Progress`, `Markdown`
+  - Layout: `Tabs` (with `Tab`), `Modal` (sizes: sm/md/lg/xl)
+  - Form: `Form`, `TextInput`, `Textarea`, `NumberInput`, `Select`, `Toggle`
+
+- **Conditional rendering** (`visible_when`):
+  - `.when(field, value, operator)` on any widget
+  - 8 operators: `eq`, `ne`, `gt`, `lt`, `gte`, `lte`, `in`, `not_in`
+  - Evaluated in frontend against `formContext.getValues()`
+
+- **SSE real-time updates**:
+  - `GET /api/plugins/{id}/events` — Server-Sent Events endpoint
+  - `PluginContext.notify_ui_update()` / `wait_for_ui_update()` / `ui_revision`
+  - `dispatch_plugin_action()` auto-calls `notify_ui_update()`
+  - Frontend: `EventSource` with automatic polling fallback after retries
+
+- **Inline-editable table columns**:
+  - `TableColumn(variant="editable")` + `Table(edit_action=..., row_key=...)`
+  - Click-to-edit, Enter/blur commit, Escape cancel
+
+- **Collapsible cards**: `Card(collapsible=True, collapsed=True)`
+
+- **Form with dirty tracking**: `Form` exposes `getValues()`, `isDisabled`, dirty state
+
+- **Modal dialogs**: 4 sizes (sm/md/lg/xl), close-on-escape, backdrop click
+
+- **Frontend implementation** (`web-ui/src/lib/plugin-ui/`):
+  - `registry.ts` — widget type → Svelte component mapping (20 widgets)
+  - `PluginRenderer.svelte` — recursive renderer with `visible_when` evaluation
+  - `PluginPageView.svelte` — page container with SSE + polling
+  - `actions.svelte.ts` — generic action dispatcher
+  - `widgets/` — 20 Svelte widget components
+
+- **Test coverage**:
+  - `test_plugin_ui.py`: **184 tests** (all widgets, operators, collapsible, inline-edit, SSE, modal)
+
+### 🔒 Security Headers Middleware (June 2025)
+
+- New `SecurityHeadersMiddleware` in `resonance/web/security.py`
+- Sets `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`
+- Pragmatic CSP uses `'unsafe-inline'` due to SvelteKit inline bootstrap (future: SHA-256 hashes)
+- **Test coverage**: `test_security.py`: **98 tests**
+
+### 🔊 raopbridge — AirPlay Bridge Plugin on SDUI (June 2025)
+
+First community plugin fully using the SDUI system. Located in
+`resonance-community-plugins/plugins/raopbridge/`.
+
+- **5-tab UI**: Status, Devices, Settings, Advanced, About
+- **Device management**: Table with inline rename, enable/disable toggle, delete with confirmation
+- **Per-device settings modal**: 3 sub-tabs (General, Audio, Behaviour) with Select/Toggle/NumberInput
+- **Settings form**: Binary path, interface, server, auto_start, auto_save, logging, debug (conditional `visible_when`)
+- **Advanced tab**: Collapsible card with all `common_options` as read-only KeyValue
+- **About tab**: Markdown in collapsible card
+- **Per-device advanced overrides**: ints, booleans, codecs list applied in `_handle_update_device()`
+- **Issue #11 (Pinoatrome)**: All 10 hardcoded Svelte files from Pinoatrome's branch are fully replaced by generic SDUI rendering
+- **Test coverage**: `test_raopbridge_ui.py`: **166 tests**
+
+- Full suite after SDUI + Security + raopbridge: **2853 passed, 2 skipped**
+- `svelte-check`: 0 errors | `npm run build`: ✅
 
 ### 🔌 Plugin System Modernization — Phases A-E (2026-02-19)
 
@@ -53,7 +119,7 @@ All notable changes to the project are documented here.
 - **Test coverage added**:
   - `test_plugin_settings.py`, `test_plugin_states.py`, `test_plugin_installer.py`
   - `test_plugin_repository.py`, `test_plugin_handlers.py`, `test_plugin_api.py`
-  - Full suite: **2071 passed, 2 skipped**
+  - Full suite at time of completion: **2071 passed, 2 skipped** (now 2853 with SDUI + Security)
 
 ### 🌐 Svelte Web-UI Major Update — Favorites, Radio, Podcasts, Playlists (2026-02-15)
 

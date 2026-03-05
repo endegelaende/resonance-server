@@ -436,8 +436,26 @@ on `/`.
 ```
 Browser ──HTTP──▶ FastAPI (StaticFiles "/")
                     │
-                    └──JSON-RPC/Cometd──▶ Resonance Backend (Slimproto/Playlist/Streaming)
+                    ├──JSON-RPC/Cometd──▶ Resonance Backend (Slimproto/Playlist/Streaming)
+                    │
+                    └──REST/SSE──▶ Plugin UI (SDUI)
+                                    │
+                                    ├─ GET  /api/plugins/{id}/ui      → JSON widget tree
+                                    ├─ POST /api/plugins/{id}/actions → action dispatch
+                                    └─ GET  /api/plugins/{id}/events  → SSE live updates
 ```
+
+### Server-Driven UI (SDUI)
+
+Plugins can provide full web UI pages without shipping any JavaScript to the browser.
+A plugin defines its UI declaratively in Python (using widget classes from `resonance/ui/`),
+and the frontend renders it generically via a recursive component renderer.
+
+- **Backend:** `resonance/ui/__init__.py` — 20+ widget classes (`Heading`, `Table`, `Form`, `Modal`, …)
+- **Frontend:** `web-ui/src/lib/plugin-ui/` — `PluginRenderer.svelte` (recursive), `registry.ts` (type → component map), 20 widget Svelte components
+- **Live updates:** SSE endpoint with `EventSource` + automatic polling fallback
+- **Security:** No plugin JavaScript runs in the browser — UI is declarative JSON only (security-by-design)
+- **Reference:** [`PLUGIN_API.md` §19](./PLUGIN_API.md#19-server-driven-ui-sdui)
 
 ### Feature Flags
 
@@ -455,21 +473,25 @@ Browser ──HTTP──▶ FastAPI (StaticFiles "/")
 | **Runtime** | Python 3.11+ (asyncio) |
 | **Web Framework** | FastAPI |
 | **Web UI** | Svelte 5 SPA (`web-ui/`) + Tailwind v4 |
+| **Plugin UI** | Server-Driven UI (SDUI) — declarative Python → JSON → Svelte rendering |
 | **Database** | SQLite + aiosqlite |
 | **Audio Metadata** | mutagen |
 | **Transcoding** | faad, flac, lame, sox |
 | **HTTP Client** | httpx (remote URL proxy) |
-| **Testing** | pytest |
+| **Security** | CSP headers middleware, X-Frame-Options, X-Content-Type-Options |
+| **Testing** | pytest (2853 tests) |
 
 ---
 
 ## 📚 Further Reading
 
-→ [PLUGINS.md](./PLUGINS.md) — Plugin system overview (incl. Content Providers)
-→ [PLUGIN_API.md](./PLUGIN_API.md) — Plugin API reference (incl. ContentProvider ABC)
+→ [PLUGINS.md](./PLUGINS.md) — Plugin system overview (incl. Content Providers, SDUI)
+→ [PLUGIN_API.md](./PLUGIN_API.md) — Plugin API reference (incl. §19 SDUI, ContentProvider ABC)
+→ [PLUGIN_TUTORIAL.md](./PLUGIN_TUTORIAL.md) — Step-by-step plugin tutorial
+→ [PLUGIN_REPOSITORY.md](./PLUGIN_REPOSITORY.md) — Community plugin publishing guide
 → [CHANGELOG.md](./CHANGELOG.md) — Change log
 → [HARDWARE_TESTING.md](./HARDWARE_TESTING.md) — Hardware testing runbook (bitmap displays, `RESONANCE_DISPLAY=1`)
 
 ---
 
-*Last updated: February 2026*
+*Last updated: June 2025 (SDUI architecture section added)*
