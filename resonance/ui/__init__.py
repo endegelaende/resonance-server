@@ -593,6 +593,7 @@ class TextInput(UIComponent):
     ``required`` marks the field as mandatory (frontend + backend validation).
     ``pattern`` is an optional regex validated on the frontend.
     ``disabled`` prevents editing (e.g. while bridge is active).
+    ``help_text`` is an optional hint shown below the input field.
     """
 
     def __init__(
@@ -604,6 +605,7 @@ class TextInput(UIComponent):
         required: bool = False,
         pattern: str | None = None,
         disabled: bool = False,
+        help_text: str | None = None,
     ) -> None:
         if not name:
             raise ValueError("TextInput requires a non-empty 'name'")
@@ -620,6 +622,8 @@ class TextInput(UIComponent):
             props["pattern"] = pattern
         if disabled:
             props["disabled"] = True
+        if help_text:
+            props["help_text"] = help_text
         super().__init__(type="text_input", props=props)
 
 
@@ -631,6 +635,7 @@ class Textarea(UIComponent):
     ``maxlength`` is an optional maximum character count.
     ``required`` marks the field as mandatory (frontend validation).
     ``disabled`` prevents editing.
+    ``help_text`` is an optional hint shown below the input field.
     """
 
     def __init__(
@@ -643,6 +648,7 @@ class Textarea(UIComponent):
         maxlength: int | None = None,
         required: bool = False,
         disabled: bool = False,
+        help_text: str | None = None,
     ) -> None:
         if not name:
             raise ValueError("Textarea requires a non-empty 'name'")
@@ -664,6 +670,8 @@ class Textarea(UIComponent):
             props["required"] = True
         if disabled:
             props["disabled"] = True
+        if help_text:
+            props["help_text"] = help_text
         super().__init__(type="textarea", props=props)
 
 
@@ -674,6 +682,7 @@ class NumberInput(UIComponent):
     ``min`` / ``max`` define allowed range (validated on frontend + backend).
     ``step`` controls the increment (defaults to 1).
     ``disabled`` prevents editing.
+    ``help_text`` is an optional hint shown below the input field.
     """
 
     def __init__(
@@ -686,6 +695,7 @@ class NumberInput(UIComponent):
         step: int | float = 1,
         required: bool = False,
         disabled: bool = False,
+        help_text: str | None = None,
     ) -> None:
         if not name:
             raise ValueError("NumberInput requires a non-empty 'name'")
@@ -703,6 +713,8 @@ class NumberInput(UIComponent):
             props["required"] = True
         if disabled:
             props["disabled"] = True
+        if help_text:
+            props["help_text"] = help_text
         super().__init__(type="number_input", props=props)
 
 
@@ -712,6 +724,7 @@ class Select(UIComponent):
     ``name`` identifies the field value in the form submission params.
     ``options`` is a list of ``SelectOption`` (value + label).
     ``disabled`` prevents editing.
+    ``help_text`` is an optional hint shown below the input field.
     """
 
     def __init__(
@@ -722,6 +735,7 @@ class Select(UIComponent):
         options: list[SelectOption] | None = None,
         required: bool = False,
         disabled: bool = False,
+        help_text: str | None = None,
     ) -> None:
         if not name:
             raise ValueError("Select requires a non-empty 'name'")
@@ -735,6 +749,8 @@ class Select(UIComponent):
             props["required"] = True
         if disabled:
             props["disabled"] = True
+        if help_text:
+            props["help_text"] = help_text
         super().__init__(type="select", props=props)
 
 
@@ -743,6 +759,7 @@ class Toggle(UIComponent):
 
     ``name`` identifies the field value in the form submission params.
     ``disabled`` prevents toggling.
+    ``help_text`` is an optional hint shown below the toggle.
     """
 
     def __init__(
@@ -751,6 +768,7 @@ class Toggle(UIComponent):
         label: str,
         value: bool = False,
         disabled: bool = False,
+        help_text: str | None = None,
     ) -> None:
         if not name:
             raise ValueError("Toggle requires a non-empty 'name'")
@@ -761,6 +779,8 @@ class Toggle(UIComponent):
         }
         if disabled:
             props["disabled"] = True
+        if help_text:
+            props["help_text"] = help_text
         super().__init__(type="toggle", props=props)
 
 

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import PluginRenderer from "../PluginRenderer.svelte";
+  import { tick } from "svelte";
 
   let {
     title = "",
@@ -19,6 +20,8 @@
   } = $props();
 
   let open = $state(false);
+  let modalElement = $state<HTMLDivElement | null>(null);
+  let previouslyFocused: HTMLElement | null = null;
 
   const triggerStyleMap: Record<string, string> = {
     primary: "bg-accent text-crust hover:opacity-80",
@@ -38,12 +41,34 @@
   );
   const sizeClass = $derived(sizeMap[size] ?? sizeMap.md);
 
-  function openModal() {
+  const FOCUSABLE_SELECTOR =
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+  function getFocusableElements(): HTMLElement[] {
+    if (!modalElement) return [];
+    return Array.from(modalElement.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+  }
+
+  async function openModal() {
+    previouslyFocused = document.activeElement as HTMLElement | null;
     open = true;
+    await tick();
+    // Focus the first focusable element inside the modal, or the modal itself
+    const focusable = getFocusableElements();
+    if (focusable.length > 0) {
+      focusable[0].focus();
+    } else if (modalElement) {
+      modalElement.focus();
+    }
   }
 
   function closeModal() {
     open = false;
+    // Restore focus to the element that opened the modal
+    if (previouslyFocused && typeof previouslyFocused.focus === "function") {
+      previouslyFocused.focus();
+    }
+    previouslyFocused = null;
   }
 
   function handleBackdropClick(e: MouseEvent) {
@@ -54,7 +79,36 @@
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") {
+      e.preventDefault();
       closeModal();
+      return;
+    }
+
+    // Focus trap: keep Tab / Shift+Tab within the modal
+    if (e.key === "Tab") {
+      const focusable = getFocusableElements();
+      if (focusable.length === 0) {
+        e.preventDefault();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+
+      if (e.shiftKey) {
+        // Shift+Tab: if focus is on the first element (or outside), wrap to last
+        if (active === first || !modalElement?.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        // Tab: if focus is on the last element (or outside), wrap to first
+        if (active === last || !modalElement?.contains(active)) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     }
   }
 </script>
@@ -69,18 +123,19 @@
 
 <!-- Modal overlay -->
 {#if open}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_interactive_supports_focus -->
   <div
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
     role="dialog"
     aria-modal="true"
     aria-label={title}
-    tabindex="-1"
     onclick={handleBackdropClick}
     onkeydown={handleKeydown}
   >
     <div
-      class="relative w-full {sizeClass} mx-4 max-h-[85vh] flex flex-col rounded-xl border border-border bg-base shadow-2xl"
+      bind:this={modalElement}
+      tabindex="-1"
+      class="relative w-full {sizeClass} mx-4 max-h-[85vh] flex flex-col rounded-xl border border-border bg-base shadow-2xl focus:outline-none"
     >
       <!-- Header -->
       <div

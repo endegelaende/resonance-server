@@ -8,6 +8,7 @@
     options = [],
     required = false,
     disabled = false,
+    help_text = null,
   }: {
     name?: string;
     label?: string;
@@ -15,6 +16,7 @@
     options?: Array<{ value: string; label: string }>;
     required?: boolean;
     disabled?: boolean;
+    help_text?: string | null;
   } = $props();
 
   const formContext = getContext<
@@ -97,5 +99,7 @@
 
   {#if validationError}
     <p class="text-xs text-error">{validationError}</p>
+  {:else if help_text}
+    <p class="text-xs text-overlay-1">{help_text}</p>
   {/if}
 </div>

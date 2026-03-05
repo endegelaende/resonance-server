@@ -10,6 +10,7 @@
     maxlength = null,
     required = false,
     disabled = false,
+    help_text = null,
   }: {
     name?: string;
     label?: string;
@@ -19,6 +20,7 @@
     maxlength?: number | null;
     required?: boolean;
     disabled?: boolean;
+    help_text?: string | null;
   } = $props();
 
   const formContext = getContext<
@@ -87,6 +89,8 @@
   <div class="flex items-center justify-between">
     {#if validationError}
       <p class="text-xs text-error">{validationError}</p>
+    {:else if help_text}
+      <p class="text-xs text-overlay-1">{help_text}</p>
     {:else}
       <span></span>
     {/if}

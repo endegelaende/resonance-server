@@ -10,6 +10,7 @@
     step = 1,
     required = false,
     disabled = false,
+    help_text = null,
   }: {
     name?: string;
     label?: string;
@@ -19,6 +20,7 @@
     step?: number;
     required?: boolean;
     disabled?: boolean;
+    help_text?: string | null;
   } = $props();
 
   const formContext = getContext<
@@ -86,21 +88,19 @@
     onblur={() => (touched = true)}
   />
 
-  {#if min !== null || max !== null}
-    {#if !validationError}
-      <p class="text-xs text-overlay-1">
-        {#if min !== null && max !== null}
-          Range: {min} – {max}
-        {:else if min !== null}
-          Min: {min}
-        {:else if max !== null}
-          Max: {max}
-        {/if}
-      </p>
-    {/if}
-  {/if}
-
   {#if validationError}
     <p class="text-xs text-error">{validationError}</p>
+  {:else if help_text}
+    <p class="text-xs text-overlay-1">{help_text}</p>
+  {:else if min !== null || max !== null}
+    <p class="text-xs text-overlay-1">
+      {#if min !== null && max !== null}
+        Range: {min} – {max}
+      {:else if min !== null}
+        Min: {min}
+      {:else if max !== null}
+        Max: {max}
+      {/if}
+    </p>
   {/if}
 </div>

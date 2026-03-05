@@ -13,6 +13,19 @@
     children?: Snippet;
   } = $props();
 
+  const gapMap: Record<string, string> = {
+    "0": "gap-0",
+    "1": "gap-1",
+    "2": "gap-2",
+    "3": "gap-3",
+    "4": "gap-4",
+    "5": "gap-5",
+    "6": "gap-6",
+    "8": "gap-8",
+    "10": "gap-10",
+    "12": "gap-12",
+  };
+
   const justifyMap: Record<string, string> = {
     start: "justify-start",
     center: "justify-center",
@@ -27,13 +40,14 @@
     stretch: "items-stretch",
   };
 
+  const gapClass = $derived(gapMap[gap] ?? "gap-4");
   const justifyClass = $derived(
     justify ? (justifyMap[justify] ?? "") : "",
   );
   const alignClass = $derived(align ? (alignMap[align] ?? "") : "");
 </script>
 
-<div class="flex flex-wrap gap-{gap} {justifyClass} {alignClass}">
+<div class="flex flex-wrap {gapClass} {justifyClass} {alignClass}">
   {#if children}
     {@render children()}
   {/if}

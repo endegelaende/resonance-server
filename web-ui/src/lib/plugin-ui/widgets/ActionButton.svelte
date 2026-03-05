@@ -2,6 +2,8 @@
   import { getContext } from "svelte";
   import { pluginActions } from "../actions.svelte.js";
   import { toastStore } from "$lib/stores/toast.svelte";
+  import DynamicIcon from "$lib/components/DynamicIcon.svelte";
+  import { Loader2 } from "lucide-svelte";
 
   let {
     label = "",
@@ -51,13 +53,18 @@
 </script>
 
 <button
-  class="rounded-lg px-4 py-2 text-sm font-medium transition-all disabled:opacity-50 {classes}"
+  class="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all
+    disabled:opacity-50 disabled:cursor-not-allowed {classes}"
   onclick={handleClick}
   disabled={loading || disabled}
 >
   {#if loading}
-    Loading...
+    <Loader2 size={16} class="animate-spin shrink-0" />
+    <span>{label}</span>
   {:else}
-    {label}
+    {#if icon}
+      <DynamicIcon name={icon} size={16} class="shrink-0" />
+    {/if}
+    <span>{label}</span>
   {/if}
 </button>
