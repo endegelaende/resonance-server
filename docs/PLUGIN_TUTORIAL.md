@@ -1512,7 +1512,7 @@ The `action` string matches what you set on the widget, and `params`
 contains any data (empty for buttons, form values for forms).
 
 ```python
-async def handle_action(action: str, params: dict) -> dict:
+async def handle_action(action: str, params: dict, ctx=None) -> dict:
     if action == "clear" and _store:
         _store.clear()
         return {"message": "History cleared"}
@@ -1669,7 +1669,7 @@ There is a lot going on here. Let's break it down:
 Now update `handle_action()` to process the form data:
 
 ```python
-async def handle_action(action: str, params: dict) -> dict:
+async def handle_action(action: str, params: dict, ctx=None) -> dict:
     if action == "clear" and _store:
         _store.clear()
         return {"message": "History cleared"}
@@ -1677,6 +1677,8 @@ async def handle_action(action: str, params: dict) -> dict:
     if action == "save_settings":
         # params contains: {"max_entries": 100, "show_timestamps": True,
         #                    "display_format": "detailed", "max_title_length": 40}
+        # ctx is the PluginContext passed by the framework — you can also
+        # use the module-level _ctx reference if you prefer.
         _ctx.set_settings(params)
         return {"message": "Settings saved"}
 
@@ -1729,18 +1731,18 @@ not `async`, so call it **without** `await`.
 
 You now know how to build a complete plugin UI page:
 
-| Skill                    | What You Used                                                      |
-| ------------------------ | ------------------------------------------------------------------ |
-| Display read-only data   | `StatusBadge`, `KeyValue`, `Table`                                 |
-| Group content            | `Card`, `Row`, `Tabs`                                              |
-| Trigger server actions   | `Button` with `action` + `handle_action()`                         |
-| Build input forms        | `Form` + `TextInput` / `NumberInput` / `Select` / `Toggle`         |
-| Show contextual help     | `help_text` on form widgets                                        |
-| Conditional fields       | `.when(field, value)` — live in the browser                        |
-| Process form submissions | `handle_action(action, params)` — params is a dict of field values |
-| Persist settings         | `ctx.set_setting(key, value)` inside the action handler            |
-| Show feedback            | Return `{"message": "..."}` for success toast                      |
-| Auto-refresh             | `Page(refresh_interval=10)` — re-fetches every 10s                 |
+| Skill                    | What You Used                                                                                     |
+| ------------------------ | ------------------------------------------------------------------------------------------------- |
+| Display read-only data   | `StatusBadge`, `KeyValue`, `Table`                                                                |
+| Group content            | `Card`, `Row`, `Tabs`                                                                             |
+| Trigger server actions   | `Button` with `action` + `handle_action()`                                                        |
+| Build input forms        | `Form` + `TextInput` / `NumberInput` / `Select` / `Toggle`                                        |
+| Show contextual help     | `help_text` on form widgets                                                                       |
+| Conditional fields       | `.when(field, value)` — live in the browser                                                       |
+| Process form submissions | `handle_action(action, params, ctx)` — params is a dict of field values, ctx is the PluginContext |
+| Persist settings         | `ctx.set_setting(key, value)` inside the action handler                                           |
+| Show feedback            | Return `{"message": "..."}` for success toast                                                     |
+| Auto-refresh             | `Page(refresh_interval=10)` — re-fetches every 10s                                                |
 
 There are 20 widget types in total — including `Markdown` (renders
 full GitHub-Flavored Markdown), `Modal` (dialog overlay with focus trap),

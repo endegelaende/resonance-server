@@ -131,6 +131,13 @@ class PlayHistory:
         self.save()
         return entry
 
+    def update_max_entries(self, value: int) -> None:
+        """Update the max-entries limit and trim if needed."""
+        self._max = max(20, value)
+        if len(self._entries) > self._max:
+            self._entries = self._entries[-self._max :]
+            self.save()
+
     def clear(self) -> None:
         """History leeren."""
         self._entries.clear()

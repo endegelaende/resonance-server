@@ -1,6 +1,56 @@
 [plugin]
 name = "radio"
-version = "2.0.0"
-description = "Internet Radio via radio-browser.info — browse by country/genre/language, search stations, stream live radio with full Jive menu integration. Free community API, no partner ID required."
+version = "2.2.0"
+description = "Internet Radio — browse, search, and stream live radio via radio-browser.info and TuneIn. Dual-provider support, recently played stations, play from SDUI, SDUI dashboard, and full Jive menu integration."
 author = "Resonance"
 min_resonance_version = "0.1.0"
+category = "radio"
+
+[ui]
+enabled = true
+sidebar_label = "Radio"
+sidebar_icon = "radio"
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+
+[settings.preferred_provider]
+type = "select"
+label = "Preferred Provider"
+description = "Which radio provider to use for browsing and search. 'radio-browser' is free and open-source with ~40,000+ stations. 'tunein' uses the TuneIn/RadioTime API (same as LMS, requires Partner ID 16). 'both' shows results from both providers."
+default = "radio-browser"
+options = ["radio-browser", "tunein", "both"]
+order = 10
+
+[settings.default_country]
+type = "string"
+label = "Default Country"
+description = "ISO 3166-1 alpha-2 country code (e.g. DE, US, GB, FR) used for 'Local Radio' when using TuneIn, and to highlight your country in radio-browser listings. Leave empty for no default."
+default = ""
+order = 20
+
+[settings.cache_ttl]
+type = "int"
+label = "Browse Cache (seconds)"
+description = "How long browse results (categories, country lists, station lists) are cached in memory before re-fetching. Lower values mean fresher data but more API requests."
+default = 600
+min = 60
+max = 7200
+order = 30
+
+[settings.max_recent_stations]
+type = "int"
+label = "Max Recently Played"
+description = "Maximum number of recently played stations to remember. These are shown in the 'Recent' tab of the Radio page."
+default = 50
+min = 5
+max = 200
+order = 40
+
+[settings.show_station_metadata]
+type = "bool"
+label = "Show Station Metadata"
+description = "Display codec, bitrate, country, and genre tags in station listings. Disable for a cleaner look."
+default = true
+order = 50

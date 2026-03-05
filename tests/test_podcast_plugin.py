@@ -11,6 +11,8 @@ Tests cover:
 - Parameter parsing helpers
 - Error handling (missing params, corrupt data, fetch failures)
 - Plugin lifecycle (setup/teardown)
+- SDUI (get_ui, handle_action, tab builders, settings form, action handlers)
+- SDUI v2.2 features (move up/down, OPML import URL, browse episodes, play episode)
 """
 
 from __future__ import annotations
@@ -3769,3 +3771,1947 @@ class TestStoreConfigUpdates:
         assert store.get_resume_position("https://example.com/ep.mp3") == 0
         store.set_resume_position("https://example.com/ep.mp3", 31)
         assert store.get_resume_position("https://example.com/ep.mp3") == 31
+
+
+# =============================================================================
+# SDUI tests — get_ui, handle_action, tab builders
+# =============================================================================
+
+
+class TestSDUI:
+    """Tests for the Podcast SDUI dashboard."""
+
+    def _setup_module_state(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        podcast_mod._store = PodcastStore(tmp_path, max_recent=50)
+        podcast_mod._http_client = MagicMock()
+        podcast_mod._event_bus = MagicMock()
+        podcast_mod._provider = MagicMock()
+        podcast_mod._ctx = MagicMock()
+        podcast_mod._ctx.get_setting = MagicMock(return_value=None)
+        podcast_mod._ctx.set_setting = MagicMock()
+        podcast_mod._ctx.notify_ui_update = MagicMock()
+        podcast_mod._feed_cache.clear()
+
+    def _teardown_module_state(self) -> None:
+        import plugins.podcast as podcast_mod
+
+        podcast_mod._store = None
+        podcast_mod._http_client = None
+        podcast_mod._event_bus = None
+        podcast_mod._provider = None
+        podcast_mod._ctx = None
+        podcast_mod._feed_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_returns_page(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            assert page.title == "Podcasts"
+            assert page.icon == "podcast"
+            assert page.refresh_interval == 60
+            assert len(page.components) == 1
+            tabs = page.components[0]
+            assert tabs.type == "tabs"
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_has_five_tabs(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict("podcast")
+            tabs_data = page_dict["components"][0]["props"]["tabs"]
+            tab_labels = [t["label"] for t in tabs_data]
+            assert tab_labels == ["Subscriptions", "Recent", "Continue", "Settings", "About"]
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_subscriptions_tab_empty(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict("podcast")
+            subs_tab = page_dict["components"][0]["props"]["tabs"][0]
+            assert subs_tab["label"] == "Subscriptions"
+            # Empty state should still have overview card + empty subscriptions card
+            assert len(subs_tab["children"]) >= 2
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_subscriptions_tab_with_data(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            podcast_mod._store.add_subscription(
+                url="https://example.com/feed.xml",
+                name="My Podcast",
+                image="https://example.com/art.jpg",
+                author="Author A",
+                description="A great podcast about things",
+            )
+            podcast_mod._store.add_subscription(
+                url="https://example.com/feed2.xml",
+                name="Other Show",
+            )
+
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict("podcast")
+            subs_tab = page_dict["components"][0]["props"]["tabs"][0]
+
+            # Should have overview card, subscriptions card, and button row
+            assert len(subs_tab["children"]) >= 3
+
+            # Find the table in the subscriptions card
+            subs_card = subs_tab["children"][1]
+            assert "Subscriptions (2)" in subs_card["props"].get("title", "")
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_recent_tab_empty(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict("podcast")
+            recent_tab = page_dict["components"][0]["props"]["tabs"][1]
+            assert recent_tab["label"] == "Recent"
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_recent_tab_with_episodes(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            podcast_mod._store.record_played(
+                url="https://example.com/ep1.mp3",
+                title="Episode 1",
+                show="My Podcast",
+                duration=1800,
+            )
+            podcast_mod._store.record_played(
+                url="https://example.com/ep2.mp3",
+                title="Episode 2",
+                show="Other Show",
+                duration=3600,
+            )
+
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict("podcast")
+            recent_tab = page_dict["components"][0]["props"]["tabs"][1]
+            assert recent_tab["label"] == "Recent"
+            # Should have card with table + button row
+            assert len(recent_tab["children"]) >= 2
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_continue_tab_empty(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict("podcast")
+            continue_tab = page_dict["components"][0]["props"]["tabs"][2]
+            assert continue_tab["label"] == "Continue"
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_continue_tab_with_progress(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            # Add in-progress episode (needs progress > resume_threshold, not played)
+            podcast_mod._store.update_progress(
+                "https://example.com/ep.mp3", 300, 1800
+            )
+            podcast_mod._store.record_played(
+                url="https://example.com/ep.mp3",
+                title="In Progress Episode",
+                show="My Podcast",
+                duration=1800,
+            )
+            # Mark it as NOT played (default) — it should appear in continue
+            # The episode has progress but is not in _played set
+
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict("podcast")
+            continue_tab = page_dict["components"][0]["props"]["tabs"][2]
+            assert continue_tab["label"] == "Continue"
+            # Should show at least the progress card
+            assert len(continue_tab["children"]) >= 1
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_settings_tab(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict("podcast")
+            settings_tab = page_dict["components"][0]["props"]["tabs"][3]
+            assert settings_tab["label"] == "Settings"
+            # Should have form + alert
+            assert len(settings_tab["children"]) >= 2
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_about_tab(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict("podcast")
+            about_tab = page_dict["components"][0]["props"]["tabs"][4]
+            assert about_tab["label"] == "About"
+            # Should contain markdown
+            assert len(about_tab["children"]) >= 1
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_serializes_cleanly(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            # Add some data to exercise all tabs
+            podcast_mod._store.add_subscription(
+                url="https://example.com/feed.xml",
+                name="Test Podcast",
+            )
+            podcast_mod._store.record_played(
+                url="https://example.com/ep.mp3",
+                title="Episode 1",
+                show="Test Podcast",
+                duration=1200,
+            )
+            podcast_mod._store.update_progress(
+                "https://example.com/ep2.mp3", 120, 600
+            )
+
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            d = page.to_dict("podcast")
+            json_str = json.dumps(d)
+            assert json_str
+            parsed = json.loads(json_str)
+            assert parsed["title"] == "Podcasts"
+            assert parsed["plugin_id"] == "podcast"
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_overview_badges(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            podcast_mod._store.add_subscription(
+                url="https://example.com/feed.xml",
+                name="Test Podcast",
+            )
+            podcast_mod._store.set_new_episode_count("https://example.com/feed.xml", 3)
+            podcast_mod._store.mark_played("https://example.com/ep1.mp3")
+
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict("podcast")
+            subs_tab = page_dict["components"][0]["props"]["tabs"][0]
+            # Overview card is first child
+            overview_card = subs_tab["children"][0]
+            # Should have status badges in a row
+            assert overview_card["props"]["title"] == "Overview"
+        finally:
+            self._teardown_module_state()
+
+
+class TestSDUIActions:
+    """Tests for the Podcast SDUI action handlers."""
+
+    def _setup_module_state(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        podcast_mod._store = PodcastStore(tmp_path, max_recent=50)
+        podcast_mod._http_client = MagicMock()
+        podcast_mod._event_bus = MagicMock()
+        podcast_mod._provider = MagicMock()
+        podcast_mod._ctx = MagicMock()
+        podcast_mod._ctx.get_setting = MagicMock(return_value=None)
+        podcast_mod._ctx.set_setting = MagicMock()
+        podcast_mod._ctx.notify_ui_update = MagicMock()
+        podcast_mod._feed_cache.clear()
+
+    def _teardown_module_state(self) -> None:
+        import plugins.podcast as podcast_mod
+
+        podcast_mod._store = None
+        podcast_mod._http_client = None
+        podcast_mod._event_bus = None
+        podcast_mod._provider = None
+        podcast_mod._ctx = None
+        podcast_mod._feed_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_mark_played(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await podcast_mod.handle_action(
+                "mark_played",
+                {"_url": "https://example.com/ep.mp3", "title": "Episode 1"},
+                podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "played" in result["message"].lower()
+            assert podcast_mod._store.is_played("https://example.com/ep.mp3")
+            podcast_mod._ctx.notify_ui_update.assert_called()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_mark_played_no_url(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await podcast_mod.handle_action(
+                "mark_played", {}, podcast_mod._ctx,
+            )
+            assert "error" in result
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_mark_unplayed(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            podcast_mod._store.mark_played("https://example.com/ep.mp3")
+            assert podcast_mod._store.is_played("https://example.com/ep.mp3")
+
+            result = await podcast_mod.handle_action(
+                "mark_unplayed",
+                {"_url": "https://example.com/ep.mp3", "title": "Episode 1"},
+                podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "unplayed" in result["message"].lower()
+            assert not podcast_mod._store.is_played("https://example.com/ep.mp3")
+            podcast_mod._ctx.notify_ui_update.assert_called()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_mark_unplayed_no_url(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await podcast_mod.handle_action(
+                "mark_unplayed", {}, podcast_mod._ctx,
+            )
+            assert "error" in result
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_unsubscribe(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            podcast_mod._store.add_subscription(
+                url="https://example.com/feed.xml",
+                name="My Podcast",
+            )
+            assert podcast_mod._store.subscription_count == 1
+
+            result = await podcast_mod.handle_action(
+                "unsubscribe",
+                {"_url": "https://example.com/feed.xml", "name": "My Podcast"},
+                podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "Unsubscribed" in result["message"]
+            assert podcast_mod._store.subscription_count == 0
+            podcast_mod._ctx.notify_ui_update.assert_called()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_unsubscribe_not_found(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await podcast_mod.handle_action(
+                "unsubscribe",
+                {"_url": "https://nonexistent.com/feed.xml", "name": "Nope"},
+                podcast_mod._ctx,
+            )
+            assert "error" in result
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_unsubscribe_no_url(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await podcast_mod.handle_action(
+                "unsubscribe", {}, podcast_mod._ctx,
+            )
+            assert "error" in result
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_clear_recent(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            podcast_mod._store.record_played(
+                url="https://example.com/ep1.mp3", title="Ep1"
+            )
+            podcast_mod._store.record_played(
+                url="https://example.com/ep2.mp3", title="Ep2"
+            )
+            assert podcast_mod._store.recent_count == 2
+
+            result = await podcast_mod.handle_action(
+                "clear_recent", {}, podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "2" in result["message"]
+            assert podcast_mod._store.recent_count == 0
+            podcast_mod._ctx.notify_ui_update.assert_called()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_clear_feed_cache(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            podcast_mod._feed_cache["https://example.com/feed.xml"] = ("data", time.time() + 600)
+            podcast_mod._feed_cache["https://example.com/feed2.xml"] = ("data2", time.time() + 600)
+
+            result = await podcast_mod.handle_action(
+                "clear_feed_cache", {}, podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "2" in result["message"]
+            assert len(podcast_mod._feed_cache) == 0
+            podcast_mod._ctx.notify_ui_update.assert_called()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_export_opml_empty(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await podcast_mod.handle_action(
+                "export_opml", {}, podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "No subscriptions" in result["message"]
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_export_opml_with_subs(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            podcast_mod._store.add_subscription(
+                url="https://example.com/feed.xml", name="Test",
+            )
+            result = await podcast_mod.handle_action(
+                "export_opml", {}, podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "1 subscription" in result["message"]
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_refresh_feeds_empty(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await podcast_mod.handle_action(
+                "refresh_feeds", {}, podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "No subscriptions" in result["message"]
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_save_settings(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await podcast_mod.handle_action(
+                "save_settings",
+                {
+                    "search_provider": "itunes",
+                    "skip_back_seconds": 10,
+                    "skip_forward_seconds": 60,
+                    "new_since_days": 14,
+                    "max_new_episodes": 100,
+                    "auto_mark_played_percent": 80,
+                    "feed_cache_ttl": 300,
+                    "max_recent": 30,
+                    "auto_refresh_minutes": 120,
+                    "default_playback_speed": "1.5",
+                },
+                podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "Saved" in result["message"]
+            # 8 int keys + 2 str keys = 10 settings
+            assert podcast_mod._ctx.set_setting.call_count == 10
+            podcast_mod._ctx.notify_ui_update.assert_called()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_save_settings_partial(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await podcast_mod.handle_action(
+                "save_settings",
+                {"search_provider": "gpodder", "max_recent": 25},
+                podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "2" in result["message"]
+            assert podcast_mod._ctx.set_setting.call_count == 2
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_save_settings_updates_store(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            # Record many episodes
+            for i in range(20):
+                podcast_mod._store.record_played(
+                    url=f"https://example.com/ep{i}.mp3", title=f"Ep {i}"
+                )
+            assert podcast_mod._store.recent_count == 20
+
+            # Save with lower max_recent — should trim
+            await podcast_mod.handle_action(
+                "save_settings",
+                {"max_recent": 10},
+                podcast_mod._ctx,
+            )
+            assert podcast_mod._store.recent_count == 10
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_save_settings_no_changes(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await podcast_mod.handle_action(
+                "save_settings", {}, podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "No changes" in result["message"]
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_unknown(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await podcast_mod.handle_action(
+                "nonexistent_action", {}, podcast_mod._ctx,
+            )
+            assert "error" in result
+            assert "Unknown" in result["error"]
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_mark_played_from_row(self, tmp_path: Path) -> None:
+        """Table row-actions may pass params nested under 'row'."""
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await podcast_mod.handle_action(
+                "mark_played",
+                {"row": {"_url": "https://example.com/ep.mp3", "title": "Ep"}},
+                podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert podcast_mod._store.is_played("https://example.com/ep.mp3")
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_store_not_available(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        podcast_mod._store = None
+        try:
+            result = await podcast_mod.handle_action(
+                "mark_played",
+                {"_url": "https://example.com/ep.mp3"},
+                podcast_mod._ctx,
+            )
+            assert "error" in result
+            assert "Store" in result["error"] or "not available" in result["error"]
+        finally:
+            self._teardown_module_state()
+
+
+class TestSDUISetupRegistration:
+    """Test that setup registers SDUI handlers."""
+
+    @pytest.mark.asyncio
+    async def test_setup_registers_sdui_handlers(self) -> None:
+        import plugins.podcast as podcast_mod
+
+        old_store = podcast_mod._store
+        old_client = podcast_mod._http_client
+        old_event_bus = podcast_mod._event_bus
+        old_provider = podcast_mod._provider
+        old_ctx = podcast_mod._ctx
+        old_refresh = podcast_mod._refresh_task
+
+        try:
+            ctx = MagicMock()
+            ctx.plugin_id = "podcast"
+            ctx.event_bus = MagicMock()
+            ctx.ensure_data_dir.return_value = Path("/tmp/test_podcast_sdui")
+            ctx.get_setting.return_value = 50
+            ctx.subscribe = AsyncMock()
+
+            with patch.object(PodcastStore, "load"):
+                with patch("httpx.AsyncClient"):
+                    await podcast_mod.setup(ctx)
+
+            # Should register ui handler and action handler
+            ctx.register_ui_handler.assert_called_once_with(podcast_mod.get_ui)
+            ctx.register_action_handler.assert_called_once_with(podcast_mod.handle_action)
+        finally:
+            if podcast_mod._refresh_task is not None and podcast_mod._refresh_task is not old_refresh:
+                podcast_mod._refresh_task.cancel()
+                try:
+                    await podcast_mod._refresh_task
+                except BaseException:
+                    pass
+            podcast_mod._store = old_store
+            podcast_mod._http_client = old_client
+            podcast_mod._event_bus = old_event_bus
+            podcast_mod._provider = old_provider
+            podcast_mod._ctx = old_ctx
+            podcast_mod._refresh_task = old_refresh
+
+
+class TestFormatRelativeTime:
+    """Tests for the _format_relative_time helper."""
+
+    def test_zero_timestamp(self) -> None:
+        import plugins.podcast as podcast_mod
+
+        assert podcast_mod._format_relative_time(0) == "—"
+
+    def test_negative_timestamp(self) -> None:
+        import plugins.podcast as podcast_mod
+
+        assert podcast_mod._format_relative_time(-1) == "—"
+
+    def test_just_now(self) -> None:
+        import plugins.podcast as podcast_mod
+
+        result = podcast_mod._format_relative_time(time.time() - 10)
+        assert result == "just now"
+
+    def test_minutes_ago(self) -> None:
+        import plugins.podcast as podcast_mod
+
+        result = podcast_mod._format_relative_time(time.time() - 300)
+        assert "m ago" in result
+
+    def test_hours_ago(self) -> None:
+        import plugins.podcast as podcast_mod
+
+        result = podcast_mod._format_relative_time(time.time() - 7200)
+        assert "h ago" in result
+
+    def test_yesterday(self) -> None:
+        import plugins.podcast as podcast_mod
+
+        result = podcast_mod._format_relative_time(time.time() - 86400)
+        assert result == "yesterday"
+
+    def test_days_ago(self) -> None:
+        import plugins.podcast as podcast_mod
+
+        result = podcast_mod._format_relative_time(time.time() - 86400 * 5)
+        assert "d ago" in result
+
+    def test_months_ago(self) -> None:
+        import plugins.podcast as podcast_mod
+
+        result = podcast_mod._format_relative_time(time.time() - 86400 * 60)
+        assert "month" in result
+
+
+# =============================================================================
+# SDUI v2.2 — Move Up/Down actions
+# =============================================================================
+
+
+class TestSDUIMoveActions:
+    """Tests for the move_up / move_down SDUI action handlers."""
+
+    def _setup_module_state(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        podcast_mod._store = PodcastStore(tmp_path, max_recent=50)
+        podcast_mod._http_client = MagicMock()
+        podcast_mod._event_bus = MagicMock()
+        podcast_mod._provider = MagicMock()
+        podcast_mod._ctx = MagicMock()
+        podcast_mod._ctx.get_setting = MagicMock(return_value=None)
+        podcast_mod._ctx.set_setting = MagicMock()
+        podcast_mod._ctx.notify_ui_update = MagicMock()
+        podcast_mod._feed_cache.clear()
+
+    def _teardown_module_state(self) -> None:
+        import plugins.podcast as podcast_mod
+
+        podcast_mod._store = None
+        podcast_mod._http_client = None
+        podcast_mod._event_bus = None
+        podcast_mod._provider = None
+        podcast_mod._ctx = None
+        podcast_mod._feed_cache.clear()
+
+    def _add_subs(self, count: int = 3) -> None:
+        import plugins.podcast as podcast_mod
+
+        for i in range(count):
+            podcast_mod._store.add_subscription(
+                name=f"Podcast {i}",
+                url=f"https://example.com/feed{i}.xml",
+            )
+
+    @pytest.mark.asyncio
+    async def test_move_down(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            self._add_subs(3)
+            result = await podcast_mod.handle_action(
+                "move_down",
+                {"_url": "https://example.com/feed0.xml", "name": "Podcast 0"},
+                podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "down" in result["message"].lower()
+            # Verify order changed
+            subs = podcast_mod._store.subscriptions
+            assert subs[0].name == "Podcast 1"
+            assert subs[1].name == "Podcast 0"
+            podcast_mod._ctx.notify_ui_update.assert_called()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_move_up(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            self._add_subs(3)
+            result = await podcast_mod.handle_action(
+                "move_up",
+                {"_url": "https://example.com/feed1.xml", "name": "Podcast 1"},
+                podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "up" in result["message"].lower()
+            subs = podcast_mod._store.subscriptions
+            assert subs[0].name == "Podcast 1"
+            assert subs[1].name == "Podcast 0"
+            podcast_mod._ctx.notify_ui_update.assert_called()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_move_up_already_at_top(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            self._add_subs(3)
+            result = await podcast_mod.handle_action(
+                "move_up",
+                {"_url": "https://example.com/feed0.xml", "name": "Podcast 0"},
+                podcast_mod._ctx,
+            )
+            assert "error" in result
+            assert "top" in result["error"].lower() or "cannot" in result["error"].lower()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_move_down_already_at_bottom(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            self._add_subs(3)
+            result = await podcast_mod.handle_action(
+                "move_down",
+                {"_url": "https://example.com/feed2.xml", "name": "Podcast 2"},
+                podcast_mod._ctx,
+            )
+            assert "error" in result
+            assert "bottom" in result["error"].lower() or "cannot" in result["error"].lower()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_move_no_url(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await podcast_mod.handle_action(
+                "move_up", {}, podcast_mod._ctx,
+            )
+            assert "error" in result
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_move_store_not_available(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        podcast_mod._store = None
+        try:
+            result = await podcast_mod.handle_action(
+                "move_up",
+                {"_url": "https://example.com/feed.xml", "name": "Test"},
+                podcast_mod._ctx,
+            )
+            assert "error" in result
+            assert "store" in result["error"].lower()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_move_with_row_wrapper(self, tmp_path: Path) -> None:
+        """Table actions may nest params under a 'row' key."""
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            self._add_subs(3)
+            result = await podcast_mod.handle_action(
+                "move_down",
+                {"row": {"_url": "https://example.com/feed0.xml", "name": "Podcast 0"}},
+                podcast_mod._ctx,
+            )
+            assert "message" in result
+            subs = podcast_mod._store.subscriptions
+            assert subs[0].name == "Podcast 1"
+        finally:
+            self._teardown_module_state()
+
+
+# =============================================================================
+# SDUI v2.2 — OPML import via URL
+# =============================================================================
+
+
+class TestSDUIImportOPMLUrl:
+    """Tests for the import_opml_url SDUI action handler."""
+
+    SAMPLE_OPML = """<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <head><title>Test Podcasts</title></head>
+  <body>
+    <outline text="Podcast A" type="rss" xmlUrl="https://a.example.com/feed.xml"/>
+    <outline text="Podcast B" type="rss" xmlUrl="https://b.example.com/feed.xml"/>
+  </body>
+</opml>"""
+
+    def _setup_module_state(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        podcast_mod._store = PodcastStore(tmp_path, max_recent=50)
+        podcast_mod._http_client = MagicMock()
+        podcast_mod._event_bus = MagicMock()
+        podcast_mod._provider = MagicMock()
+        podcast_mod._ctx = MagicMock()
+        podcast_mod._ctx.get_setting = MagicMock(return_value=None)
+        podcast_mod._ctx.set_setting = MagicMock()
+        podcast_mod._ctx.notify_ui_update = MagicMock()
+        podcast_mod._feed_cache.clear()
+
+    def _teardown_module_state(self) -> None:
+        import plugins.podcast as podcast_mod
+
+        podcast_mod._store = None
+        podcast_mod._http_client = None
+        podcast_mod._event_bus = None
+        podcast_mod._provider = None
+        podcast_mod._ctx = None
+        podcast_mod._feed_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_import_from_url(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            # Mock HTTP response
+            mock_response = MagicMock()
+            mock_response.text = self.SAMPLE_OPML
+            mock_response.raise_for_status = MagicMock()
+            podcast_mod._http_client.get = AsyncMock(return_value=mock_response)
+
+            result = await podcast_mod.handle_action(
+                "import_opml_url",
+                {"opml_source": "https://example.com/podcasts.opml"},
+                podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "2" in result["message"]  # 2 imported
+            assert podcast_mod._store.subscription_count == 2
+            podcast_mod._ctx.notify_ui_update.assert_called()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_import_from_file(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            opml_file = tmp_path / "test.opml"
+            opml_file.write_text(self.SAMPLE_OPML, encoding="utf-8")
+
+            result = await podcast_mod.handle_action(
+                "import_opml_url",
+                {"opml_source": str(opml_file)},
+                podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "2" in result["message"]
+            assert podcast_mod._store.subscription_count == 2
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_import_empty_source(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await podcast_mod.handle_action(
+                "import_opml_url",
+                {"opml_source": ""},
+                podcast_mod._ctx,
+            )
+            assert "error" in result
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_import_missing_source(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await podcast_mod.handle_action(
+                "import_opml_url", {}, podcast_mod._ctx,
+            )
+            assert "error" in result
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_import_url_fetch_error(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            podcast_mod._http_client.get = AsyncMock(
+                side_effect=Exception("Connection refused")
+            )
+
+            result = await podcast_mod.handle_action(
+                "import_opml_url",
+                {"opml_source": "https://broken.example.com/feed.opml"},
+                podcast_mod._ctx,
+            )
+            assert "error" in result
+            assert "failed" in result["error"].lower() or "import" in result["error"].lower()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_import_dedup_existing(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            # Pre-add one subscription
+            podcast_mod._store.add_subscription(
+                name="Podcast A",
+                url="https://a.example.com/feed.xml",
+            )
+
+            mock_response = MagicMock()
+            mock_response.text = self.SAMPLE_OPML
+            mock_response.raise_for_status = MagicMock()
+            podcast_mod._http_client.get = AsyncMock(return_value=mock_response)
+
+            result = await podcast_mod.handle_action(
+                "import_opml_url",
+                {"opml_source": "https://example.com/podcasts.opml"},
+                podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "1" in result["message"]  # 1 added
+            assert "skipped" in result["message"].lower() or "1" in result["message"]
+            assert podcast_mod._store.subscription_count == 2
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_import_no_http_client(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        podcast_mod._http_client = None
+        try:
+            result = await podcast_mod.handle_action(
+                "import_opml_url",
+                {"opml_source": "https://example.com/feed.opml"},
+                podcast_mod._ctx,
+            )
+            assert "error" in result
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_import_store_not_available(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        podcast_mod._store = None
+        try:
+            result = await podcast_mod.handle_action(
+                "import_opml_url",
+                {"opml_source": "https://example.com/feed.opml"},
+                podcast_mod._ctx,
+            )
+            assert "error" in result
+            assert "store" in result["error"].lower()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_import_shows_document_title(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            mock_response = MagicMock()
+            mock_response.text = self.SAMPLE_OPML
+            mock_response.raise_for_status = MagicMock()
+            podcast_mod._http_client.get = AsyncMock(return_value=mock_response)
+
+            result = await podcast_mod.handle_action(
+                "import_opml_url",
+                {"opml_source": "https://example.com/feed.opml"},
+                podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "Test Podcasts" in result["message"]
+        finally:
+            self._teardown_module_state()
+
+
+# =============================================================================
+# SDUI v2.2 — Browse episodes action
+# =============================================================================
+
+
+class TestSDUIBrowseEpisodes:
+    """Tests for the browse_episodes SDUI action handler."""
+
+    def _setup_module_state(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        podcast_mod._store = PodcastStore(tmp_path, max_recent=50)
+        podcast_mod._http_client = MagicMock()
+        podcast_mod._event_bus = MagicMock()
+        podcast_mod._provider = MagicMock()
+        podcast_mod._ctx = MagicMock()
+        podcast_mod._ctx.get_setting = MagicMock(return_value=None)
+        podcast_mod._ctx.set_setting = MagicMock()
+        podcast_mod._ctx.notify_ui_update = MagicMock()
+        podcast_mod._feed_cache.clear()
+
+    def _teardown_module_state(self) -> None:
+        import plugins.podcast as podcast_mod
+
+        podcast_mod._store = None
+        podcast_mod._http_client = None
+        podcast_mod._event_bus = None
+        podcast_mod._provider = None
+        podcast_mod._ctx = None
+        podcast_mod._feed_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_browse_episodes_success(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+        from plugins.podcast.feed_parser import PodcastEpisode, PodcastFeed
+
+        self._setup_module_state(tmp_path)
+        try:
+            feed_url = "https://example.com/feed.xml"
+            podcast_mod._store.add_subscription(name="Test Pod", url=feed_url)
+
+            mock_feed = PodcastFeed(
+                title="Test Pod",
+                url=feed_url,
+                episodes=[
+                    PodcastEpisode(title="Ep 1", url="https://example.com/ep1.mp3"),
+                    PodcastEpisode(title="Ep 2", url="https://example.com/ep2.mp3"),
+                    PodcastEpisode(title="Ep 3", url="https://example.com/ep3.mp3"),
+                ],
+            )
+
+            with patch("plugins.podcast._get_feed", new_callable=AsyncMock) as mock_get:
+                mock_get.return_value = mock_feed
+                result = await podcast_mod.handle_action(
+                    "browse_episodes",
+                    {"_url": feed_url, "name": "Test Pod"},
+                    podcast_mod._ctx,
+                )
+
+            assert "message" in result
+            assert "3 episodes" in result["message"]
+            assert "Test Pod" in result["message"]
+            podcast_mod._ctx.notify_ui_update.assert_called()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_browse_episodes_with_played(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+        from plugins.podcast.feed_parser import PodcastEpisode, PodcastFeed
+
+        self._setup_module_state(tmp_path)
+        try:
+            feed_url = "https://example.com/feed.xml"
+            podcast_mod._store.add_subscription(name="Test Pod", url=feed_url)
+            podcast_mod._store.mark_played("https://example.com/ep1.mp3")
+
+            mock_feed = PodcastFeed(
+                title="Test Pod",
+                url=feed_url,
+                episodes=[
+                    PodcastEpisode(title="Ep 1", url="https://example.com/ep1.mp3"),
+                    PodcastEpisode(title="Ep 2", url="https://example.com/ep2.mp3"),
+                ],
+            )
+
+            with patch("plugins.podcast._get_feed", new_callable=AsyncMock) as mock_get:
+                mock_get.return_value = mock_feed
+                result = await podcast_mod.handle_action(
+                    "browse_episodes",
+                    {"_url": feed_url, "name": "Test Pod"},
+                    podcast_mod._ctx,
+                )
+
+            assert "message" in result
+            assert "1 unplayed" in result["message"]
+            assert "1 played" in result["message"]
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_browse_episodes_no_url(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await podcast_mod.handle_action(
+                "browse_episodes", {}, podcast_mod._ctx,
+            )
+            assert "error" in result
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_browse_episodes_fetch_error(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            with patch("plugins.podcast._get_feed", new_callable=AsyncMock) as mock_get:
+                mock_get.side_effect = Exception("Network error")
+                result = await podcast_mod.handle_action(
+                    "browse_episodes",
+                    {"_url": "https://example.com/feed.xml", "name": "Broken"},
+                    podcast_mod._ctx,
+                )
+            assert "error" in result
+            assert "could not load" in result["error"].lower() or "network" in result["error"].lower()
+        finally:
+            self._teardown_module_state()
+
+
+# =============================================================================
+# SDUI v2.2 — Play episode action
+# =============================================================================
+
+
+class TestSDUIPlayEpisode:
+    """Tests for the play_episode SDUI action handler."""
+
+    def _setup_module_state(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        podcast_mod._store = PodcastStore(tmp_path, max_recent=50)
+        podcast_mod._http_client = MagicMock()
+        podcast_mod._event_bus = MagicMock()
+        podcast_mod._provider = MagicMock()
+        podcast_mod._ctx = MagicMock()
+        podcast_mod._ctx.get_setting = MagicMock(return_value=None)
+        podcast_mod._ctx.set_setting = MagicMock()
+        podcast_mod._ctx.notify_ui_update = MagicMock()
+        podcast_mod._ctx.player_registry = MagicMock()
+        podcast_mod._ctx.playlist_manager = MagicMock()
+        podcast_mod._ctx.server_info = {"host": "127.0.0.1", "port": 9000}
+        podcast_mod._feed_cache.clear()
+        podcast_mod._player_tracking.clear()
+
+    def _teardown_module_state(self) -> None:
+        import plugins.podcast as podcast_mod
+
+        podcast_mod._store = None
+        podcast_mod._http_client = None
+        podcast_mod._event_bus = None
+        podcast_mod._provider = None
+        podcast_mod._ctx = None
+        podcast_mod._feed_cache.clear()
+        podcast_mod._player_tracking.clear()
+
+    @pytest.mark.asyncio
+    async def test_play_episode_success(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            # Setup mock player
+            mock_player = MagicMock()
+            mock_player.mac_address = "aa:bb:cc:dd:ee:ff"
+            mock_player.name = "Living Room"
+            podcast_mod._ctx.player_registry.get_all = AsyncMock(
+                return_value=[mock_player]
+            )
+
+            # Mock JSON-RPC self-call
+            mock_rpc_response = MagicMock()
+            mock_rpc_response.json.return_value = {"result": {"count": 1}}
+            mock_rpc_response.raise_for_status = MagicMock()
+            podcast_mod._http_client.post = AsyncMock(return_value=mock_rpc_response)
+
+            result = await podcast_mod.handle_action(
+                "play_episode",
+                {
+                    "_url": "https://example.com/ep.mp3",
+                    "title": "Test Episode",
+                    "feed_url": "https://example.com/feed.xml",
+                    "feed_title": "Test Podcast",
+                    "icon": "https://example.com/art.jpg",
+                    "duration": 3600,
+                },
+                podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "Playing" in result["message"]
+            assert "Living Room" in result["message"]
+
+            # Verify the JSON-RPC call was made
+            podcast_mod._http_client.post.assert_called_once()
+            call_args = podcast_mod._http_client.post.call_args
+            rpc_body = call_args.kwargs.get("json") or call_args[1].get("json")
+            assert rpc_body["method"] == "slim.request"
+            assert rpc_body["params"][0] == "aa:bb:cc:dd:ee:ff"
+            cmd = rpc_body["params"][1]
+            assert cmd[0] == "podcast"
+            assert cmd[1] == "play"
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_play_episode_with_resume(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            mock_player = MagicMock()
+            mock_player.mac_address = "aa:bb:cc:dd:ee:ff"
+            mock_player.name = "Kitchen"
+            podcast_mod._ctx.player_registry.get_all = AsyncMock(
+                return_value=[mock_player]
+            )
+
+            mock_rpc_response = MagicMock()
+            mock_rpc_response.json.return_value = {"result": {"count": 1}}
+            mock_rpc_response.raise_for_status = MagicMock()
+            podcast_mod._http_client.post = AsyncMock(return_value=mock_rpc_response)
+
+            result = await podcast_mod.handle_action(
+                "play_episode",
+                {
+                    "_url": "https://example.com/ep.mp3",
+                    "title": "Continued Episode",
+                    "resume_from": 600,
+                    "duration": 3600,
+                },
+                podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "resuming" in result["message"].lower()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_play_episode_no_url(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await podcast_mod.handle_action(
+                "play_episode", {}, podcast_mod._ctx,
+            )
+            assert "error" in result
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_play_episode_no_players(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            podcast_mod._ctx.player_registry.get_all = AsyncMock(return_value=[])
+
+            result = await podcast_mod.handle_action(
+                "play_episode",
+                {"_url": "https://example.com/ep.mp3", "title": "Test"},
+                podcast_mod._ctx,
+            )
+            assert "error" in result
+            assert "no players" in result["error"].lower()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_play_episode_no_player_registry(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        podcast_mod._ctx.player_registry = None
+        try:
+            result = await podcast_mod.handle_action(
+                "play_episode",
+                {"_url": "https://example.com/ep.mp3", "title": "Test"},
+                podcast_mod._ctx,
+            )
+            assert "error" in result
+            assert "registry" in result["error"].lower()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_play_episode_rpc_error(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            mock_player = MagicMock()
+            mock_player.mac_address = "aa:bb:cc:dd:ee:ff"
+            mock_player.name = "Test Player"
+            podcast_mod._ctx.player_registry.get_all = AsyncMock(
+                return_value=[mock_player]
+            )
+
+            # Simulate JSON-RPC returning an error
+            mock_rpc_response = MagicMock()
+            mock_rpc_response.json.return_value = {
+                "result": {"error": "No player selected"}
+            }
+            mock_rpc_response.raise_for_status = MagicMock()
+            podcast_mod._http_client.post = AsyncMock(return_value=mock_rpc_response)
+
+            result = await podcast_mod.handle_action(
+                "play_episode",
+                {"_url": "https://example.com/ep.mp3", "title": "Test"},
+                podcast_mod._ctx,
+            )
+            assert "error" in result
+            assert "playback failed" in result["error"].lower()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_play_episode_network_error(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            mock_player = MagicMock()
+            mock_player.mac_address = "aa:bb:cc:dd:ee:ff"
+            mock_player.name = "Test Player"
+            podcast_mod._ctx.player_registry.get_all = AsyncMock(
+                return_value=[mock_player]
+            )
+
+            podcast_mod._http_client.post = AsyncMock(
+                side_effect=Exception("Connection refused")
+            )
+
+            result = await podcast_mod.handle_action(
+                "play_episode",
+                {"_url": "https://example.com/ep.mp3", "title": "Test"},
+                podcast_mod._ctx,
+            )
+            assert "error" in result
+            assert "could not start" in result["error"].lower()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_play_episode_store_not_available(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        podcast_mod._store = None
+        try:
+            result = await podcast_mod.handle_action(
+                "play_episode",
+                {"_url": "https://example.com/ep.mp3", "title": "Test"},
+                podcast_mod._ctx,
+            )
+            assert "error" in result
+            assert "store" in result["error"].lower()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_play_episode_server_host_0000(self, tmp_path: Path) -> None:
+        """When server_info host is 0.0.0.0, it should use 127.0.0.1."""
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        podcast_mod._ctx.server_info = {"host": "0.0.0.0", "port": 9000}
+        try:
+            mock_player = MagicMock()
+            mock_player.mac_address = "aa:bb:cc:dd:ee:ff"
+            mock_player.name = "Test"
+            podcast_mod._ctx.player_registry.get_all = AsyncMock(
+                return_value=[mock_player]
+            )
+
+            mock_rpc_response = MagicMock()
+            mock_rpc_response.json.return_value = {"result": {"count": 1}}
+            mock_rpc_response.raise_for_status = MagicMock()
+            podcast_mod._http_client.post = AsyncMock(return_value=mock_rpc_response)
+
+            result = await podcast_mod.handle_action(
+                "play_episode",
+                {"_url": "https://example.com/ep.mp3", "title": "Test"},
+                podcast_mod._ctx,
+            )
+            assert "message" in result
+
+            # Verify the URL used 127.0.0.1 not 0.0.0.0
+            call_args = podcast_mod._http_client.post.call_args
+            url = call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
+            assert "127.0.0.1" in url
+            assert "0.0.0.0" not in url
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_play_episode_from_row_wrapper(self, tmp_path: Path) -> None:
+        """Table row actions may nest params under 'row'."""
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            mock_player = MagicMock()
+            mock_player.mac_address = "aa:bb:cc:dd:ee:ff"
+            mock_player.name = "Test"
+            podcast_mod._ctx.player_registry.get_all = AsyncMock(
+                return_value=[mock_player]
+            )
+
+            mock_rpc_response = MagicMock()
+            mock_rpc_response.json.return_value = {"result": {"count": 1}}
+            mock_rpc_response.raise_for_status = MagicMock()
+            podcast_mod._http_client.post = AsyncMock(return_value=mock_rpc_response)
+
+            result = await podcast_mod.handle_action(
+                "play_episode",
+                {"row": {"_url": "https://example.com/ep.mp3", "title": "Row Episode"}},
+                podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "Playing" in result["message"]
+        finally:
+            self._teardown_module_state()
+
+
+# =============================================================================
+# SDUI v2.2 — Updated Export OPML action
+# =============================================================================
+
+
+class TestSDUIExportOPMLUpdated:
+    """Tests for the updated export_opml action that writes to data dir."""
+
+    def _setup_module_state(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        podcast_mod._store = PodcastStore(tmp_path, max_recent=50)
+        podcast_mod._http_client = MagicMock()
+        podcast_mod._event_bus = MagicMock()
+        podcast_mod._provider = MagicMock()
+        podcast_mod._ctx = MagicMock()
+        podcast_mod._ctx.get_setting = MagicMock(return_value=None)
+        podcast_mod._ctx.set_setting = MagicMock()
+        podcast_mod._ctx.notify_ui_update = MagicMock()
+        podcast_mod._ctx.ensure_data_dir = MagicMock(return_value=tmp_path)
+        podcast_mod._feed_cache.clear()
+
+    def _teardown_module_state(self) -> None:
+        import plugins.podcast as podcast_mod
+
+        podcast_mod._store = None
+        podcast_mod._http_client = None
+        podcast_mod._event_bus = None
+        podcast_mod._provider = None
+        podcast_mod._ctx = None
+        podcast_mod._feed_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_export_creates_file(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            podcast_mod._store.add_subscription(
+                name="Test Pod", url="https://example.com/feed.xml"
+            )
+
+            result = await podcast_mod.handle_action(
+                "export_opml", {}, podcast_mod._ctx,
+            )
+            assert "message" in result
+            assert "1" in result["message"]
+            # Verify file was created
+            opml_path = tmp_path / "subscriptions.opml"
+            assert opml_path.exists()
+            content = opml_path.read_text(encoding="utf-8")
+            assert "https://example.com/feed.xml" in content
+            assert "Test Pod" in content
+        finally:
+            self._teardown_module_state()
+
+
+# =============================================================================
+# SDUI v2.2 — Updated UI structure tests
+# =============================================================================
+
+
+class TestSDUIv22Structure:
+    """Tests verifying the updated SDUI tab structure for v2.2."""
+
+    def _setup_module_state(self, tmp_path: Path) -> None:
+        import plugins.podcast as podcast_mod
+
+        podcast_mod._store = PodcastStore(tmp_path, max_recent=50)
+        podcast_mod._http_client = MagicMock()
+        podcast_mod._event_bus = MagicMock()
+        podcast_mod._provider = MagicMock()
+        podcast_mod._ctx = MagicMock()
+        podcast_mod._ctx.get_setting = MagicMock(return_value=None)
+        podcast_mod._ctx.set_setting = MagicMock()
+        podcast_mod._ctx.notify_ui_update = MagicMock()
+        podcast_mod._feed_cache.clear()
+
+    def _teardown_module_state(self) -> None:
+        import plugins.podcast as podcast_mod
+
+        podcast_mod._store = None
+        podcast_mod._http_client = None
+        podcast_mod._event_bus = None
+        podcast_mod._provider = None
+        podcast_mod._ctx = None
+        podcast_mod._feed_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_subscriptions_tab_has_import_modal_empty(self, tmp_path: Path) -> None:
+        """Even with no subscriptions, the import modal should be present."""
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict(plugin_id="podcast")
+            tabs = page_dict["components"][0]
+            assert tabs["type"] == "tabs"
+            sub_tab = tabs["props"]["tabs"][0]
+            assert sub_tab["label"] == "Subscriptions"
+
+            # Find the modal widget in the children
+            sub_children = sub_tab["children"]
+            modal_found = False
+            for child in sub_children:
+                if child["type"] == "row":
+                    for row_child in child.get("children", []):
+                        if row_child["type"] == "modal":
+                            modal_found = True
+                            assert row_child["props"]["title"] == "Import OPML"
+            assert modal_found, "Import OPML modal not found in empty subscriptions tab"
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_subscriptions_tab_has_order_column(self, tmp_path: Path) -> None:
+        """Subscription table should have a # order column."""
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            podcast_mod._store.add_subscription(
+                name="Test Pod", url="https://example.com/feed.xml"
+            )
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict(plugin_id="podcast")
+            tabs = page_dict["components"][0]
+            sub_tab = tabs["props"]["tabs"][0]
+
+            # Find the table in the subscriptions tab
+            table = None
+            for child in sub_tab["children"]:
+                if child["type"] == "card":
+                    for card_child in child.get("children", []):
+                        if card_child["type"] == "table":
+                            table = card_child
+                            break
+            assert table is not None, "No table found in subscriptions tab"
+
+            columns = table["props"]["columns"]
+            col_keys = [c["key"] for c in columns]
+            assert "order" in col_keys, "Order column (#) not found in subscription table"
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_subscriptions_tab_has_move_actions(self, tmp_path: Path) -> None:
+        """With multiple subs, rows should have move up/down actions."""
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            podcast_mod._store.add_subscription(
+                name="Pod A", url="https://a.example.com/feed.xml"
+            )
+            podcast_mod._store.add_subscription(
+                name="Pod B", url="https://b.example.com/feed.xml"
+            )
+            podcast_mod._store.add_subscription(
+                name="Pod C", url="https://c.example.com/feed.xml"
+            )
+
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict(plugin_id="podcast")
+            tabs = page_dict["components"][0]
+            sub_tab = tabs["props"]["tabs"][0]
+
+            # Find table rows
+            table = None
+            for child in sub_tab["children"]:
+                if child["type"] == "card":
+                    for card_child in child.get("children", []):
+                        if card_child["type"] == "table":
+                            table = card_child
+                            break
+            assert table is not None
+
+            rows = table["props"]["rows"]
+            assert len(rows) == 3
+
+            # First row: should have move_down but NOT move_up
+            first_actions = [a["action"] for a in rows[0]["actions"]]
+            assert "move_down" in first_actions
+            assert "move_up" not in first_actions
+
+            # Middle row: should have both
+            mid_actions = [a["action"] for a in rows[1]["actions"]]
+            assert "move_up" in mid_actions
+            assert "move_down" in mid_actions
+
+            # Last row: should have move_up but NOT move_down
+            last_actions = [a["action"] for a in rows[2]["actions"]]
+            assert "move_up" in last_actions
+            assert "move_down" not in last_actions
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_subscriptions_tab_has_browse_action(self, tmp_path: Path) -> None:
+        """Each subscription row should have a Browse Episodes action."""
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            podcast_mod._store.add_subscription(
+                name="Test Pod", url="https://example.com/feed.xml"
+            )
+
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict(plugin_id="podcast")
+            tabs = page_dict["components"][0]
+            sub_tab = tabs["props"]["tabs"][0]
+
+            table = None
+            for child in sub_tab["children"]:
+                if child["type"] == "card":
+                    for card_child in child.get("children", []):
+                        if card_child["type"] == "table":
+                            table = card_child
+                            break
+            assert table is not None
+
+            row_actions = [a["action"] for a in table["props"]["rows"][0]["actions"]]
+            assert "browse_episodes" in row_actions
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_recent_tab_has_play_action(self, tmp_path: Path) -> None:
+        """Recent episode rows should have a play_episode action."""
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            podcast_mod._store.record_played(
+                url="https://example.com/ep.mp3",
+                title="Test Episode",
+                show="Test Podcast",
+            )
+
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict(plugin_id="podcast")
+            tabs = page_dict["components"][0]
+            recent_tab = tabs["props"]["tabs"][1]
+            assert recent_tab["label"] == "Recent"
+
+            # Find table in recent tab
+            table = None
+            for child in recent_tab["children"]:
+                if child["type"] == "card":
+                    for card_child in child.get("children", []):
+                        if card_child["type"] == "table":
+                            table = card_child
+                            break
+            assert table is not None
+
+            row = table["props"]["rows"][0]
+            action_names = [a["action"] for a in row["actions"]]
+            assert "play_episode" in action_names
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_continue_tab_has_resume_button(self, tmp_path: Path) -> None:
+        """Continue tab in-progress cards should have a Resume button."""
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            ep_url = "https://example.com/ep.mp3"
+            podcast_mod._store.record_played(
+                url=ep_url, title="Ongoing", show="TestShow",
+                feed_url="https://example.com/feed.xml",
+            )
+            podcast_mod._store._update_progress(ep_url, 600, 3600)
+
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict(plugin_id="podcast")
+            tabs = page_dict["components"][0]
+            continue_tab = tabs["props"]["tabs"][2]
+            assert continue_tab["label"] == "Continue"
+
+            # Find button with play_episode action in the continue tab
+            found_resume = False
+
+            def _search(node: dict) -> None:
+                nonlocal found_resume
+                if node.get("type") == "button":
+                    if node.get("props", {}).get("action") == "play_episode":
+                        found_resume = True
+                        params = node["props"].get("params", {})
+                        assert params.get("resume_from") == 600
+                for child in node.get("children", []):
+                    _search(child)
+
+            for child in continue_tab["children"]:
+                _search(child)
+
+            assert found_resume, "Resume button with play_episode action not found in Continue tab"
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_about_tab_mentions_play(self, tmp_path: Path) -> None:
+        """About tab should mention the play-from-SDUI feature."""
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict(plugin_id="podcast")
+            tabs = page_dict["components"][0]
+            about_tab = tabs["props"]["tabs"][4]
+            assert about_tab["label"] == "About"
+
+            # Check the markdown content
+            md_content = ""
+            for child in about_tab["children"]:
+                if child["type"] == "markdown":
+                    md_content = child["props"].get("content", "")
+            assert "v2.2" in md_content
+            assert "Play" in md_content
+            assert "OPML Import" in md_content or "Import OPML" in md_content
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_subscriptions_tab_import_modal_with_subs(self, tmp_path: Path) -> None:
+        """Import modal should also be present when subscriptions exist."""
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            podcast_mod._store.add_subscription(
+                name="Existing Pod", url="https://example.com/feed.xml"
+            )
+
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict(plugin_id="podcast")
+            tabs = page_dict["components"][0]
+            sub_tab = tabs["props"]["tabs"][0]
+
+            # Find the import modal in the button row at the bottom
+            modal_found = False
+            for child in sub_tab["children"]:
+                if child["type"] == "row":
+                    for row_child in child.get("children", []):
+                        if row_child["type"] == "modal":
+                            if row_child["props"].get("title") == "Import OPML":
+                                modal_found = True
+            assert modal_found, "Import OPML modal not found when subscriptions exist"
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_full_page_serializes_cleanly_v22(self, tmp_path: Path) -> None:
+        """Full page with all new features should serialize to valid JSON."""
+        import plugins.podcast as podcast_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            # Add diverse data
+            podcast_mod._store.add_subscription(
+                name="Pod A", url="https://a.example.com/feed.xml", author="Author A"
+            )
+            podcast_mod._store.add_subscription(
+                name="Pod B", url="https://b.example.com/feed.xml"
+            )
+            podcast_mod._store.record_played(
+                url="https://example.com/ep.mp3", title="Ep 1", show="Pod A"
+            )
+            podcast_mod._store._update_progress(
+                "https://example.com/ep2.mp3", 300, 1800
+            )
+
+            page = await podcast_mod.get_ui(podcast_mod._ctx)
+            page_dict = page.to_dict(plugin_id="podcast")
+
+            # Should serialize without errors
+            serialized = json.dumps(page_dict)
+            assert len(serialized) > 100
+
+            # Verify basic structure
+            assert page_dict["schema_version"] == "1.0"
+            assert page_dict["plugin_id"] == "podcast"
+            assert page_dict["title"] == "Podcasts"
+            assert len(page_dict["components"]) > 0
+        finally:
+            self._teardown_module_state()

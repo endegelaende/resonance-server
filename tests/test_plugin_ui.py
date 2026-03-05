@@ -951,7 +951,7 @@ async def get_ui(ctx):
         ],
     )
 
-async def handle_action(action, params):
+async def handle_action(action, params, ctx=None):
     return {{"success": True, "message": f"Action {{action}} executed"}}
 """,
         encoding="utf-8",

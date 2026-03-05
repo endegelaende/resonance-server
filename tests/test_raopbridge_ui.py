@@ -241,7 +241,7 @@ class TestTabsStructure:
         page = await raopbridge_mod.get_ui(_make_ctx())
         d = _get_page_dict(page)
         tabs = _get_tabs(d)
-        assert len(tabs) == 5
+        assert len(tabs) == 6
 
     @pytest.mark.asyncio
     async def test_tab_labels(self):
@@ -250,7 +250,7 @@ class TestTabsStructure:
         d = _get_page_dict(page)
         tabs = _get_tabs(d)
         labels = [t["label"] for t in tabs]
-        assert labels == ["Status", "Devices", "Settings", "Advanced", "About"]
+        assert labels == ["Status", "Devices", "Settings", "Advanced", "Logs", "About"]
 
     @pytest.mark.asyncio
     async def test_tabs_have_icons(self):
@@ -269,17 +269,18 @@ class TestTabsStructure:
         d = _get_page_dict(page)
         assert d["components"][0]["type"] == "tabs"
         tabs = _get_tabs(d)
-        assert len(tabs) == 5
+        assert len(tabs) == 6
 
     @pytest.mark.asyncio
     async def test_no_bridge_has_no_tabs(self):
-        """Uninitialised bridge shows error alert, not tabs."""
+        """Uninitialised bridge shows error alert + log card, not tabs."""
         raopbridge_mod._raop_bridge = None
         page = await raopbridge_mod.get_ui(_make_ctx())
         d = _get_page_dict(page)
-        assert len(d["components"]) == 1
+        assert len(d["components"]) == 2
         assert d["components"][0]["type"] == "alert"
         assert d["components"][0]["props"]["severity"] == "error"
+        assert d["components"][1]["type"] == "card"
 
 
 # =============================================================================
@@ -1225,13 +1226,14 @@ class TestPageStructure:
 
     @pytest.mark.asyncio
     async def test_uninitialised_page_is_simple_error(self):
-        """No bridge: just 1 error alert, no tabs."""
+        """No bridge: error alert + log card, no tabs."""
         raopbridge_mod._raop_bridge = None
         page = await raopbridge_mod.get_ui(_make_ctx())
         d = _get_page_dict(page)
-        assert len(d["components"]) == 1
+        assert len(d["components"]) == 2
         assert d["components"][0]["type"] == "alert"
         assert d["components"][0]["props"]["severity"] == "error"
+        assert d["components"][1]["type"] == "card"
 
     @pytest.mark.asyncio
     async def test_all_tab_children_are_non_empty(self):

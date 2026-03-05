@@ -1575,23 +1575,27 @@ Jive browse/search menus, URL proxy integration).**
 
 ### Podcast Plugin (`plugins/podcast/`)
 
-Second ContentProvider plugin — podcast browsing, search, and streaming:
+Most feature-rich plugin — podcast browsing, search, streaming, and full SDUI dashboard:
 
-- 1 command (`podcast`) with 5 sub-commands (`items`, `search`, `play`, `addshow`, `delshow`)
+- 1 command (`podcast`) with 13 sub-commands (`items`, `search`, `play`, `addshow`, `delshow`, `markplayed`, `markunplayed`, `opmlimport`, `opmlexport`, `trending`, `info`, `skip`, `stats`)
 - 1 menu node ("Podcasts" at weight 50)
-- ContentProvider registered as `"podcast"` (`browse`, `search`, `get_stream_info`)
+- ContentProvider registered as `"podcast"` (`browse`, `search`, `get_stream_info`, `on_stream_started`, `on_stream_stopped`)
 - RSS 2.0 feed parser with iTunes namespace support (`feed_parser.py`)
-- PodcastIndex API integration for podcast search
-- Subscription management (subscribe/unsubscribe to feeds)
-- Resume position tracking (LMS-compatible threshold logic)
-- Recently played episodes (LRU, 50 entries)
+- Multi-provider search: PodcastIndex, gPodder, iTunes (`providers.py`)
+- Subscription management with ordering (move up/down via `store.move_subscription()`)
+- Resume position tracking with progress percentages
+- Recently played episodes (configurable LRU)
+- What's New aggregation, Continue Listening, background feed refresh
+- OPML import (URL or file path) and export (`opml.py`)
+- Auto mark played at configurable threshold
+- **SDUI dashboard** — 5 tabs (Subscriptions, Recent, Continue, Settings, About) with 15 actions including play-from-SDUI via JSON-RPC self-call, OPML import from URL, subscription reordering
 - JSON persistence with atomic writes (`store.py`)
 - "Add to Favorites" context menu via `jivefavorites add`
-- ~1200 lines of plugin code + ~550 lines feed parser + ~490 lines store
-- 178 tests
+- 334 tests
 
 **Ideal as a reference for ContentProvider plugins with persistence,
-subscription management, and RSS feed integration.**
+subscription management, SDUI dashboards with play functionality,
+OPML interchange, and multi-provider API integration.**
 
 ### Now Playing Tutorial Plugin (`plugins/nowplaying/`)
 
@@ -1601,8 +1605,9 @@ Companion code for the [Plugin Tutorial](PLUGIN_TUTORIAL.md):
 - 1 menu node ("Now Playing Stats")
 - Event subscription (`player.track_started`)
 - JSON persistence store
-- ~200 lines of code
-- 58 tests
+- **SDUI dashboard** — 3 tabs (Stats, Settings, About) with clear and save_settings actions
+- ~300 lines of plugin code
+- 92 tests
 
 **Ideal as a learning companion — built step by step in the tutorial.**
 
@@ -1681,7 +1686,7 @@ async def get_ui(ctx):
 **3. Write `handle_action()` — dispatches button clicks:**
 
 ```python
-async def handle_action(action: str, params: dict) -> dict:
+async def handle_action(action: str, params: dict, ctx: PluginContext) -> dict:
     match action:
         case "restart":
             await do_restart()
@@ -3067,13 +3072,19 @@ Modal(
 #### Handler Signature
 
 ```python
-async def handle_action(action: str, params: dict) -> dict:
+async def handle_action(action: str, params: dict, ctx: PluginContext) -> dict:
 ```
 
-| Parameter | Type   | Source                                                              |
-| --------- | ------ | ------------------------------------------------------------------- |
-| `action`  | `str`  | From `Button(action="...")`, `Form(action="...")`, or `TableAction` |
-| `params`  | `dict` | Merged from button params, table row params, or form input values   |
+| Parameter | Type            | Source                                                               |
+| --------- | --------------- | -------------------------------------------------------------------- |
+| `action`  | `str`           | From `Button(action="...")`, `Form(action="...")`, or `TableAction`  |
+| `params`  | `dict`          | Merged from button params, table row params, or form input values    |
+| `ctx`     | `PluginContext` | The plugin's context — access settings, player registry, server info |
+
+The `ctx` parameter gives the action handler full access to the plugin's
+`PluginContext`, enabling operations like reading/writing settings
+(`ctx.get_setting()`, `ctx.set_setting()`), accessing connected players
+(`ctx.player_registry`), or querying server networking info (`ctx.server_info`).
 
 #### Return Value Protocol
 
@@ -3094,7 +3105,7 @@ within `handle_action()` (but it's harmless to do so).
 #### Handler Pattern
 
 ```python
-async def handle_action(action: str, params: dict) -> dict:
+async def handle_action(action: str, params: dict, ctx: PluginContext) -> dict:
     match action:
         case "activate":
             await bridge.start()

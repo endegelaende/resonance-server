@@ -1,9 +1,15 @@
 [plugin]
 name = "podcast"
-version = "2.0.0"
-description = "Podcasts — browse, search, subscribe, and stream podcast episodes with resume support, What's New aggregation, OPML import/export, multiple search providers, skip controls, progress tracking, and full Jive menu integration"
+version = "2.2.0"
+description = "Podcasts — browse, search, subscribe, and stream podcast episodes with resume support, What's New aggregation, OPML import/export via URL, multiple search providers, skip controls, progress tracking, play from SDUI, subscription reordering, and full Jive menu integration"
 author = "Resonance"
 min_resonance_version = "0.1.0"
+category = "podcast"
+
+[ui]
+enabled = true
+sidebar_label = "Podcasts"
+sidebar_icon = "podcast"
 
 # ---------------------------------------------------------------------------
 # Settings

@@ -507,7 +507,7 @@ async def dispatch_plugin_action(
         body = {}
 
     try:
-        result = await ctx._action_handler(action, body)
+        result = await ctx._action_handler(action, body, ctx)
         if not isinstance(result, dict):
             result = {"success": True}
         # Auto-notify SSE clients so the UI refreshes immediately

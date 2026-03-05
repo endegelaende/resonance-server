@@ -14,6 +14,7 @@ Tests cover:
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from plugins.radio.store import RadioStore, RecentStation
 from plugins.radio.tunein import (
     PARTNER_ID,
     TuneInClient,
@@ -1470,27 +1472,51 @@ class TestRadioPlay:
 class TestPluginLifecycle:
     """Tests for plugin setup and teardown."""
 
-    @pytest.mark.asyncio
-    async def test_setup_registers_components(self) -> None:
-        """setup() registers command, content provider, and menu node."""
-        import plugins.radio as radio_mod
-
+    def _make_ctx(self, tmp_path: Path | None = None) -> MagicMock:
+        """Create a mock PluginContext with all methods needed by setup()."""
         ctx = MagicMock()
         ctx.event_bus = MagicMock()
         ctx.register_command = MagicMock()
         ctx.register_content_provider = MagicMock()
         ctx.register_menu_node = MagicMock()
+        ctx.register_ui_handler = MagicMock()
+        ctx.register_action_handler = MagicMock()
+        ctx.subscribe = AsyncMock()
+        ctx.notify_ui_update = MagicMock()
+        ctx.get_setting = MagicMock(return_value=None)
+        ctx.set_setting = MagicMock()
+        # ensure_data_dir returns a real temp dir if provided, else a string
+        if tmp_path is not None:
+            ctx.ensure_data_dir = MagicMock(return_value=tmp_path)
+        else:
+            ctx.ensure_data_dir = MagicMock(return_value=Path("."))
+        return ctx
+
+    @pytest.mark.asyncio
+    async def test_setup_registers_components(self, tmp_path: Path) -> None:
+        """setup() registers command, content providers, menu node, UI and action handlers."""
+        import plugins.radio as radio_mod
+
+        ctx = self._make_ctx(tmp_path)
 
         await radio_mod.setup(ctx)
 
         # Verify command registered
         ctx.register_command.assert_called_once_with("radio", radio_mod.cmd_radio)
 
-        # Verify content provider registered
-        ctx.register_content_provider.assert_called_once()
-        call_args = ctx.register_content_provider.call_args
-        assert call_args[0][0] == "radio"
-        assert isinstance(call_args[0][1], radio_mod.RadioProvider)
+        # Verify both content providers registered (radio + tunein)
+        assert ctx.register_content_provider.call_count == 2
+        cp_calls = ctx.register_content_provider.call_args_list
+        cp_ids = {call[0][0] for call in cp_calls}
+        assert cp_ids == {"radio", "tunein"}
+
+        # Verify radio-browser provider
+        radio_call = [c for c in cp_calls if c[0][0] == "radio"][0]
+        assert isinstance(radio_call[0][1], radio_mod.RadioProvider)
+
+        # Verify TuneIn provider
+        tunein_call = [c for c in cp_calls if c[0][0] == "tunein"][0]
+        assert isinstance(tunein_call[0][1], radio_mod.TuneInProvider)
 
         # Verify menu node registered
         ctx.register_menu_node.assert_called_once()
@@ -1500,32 +1526,46 @@ class TestPluginLifecycle:
         assert menu_call[1]["text"] == "Radio"
         assert menu_call[1]["weight"] == 45
 
+        # Verify SDUI handlers registered
+        ctx.register_ui_handler.assert_called_once_with(radio_mod.get_ui)
+        ctx.register_action_handler.assert_called_once_with(radio_mod.handle_action)
+
+        # Verify event subscription
+        ctx.subscribe.assert_called_once()
+        sub_call = ctx.subscribe.call_args
+        assert sub_call[0][0] == "player.track_started"
+
         # Verify state was set
         assert radio_mod._radio_browser is not None
+        assert radio_mod._tunein_client is not None
         assert radio_mod._provider is not None
+        assert radio_mod._tunein_provider is not None
         assert radio_mod._event_bus is not None
+        assert radio_mod._store is not None
+        assert radio_mod._ctx is not None
 
         # Cleanup
         await radio_mod.teardown(ctx)
 
     @pytest.mark.asyncio
-    async def test_teardown_clears_state(self) -> None:
-        """teardown() clears module-level state."""
+    async def test_teardown_clears_state(self, tmp_path: Path) -> None:
+        """teardown() clears module-level state and saves the store."""
         import plugins.radio as radio_mod
 
-        ctx = MagicMock()
-        ctx.event_bus = MagicMock()
-        ctx.register_command = MagicMock()
-        ctx.register_content_provider = MagicMock()
-        ctx.register_menu_node = MagicMock()
+        ctx = self._make_ctx(tmp_path)
 
         await radio_mod.setup(ctx)
         assert radio_mod._radio_browser is not None
+        assert radio_mod._tunein_client is not None
 
         await radio_mod.teardown(ctx)
         assert radio_mod._radio_browser is None
+        assert radio_mod._tunein_client is None
         assert radio_mod._provider is None
+        assert radio_mod._tunein_provider is None
         assert radio_mod._event_bus is None
+        assert radio_mod._store is None
+        assert radio_mod._ctx is None
 
 
 # =============================================================================
@@ -2023,3 +2063,967 @@ class TestIntegrationFlow:
         assert play_action["params"]["url"] == "http://stream.bbc-uuid.com/live.mp3"
 
         radio_mod._radio_browser = None
+
+
+# =============================================================================
+# RadioStore tests
+# =============================================================================
+
+
+class TestRecentStation:
+    """Tests for the RecentStation dataclass."""
+
+    def test_defaults(self) -> None:
+        station = RecentStation(url="http://stream.example.com/live")
+        assert station.url == "http://stream.example.com/live"
+        assert station.title == ""
+        assert station.icon == ""
+        assert station.codec == ""
+        assert station.bitrate == 0
+        assert station.country == ""
+        assert station.countrycode == ""
+        assert station.tags == ""
+        assert station.station_id == ""
+        assert station.provider == ""
+        assert station.last_played == ""
+        assert station.play_count == 0
+
+    def test_to_dict_omits_empty(self) -> None:
+        station = RecentStation(
+            url="http://example.com/stream",
+            title="Test FM",
+            play_count=0,
+        )
+        d = station.to_dict()
+        assert d["url"] == "http://example.com/stream"
+        assert d["title"] == "Test FM"
+        assert d["play_count"] == 0
+        # Empty fields should be omitted (except play_count)
+        assert "icon" not in d
+        assert "codec" not in d
+
+    def test_to_dict_includes_nonzero(self) -> None:
+        station = RecentStation(
+            url="http://example.com/stream",
+            title="Test FM",
+            codec="MP3",
+            bitrate=128,
+            play_count=5,
+        )
+        d = station.to_dict()
+        assert d["codec"] == "MP3"
+        assert d["bitrate"] == 128
+        assert d["play_count"] == 5
+
+    def test_from_dict(self) -> None:
+        data = {
+            "url": "http://stream.example.com/live",
+            "title": "Example Radio",
+            "codec": "AAC",
+            "bitrate": 64,
+            "country": "Germany",
+            "countrycode": "DE",
+            "station_id": "abc-123",
+            "provider": "radio-browser",
+            "last_played": "2026-03-15T14:30:00+00:00",
+            "play_count": 3,
+        }
+        station = RecentStation.from_dict(data)
+        assert station.url == "http://stream.example.com/live"
+        assert station.title == "Example Radio"
+        assert station.codec == "AAC"
+        assert station.bitrate == 64
+        assert station.country == "Germany"
+        assert station.countrycode == "DE"
+        assert station.station_id == "abc-123"
+        assert station.provider == "radio-browser"
+        assert station.play_count == 3
+
+    def test_from_dict_missing_fields(self) -> None:
+        data = {"url": "http://example.com/stream"}
+        station = RecentStation.from_dict(data)
+        assert station.url == "http://example.com/stream"
+        assert station.title == ""
+        assert station.bitrate == 0
+        assert station.play_count == 0
+
+    def test_from_dict_bad_types(self) -> None:
+        data = {"url": "http://example.com/stream", "bitrate": "not-a-number"}
+        station = RecentStation.from_dict(data)
+        assert station.bitrate == 0
+
+    def test_roundtrip(self) -> None:
+        original = RecentStation(
+            url="http://stream.test.com/live",
+            title="Roundtrip FM",
+            codec="OGG",
+            bitrate=192,
+            country="France",
+            countrycode="FR",
+            tags="jazz, blues",
+            station_id="rt-uuid",
+            provider="radio-browser",
+            last_played="2026-03-01T10:00:00+00:00",
+            play_count=7,
+        )
+        d = original.to_dict()
+        restored = RecentStation.from_dict(d)
+        assert restored.url == original.url
+        assert restored.title == original.title
+        assert restored.codec == original.codec
+        assert restored.bitrate == original.bitrate
+        assert restored.play_count == original.play_count
+
+
+class TestRadioStore:
+    """Tests for the RadioStore persistence layer."""
+
+    @pytest.fixture
+    def store(self, tmp_path: Path) -> RadioStore:
+        return RadioStore(tmp_path, max_recent=5)
+
+    def test_empty_store(self, store: RadioStore) -> None:
+        assert store.recent_count == 0
+        assert store.recent == []
+        assert store.max_recent == 5
+
+    def test_record_play(self, store: RadioStore) -> None:
+        entry = store.record_play(
+            url="http://stream.example.com/live",
+            title="Example FM",
+            codec="MP3",
+            bitrate=128,
+        )
+        assert entry.title == "Example FM"
+        assert entry.play_count == 1
+        assert entry.last_played != ""
+        assert store.recent_count == 1
+        assert store.recent[0].url == "http://stream.example.com/live"
+
+    def test_record_play_deduplicates(self, store: RadioStore) -> None:
+        store.record_play(url="http://example.com/stream", title="Station A")
+        store.record_play(url="http://other.com/stream", title="Station B")
+        entry = store.record_play(url="http://example.com/stream", title="Station A Updated")
+        assert store.recent_count == 2
+        assert entry.play_count == 2
+        assert entry.title == "Station A Updated"
+        # Most recently played should be first
+        assert store.recent[0].url == "http://example.com/stream"
+
+    def test_record_play_dedup_case_insensitive(self, store: RadioStore) -> None:
+        store.record_play(url="http://EXAMPLE.COM/Stream", title="Station A")
+        store.record_play(url="http://example.com/stream", title="Station A v2")
+        assert store.recent_count == 1
+        assert store.recent[0].play_count == 2
+
+    def test_record_play_dedup_trailing_slash(self, store: RadioStore) -> None:
+        store.record_play(url="http://example.com/stream/", title="With slash")
+        store.record_play(url="http://example.com/stream", title="Without slash")
+        assert store.recent_count == 1
+        assert store.recent[0].play_count == 2
+
+    def test_record_play_preserves_existing_metadata(self, store: RadioStore) -> None:
+        store.record_play(
+            url="http://example.com/stream",
+            title="Station A",
+            country="Germany",
+            codec="MP3",
+        )
+        # Re-record with partial metadata — existing fields should be preserved
+        entry = store.record_play(
+            url="http://example.com/stream",
+            title="",  # empty — should keep existing
+        )
+        assert entry.title == "Station A"
+        assert entry.country == "Germany"
+        assert entry.codec == "MP3"
+        assert entry.play_count == 2
+
+    def test_record_play_trims(self, store: RadioStore) -> None:
+        for i in range(10):
+            store.record_play(url=f"http://example.com/stream{i}", title=f"Station {i}")
+        assert store.recent_count == 5
+        # Newest should be first
+        assert store.recent[0].title == "Station 9"
+
+    def test_max_recent_setter(self, store: RadioStore) -> None:
+        for i in range(5):
+            store.record_play(url=f"http://example.com/s{i}", title=f"S{i}")
+        assert store.recent_count == 5
+        store.max_recent = 3
+        assert store.recent_count == 3
+        assert store.max_recent == 3
+
+    def test_max_recent_minimum_one(self, store: RadioStore) -> None:
+        store.max_recent = 0
+        assert store.max_recent == 1
+        store.max_recent = -5
+        assert store.max_recent == 1
+
+    def test_remove(self, store: RadioStore) -> None:
+        store.record_play(url="http://example.com/a", title="A")
+        store.record_play(url="http://example.com/b", title="B")
+        assert store.remove("http://example.com/a")
+        assert store.recent_count == 1
+        assert store.recent[0].title == "B"
+
+    def test_remove_not_found(self, store: RadioStore) -> None:
+        store.record_play(url="http://example.com/a", title="A")
+        assert not store.remove("http://nonexistent.com/stream")
+        assert store.recent_count == 1
+
+    def test_clear(self, store: RadioStore) -> None:
+        store.record_play(url="http://example.com/a", title="A")
+        store.record_play(url="http://example.com/b", title="B")
+        store.clear()
+        assert store.recent_count == 0
+        assert store.recent == []
+
+    def test_get_by_url(self, store: RadioStore) -> None:
+        store.record_play(url="http://example.com/a", title="A")
+        store.record_play(url="http://example.com/b", title="B")
+        result = store.get_by_url("http://example.com/a")
+        assert result is not None
+        assert result.title == "A"
+
+    def test_get_by_url_not_found(self, store: RadioStore) -> None:
+        assert store.get_by_url("http://nonexistent.com/stream") is None
+
+    def test_get_by_station_id(self, store: RadioStore) -> None:
+        store.record_play(url="http://example.com/a", title="A", station_id="uuid-a")
+        result = store.get_by_station_id("uuid-a")
+        assert result is not None
+        assert result.title == "A"
+
+    def test_get_by_station_id_not_found(self, store: RadioStore) -> None:
+        assert store.get_by_station_id("nonexistent") is None
+
+    def test_get_by_station_id_empty(self, store: RadioStore) -> None:
+        assert store.get_by_station_id("") is None
+
+    def test_get_most_played(self, store: RadioStore) -> None:
+        store.record_play(url="http://example.com/a", title="A")
+        # Play B three times
+        store.record_play(url="http://example.com/b", title="B")
+        store.record_play(url="http://example.com/b", title="B")
+        store.record_play(url="http://example.com/b", title="B")
+        # Play C twice
+        store.record_play(url="http://example.com/c", title="C")
+        store.record_play(url="http://example.com/c", title="C")
+
+        most = store.get_most_played(limit=2)
+        assert len(most) == 2
+        assert most[0].title == "B"
+        assert most[0].play_count == 3
+        assert most[1].title == "C"
+        assert most[1].play_count == 2
+
+    def test_save_and_load(self, tmp_path: Path) -> None:
+        store1 = RadioStore(tmp_path, max_recent=10)
+        store1.record_play(url="http://example.com/a", title="Station A", codec="MP3", bitrate=128)
+        store1.record_play(url="http://example.com/b", title="Station B", codec="AAC", bitrate=64)
+        store1.save()
+
+        store2 = RadioStore(tmp_path, max_recent=10)
+        store2.load()
+        assert store2.recent_count == 2
+        assert store2.recent[0].title == "Station B"  # newest first
+        assert store2.recent[1].title == "Station A"
+        assert store2.recent[1].codec == "MP3"
+        assert store2.recent[1].bitrate == 128
+
+    def test_save_creates_directory(self, tmp_path: Path) -> None:
+        subdir = tmp_path / "deep" / "nested" / "dir"
+        store = RadioStore(subdir)
+        store.record_play(url="http://example.com/a", title="A")
+        store.save()
+        assert (subdir / "radio.json").is_file()
+
+    def test_save_is_valid_json(self, tmp_path: Path) -> None:
+        store = RadioStore(tmp_path)
+        store.record_play(url="http://example.com/a", title="A")
+        store.save()
+        raw = (tmp_path / "radio.json").read_text(encoding="utf-8")
+        data = json.loads(raw)
+        assert data["version"] == 1
+        assert isinstance(data["recent"], list)
+        assert len(data["recent"]) == 1
+        assert data["recent"][0]["url"] == "http://example.com/a"
+
+    def test_load_nonexistent(self, tmp_path: Path) -> None:
+        store = RadioStore(tmp_path)
+        store.load()  # Should not raise
+        assert store.recent_count == 0
+
+    def test_load_corrupt_json(self, tmp_path: Path) -> None:
+        (tmp_path / "radio.json").write_text("not valid json {{{", encoding="utf-8")
+        store = RadioStore(tmp_path)
+        store.load()  # Should not raise
+        assert store.recent_count == 0
+
+    def test_load_non_dict(self, tmp_path: Path) -> None:
+        (tmp_path / "radio.json").write_text("[1, 2, 3]", encoding="utf-8")
+        store = RadioStore(tmp_path)
+        store.load()
+        assert store.recent_count == 0
+
+    def test_load_skips_entries_without_url(self, tmp_path: Path) -> None:
+        data = {
+            "version": 1,
+            "recent": [
+                {"url": "http://valid.com/stream", "title": "Valid"},
+                {"title": "No URL"},
+                {"url": "", "title": "Empty URL"},
+            ],
+        }
+        (tmp_path / "radio.json").write_text(json.dumps(data), encoding="utf-8")
+        store = RadioStore(tmp_path)
+        store.load()
+        assert store.recent_count == 1
+        assert store.recent[0].title == "Valid"
+
+
+# =============================================================================
+# TuneInProvider tests
+# =============================================================================
+
+
+class TestTuneInProvider:
+    """Tests for the TuneInProvider ContentProvider implementation."""
+
+    def _make_provider(self) -> Any:
+        import plugins.radio as radio_mod
+
+        mock_client = MagicMock()
+        return radio_mod.TuneInProvider(mock_client), mock_client
+
+    @pytest.mark.asyncio
+    async def test_name(self) -> None:
+        provider, _ = self._make_provider()
+        assert provider.name == "TuneIn Radio"
+
+    @pytest.mark.asyncio
+    async def test_icon(self) -> None:
+        provider, _ = self._make_provider()
+        assert provider.icon is None
+
+    @pytest.mark.asyncio
+    async def test_browse_root(self) -> None:
+        provider, mock_client = self._make_provider()
+        mock_client.fetch_root = AsyncMock(return_value=[
+            TuneInItem(text="Local Radio", type="link", url="http://opml.radiotime.com/Browse.ashx?c=local", key="local"),
+            TuneInItem(text="Music", type="link", url="http://opml.radiotime.com/Browse.ashx?c=music", key="music"),
+        ])
+        items = await provider.browse("")
+        assert len(items) == 2
+        assert items[0].title == "Local Radio"
+        assert items[0].type == "folder"
+        assert items[1].title == "Music"
+
+    @pytest.mark.asyncio
+    async def test_browse_audio_items(self) -> None:
+        provider, mock_client = self._make_provider()
+        mock_client.browse = AsyncMock(return_value=[
+            TuneInItem(
+                text="BBC Radio 1",
+                type="audio",
+                url="http://opml.radiotime.com/Tune.ashx?id=s44491",
+                guide_id="s44491",
+                image="http://cdn.tunein.com/bbc1.png",
+                subtext="The best new music",
+                bitrate="128",
+                formats="mp3",
+            ),
+        ])
+        items = await provider.browse("http://opml.radiotime.com/Browse.ashx?c=music")
+        assert len(items) == 1
+        assert items[0].title == "BBC Radio 1"
+        assert items[0].type == "audio"
+        assert items[0].icon == "http://cdn.tunein.com/bbc1.png"
+        assert items[0].subtitle == "The best new music"
+        assert items[0].extra.get("guide_id") == "s44491"
+
+    @pytest.mark.asyncio
+    async def test_browse_search_items(self) -> None:
+        provider, mock_client = self._make_provider()
+        mock_client.fetch_root = AsyncMock(return_value=[
+            TuneInItem(text="Search", type="search", url="http://opml.radiotime.com/Search.ashx"),
+        ])
+        items = await provider.browse("")
+        assert len(items) == 1
+        assert items[0].type == "search"
+        assert items[0].id == "tunein-search"
+
+    @pytest.mark.asyncio
+    async def test_search(self) -> None:
+        provider, mock_client = self._make_provider()
+        mock_client.search = AsyncMock(return_value=[
+            TuneInItem(
+                text="Jazz FM",
+                type="audio",
+                url="http://opml.radiotime.com/Tune.ashx?id=s12345",
+                guide_id="s12345",
+            ),
+            TuneInItem(
+                text="Jazz Stations",
+                type="link",
+                url="http://opml.radiotime.com/Browse.ashx?c=jazz",
+            ),
+        ])
+        items = await provider.search("jazz")
+        assert len(items) == 2
+        assert items[0].type == "audio"
+        assert items[0].title == "Jazz FM"
+        assert items[1].type == "folder"
+        assert items[1].title == "Jazz Stations"
+
+    @pytest.mark.asyncio
+    async def test_get_stream_info_success(self) -> None:
+        provider, mock_client = self._make_provider()
+        mock_client.tune = AsyncMock(return_value=TuneInStream(
+            url="http://stream.jazzfm.com/live.mp3",
+            bitrate=128,
+            media_type="mp3",
+        ))
+        info = await provider.get_stream_info("s12345")
+        assert info is not None
+        assert info.url == "http://stream.jazzfm.com/live.mp3"
+        assert info.bitrate == 128
+        assert info.is_live is True
+        assert info.content_type == "audio/mpeg"
+
+    @pytest.mark.asyncio
+    async def test_get_stream_info_failure(self) -> None:
+        provider, mock_client = self._make_provider()
+        mock_client.tune = AsyncMock(return_value=None)
+        info = await provider.get_stream_info("s99999")
+        assert info is None
+
+    @pytest.mark.asyncio
+    async def test_get_stream_info_from_url(self) -> None:
+        provider, mock_client = self._make_provider()
+        mock_client.tune = AsyncMock(return_value=TuneInStream(
+            url="http://stream.example.com/live.aac",
+            bitrate=64,
+            media_type="aac",
+        ))
+        info = await provider.get_stream_info(
+            "http://opml.radiotime.com/Tune.ashx?id=s31681&partnerId=16"
+        )
+        assert info is not None
+        assert info.url == "http://stream.example.com/live.aac"
+        assert info.content_type == "audio/aac"
+        mock_client.tune.assert_called_once_with("s31681")
+
+
+# =============================================================================
+# SDUI tests
+# =============================================================================
+
+
+class TestSDUI:
+    """Tests for SDUI get_ui and handle_action."""
+
+    def _setup_module_state(self, tmp_path: Path) -> None:
+        """Set module-level state so SDUI functions can run."""
+        import plugins.radio as radio_mod
+        from plugins.radio.store import RadioStore
+
+        radio_mod._radio_browser = MagicMock()
+        radio_mod._radio_browser.cache_size = 42
+        radio_mod._tunein_client = MagicMock()
+        radio_mod._tunein_client.cache_size = 7
+        radio_mod._provider = MagicMock()
+        radio_mod._tunein_provider = MagicMock()
+        radio_mod._event_bus = MagicMock()
+        radio_mod._store = RadioStore(tmp_path, max_recent=50)
+        radio_mod._http_client = MagicMock()
+        radio_mod._ctx = MagicMock()
+        radio_mod._ctx.get_setting = MagicMock(return_value=None)
+        radio_mod._ctx.set_setting = MagicMock()
+        radio_mod._ctx.notify_ui_update = MagicMock()
+        radio_mod._ctx.server_info = {"host": "127.0.0.1", "port": 9000}
+
+    def _teardown_module_state(self) -> None:
+        import plugins.radio as radio_mod
+
+        radio_mod._radio_browser = None
+        radio_mod._tunein_client = None
+        radio_mod._provider = None
+        radio_mod._tunein_provider = None
+        radio_mod._event_bus = None
+        radio_mod._store = None
+        radio_mod._http_client = None
+        radio_mod._ctx = None
+
+    @pytest.mark.asyncio
+    async def test_get_ui_returns_page(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            page = await radio_mod.get_ui(radio_mod._ctx)
+            assert page.title == "Radio"
+            assert page.icon == "radio"
+            assert page.refresh_interval == 30
+            # Should have a Tabs component
+            assert len(page.components) == 1
+            tabs = page.components[0]
+            assert tabs.type == "tabs"
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_has_four_tabs(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            page = await radio_mod.get_ui(radio_mod._ctx)
+            page_dict = page.to_dict("radio")
+            # Tabs widget serializes tabs into props["tabs"], not "children"
+            tabs_data = page_dict["components"][0]["props"]["tabs"]
+            tab_labels = [t["label"] for t in tabs_data]
+            assert tab_labels == ["Recent", "Browse", "Settings", "About"]
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_recent_tab_empty(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            page = await radio_mod.get_ui(radio_mod._ctx)
+            page_dict = page.to_dict("radio")
+            # Tabs are in props["tabs"]
+            recent_tab = page_dict["components"][0]["props"]["tabs"][0]
+            assert recent_tab["label"] == "Recent"
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_recent_tab_with_stations(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            radio_mod._store.record_play(url="http://a.com/stream", title="Station A", codec="MP3")
+            radio_mod._store.record_play(url="http://b.com/stream", title="Station B", codec="AAC")
+            page = await radio_mod.get_ui(radio_mod._ctx)
+            page_dict = page.to_dict("radio")
+            # Tabs are in props["tabs"]
+            recent_tab = page_dict["components"][0]["props"]["tabs"][0]
+            assert recent_tab["label"] == "Recent"
+            # Verify the tab has children (card with table + clear button row)
+            recent_children = recent_tab["children"]
+            assert len(recent_children) >= 1  # At least the card
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_serializes_cleanly(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            page = await radio_mod.get_ui(radio_mod._ctx)
+            d = page.to_dict("radio")
+            # Verify it's valid JSON-serialisable
+            json_str = json.dumps(d)
+            assert json_str
+            parsed = json.loads(json_str)
+            assert parsed["title"] == "Radio"
+            assert parsed["plugin_id"] == "radio"
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_clear_recent(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            radio_mod._store.record_play(url="http://a.com/stream", title="A")
+            radio_mod._store.record_play(url="http://b.com/stream", title="B")
+            assert radio_mod._store.recent_count == 2
+
+            result = await radio_mod.handle_action("clear_recent", {}, radio_mod._ctx)
+            assert "message" in result
+            assert "2" in result["message"]
+            assert radio_mod._store.recent_count == 0
+            radio_mod._ctx.notify_ui_update.assert_called()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_remove_recent(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            radio_mod._store.record_play(url="http://a.com/stream", title="A")
+            radio_mod._store.record_play(url="http://b.com/stream", title="B")
+
+            # Table row-actions pass params directly (not nested under "row")
+            result = await radio_mod.handle_action(
+                "remove_recent",
+                {"_url": "http://a.com/stream", "title": "A"},
+                radio_mod._ctx,
+            )
+            assert "message" in result
+            assert radio_mod._store.recent_count == 1
+            assert radio_mod._store.recent[0].title == "B"
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_remove_recent_not_found(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await radio_mod.handle_action(
+                "remove_recent",
+                {"_url": "http://nonexistent.com/stream"},
+                radio_mod._ctx,
+            )
+            assert "error" in result
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_clear_caches(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await radio_mod.handle_action("clear_caches", {}, radio_mod._ctx)
+            assert "message" in result
+            assert "radio-browser" in result["message"]
+            assert "tunein" in result["message"]
+            radio_mod._radio_browser.clear_cache.assert_called_once()
+            radio_mod._tunein_client.clear_cache.assert_called_once()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_save_settings(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await radio_mod.handle_action(
+                "save_settings",
+                {
+                    "preferred_provider": "both",
+                    "default_country": "DE",
+                    "cache_ttl": 300,
+                    "max_recent_stations": 25,
+                    "show_station_metadata": True,
+                },
+                radio_mod._ctx,
+            )
+            assert "message" in result
+            assert "Saved" in result["message"]
+            # Verify settings were written
+            assert radio_mod._ctx.set_setting.call_count == 5
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_save_settings_updates_store(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            # Fill store with 10 entries
+            for i in range(10):
+                radio_mod._store.record_play(url=f"http://s{i}.com/stream", title=f"S{i}")
+            assert radio_mod._store.recent_count == 10
+
+            # Save settings with smaller max_recent — should trim
+            await radio_mod.handle_action(
+                "save_settings",
+                {"max_recent_stations": 5},
+                radio_mod._ctx,
+            )
+            assert radio_mod._store.max_recent == 5
+            assert radio_mod._store.recent_count == 5
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_unknown(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await radio_mod.handle_action("nonexistent_action", {}, radio_mod._ctx)
+            assert "error" in result
+            assert "Unknown" in result["error"]
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_browse_shortcut(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await radio_mod.handle_action("browse_rb", {}, radio_mod._ctx)
+            assert "message" in result
+            assert "popular" in result["message"].lower() or "radio" in result["message"].lower()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_play_recent(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            # Setup mock player
+            mock_player = MagicMock()
+            mock_player.mac_address = "aa:bb:cc:dd:ee:ff"
+            mock_player.name = "Living Room"
+            radio_mod._ctx.player_registry.get_all = AsyncMock(
+                return_value=[mock_player]
+            )
+
+            # Mock successful JSON-RPC response
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.json.return_value = {"id": 1, "result": {"count": 1}}
+            radio_mod._http_client.post = AsyncMock(return_value=mock_resp)
+
+            # Table edit_action passes row data directly as params
+            result = await radio_mod.handle_action(
+                "play_recent",
+                {
+                    "_url": "http://example.com/stream",
+                    "title": "My Station",
+                    "_station_id": "abc-123",
+                    "_icon": "http://example.com/icon.png",
+                    "_codec": "MP3",
+                    "_bitrate": "128",
+                    "_provider": "radio-browser",
+                },
+                radio_mod._ctx,
+            )
+            assert "message" in result
+            assert "My Station" in result["message"]
+            assert "Living Room" in result["message"]
+
+            # Verify the JSON-RPC self-call was made
+            radio_mod._http_client.post.assert_called_once()
+            call_args = radio_mod._http_client.post.call_args
+            assert "jsonrpc.js" in call_args[0][0]
+            rpc_body = call_args[1]["json"]
+            assert rpc_body["method"] == "slim.request"
+            assert rpc_body["params"][0] == "aa:bb:cc:dd:ee:ff"
+            cmd = rpc_body["params"][1]
+            assert cmd[0] == "radio"
+            assert cmd[1] == "play"
+            assert "url:http://example.com/stream" in cmd
+            assert "title:My Station" in cmd
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_play_recent_no_url(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await radio_mod.handle_action(
+                "play_recent",
+                {},
+                radio_mod._ctx,
+            )
+            assert "error" in result
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_play_recent_no_players(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            radio_mod._ctx.player_registry.get_all = AsyncMock(return_value=[])
+
+            result = await radio_mod.handle_action(
+                "play_recent",
+                {"_url": "http://example.com/stream", "title": "Test"},
+                radio_mod._ctx,
+            )
+            assert "error" in result
+            assert "No players" in result["error"]
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_play_recent_no_player_registry(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        radio_mod._ctx.player_registry = None
+        try:
+            result = await radio_mod.handle_action(
+                "play_recent",
+                {"_url": "http://example.com/stream", "title": "Test"},
+                radio_mod._ctx,
+            )
+            assert "error" in result
+            assert "registry" in result["error"].lower()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_play_recent_rpc_error(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            mock_player = MagicMock()
+            mock_player.mac_address = "aa:bb:cc:dd:ee:ff"
+            mock_player.name = "Test Player"
+            radio_mod._ctx.player_registry.get_all = AsyncMock(
+                return_value=[mock_player]
+            )
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.json.return_value = {
+                "id": 1,
+                "error": {"message": "Command failed"},
+            }
+            radio_mod._http_client.post = AsyncMock(return_value=mock_resp)
+
+            result = await radio_mod.handle_action(
+                "play_recent",
+                {"_url": "http://example.com/stream", "title": "Test"},
+                radio_mod._ctx,
+            )
+            assert "error" in result
+            assert "Playback failed" in result["error"]
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_play_recent_network_error(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            mock_player = MagicMock()
+            mock_player.mac_address = "aa:bb:cc:dd:ee:ff"
+            mock_player.name = "Test Player"
+            radio_mod._ctx.player_registry.get_all = AsyncMock(
+                return_value=[mock_player]
+            )
+            radio_mod._http_client.post = AsyncMock(
+                side_effect=Exception("Connection refused")
+            )
+
+            result = await radio_mod.handle_action(
+                "play_recent",
+                {"_url": "http://example.com/stream", "title": "Test"},
+                radio_mod._ctx,
+            )
+            assert "error" in result
+            assert "Could not start playback" in result["error"]
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_play_recent_http_client_none(self, tmp_path: Path) -> None:
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        radio_mod._http_client = None
+        try:
+            mock_player = MagicMock()
+            mock_player.mac_address = "aa:bb:cc:dd:ee:ff"
+            mock_player.name = "Test Player"
+            radio_mod._ctx.player_registry.get_all = AsyncMock(
+                return_value=[mock_player]
+            )
+
+            result = await radio_mod.handle_action(
+                "play_recent",
+                {"_url": "http://example.com/stream", "title": "Test"},
+                radio_mod._ctx,
+            )
+            assert "error" in result
+            assert "HTTP client" in result["error"]
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_play_recent_host_0000(self, tmp_path: Path) -> None:
+        """When server_info host is 0.0.0.0, it should use 127.0.0.1."""
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        radio_mod._ctx.server_info = {"host": "0.0.0.0", "port": 9000}
+        try:
+            mock_player = MagicMock()
+            mock_player.mac_address = "aa:bb:cc:dd:ee:ff"
+            mock_player.name = "Test"
+            radio_mod._ctx.player_registry.get_all = AsyncMock(
+                return_value=[mock_player]
+            )
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.json.return_value = {"id": 1, "result": {"count": 1}}
+            radio_mod._http_client.post = AsyncMock(return_value=mock_resp)
+
+            result = await radio_mod.handle_action(
+                "play_recent",
+                {"_url": "http://example.com/stream", "title": "Test"},
+                radio_mod._ctx,
+            )
+            assert "message" in result
+
+            # Verify it used 127.0.0.1, not 0.0.0.0
+            call_url = radio_mod._http_client.post.call_args[0][0]
+            assert "127.0.0.1" in call_url
+            assert "0.0.0.0" not in call_url
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_play_recent_from_row_wrapper(self, tmp_path: Path) -> None:
+        """Table row actions may nest params under 'row'."""
+        import plugins.radio as radio_mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            mock_player = MagicMock()
+            mock_player.mac_address = "aa:bb:cc:dd:ee:ff"
+            mock_player.name = "Test"
+            radio_mod._ctx.player_registry.get_all = AsyncMock(
+                return_value=[mock_player]
+            )
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.json.return_value = {"id": 1, "result": {"count": 1}}
+            radio_mod._http_client.post = AsyncMock(return_value=mock_resp)
+
+            result = await radio_mod.handle_action(
+                "play_recent",
+                {"row": {"_url": "http://example.com/stream", "title": "Row Station"}},
+                radio_mod._ctx,
+            )
+            assert "message" in result
+            assert "Row Station" in result["message"]
+        finally:
+            self._teardown_module_state()

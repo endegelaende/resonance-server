@@ -35,6 +35,7 @@ env/
 htmlcov/
 .tox/
 .nox/
+MagicMock/
 
 # === Linting ===
 .ruff_cache/
@@ -86,6 +87,9 @@ community-repo/
 .env
 .env.local
 nul
+
+# === Server Update Script (local only, copied to /root/scripts/) ===
+scripts/update-resonance-server.sh
 
 # === AI Assistant Context (local only) ===
 CLAUDE.md

@@ -2,11 +2,12 @@
 Tests for the Now Playing tutorial plugin.
 
 Covers:
-- PlayHistory store (record, trimming, persistence, corrupt JSON, clear)
+- PlayHistory store (record, trimming, persistence, corrupt JSON, clear, update_max_entries)
 - Command handlers (nowplaying.stats, nowplaying.recent — empty, with data, menu/CLI mode)
 - Event handler (_on_track_started — single, multiple, store=None)
 - Plugin lifecycle (setup/teardown, registrations, existing data)
 - _parse_tagged helper (string params, dict params, colon in value, non-tagged)
+- SDUI (get_ui, handle_action, tab builders, settings form, format_timestamp)
 """
 
 from __future__ import annotations
@@ -808,3 +809,548 @@ class TestIntegration:
         # Teardown
         await mod.teardown(mock_ctx)
         assert mod._store is None
+
+
+# =============================================================================
+# Store — update_max_entries
+# =============================================================================
+
+
+class TestUpdateMaxEntries:
+    """Tests for PlayHistory.update_max_entries()."""
+
+    def test_update_max_entries_trims(self, tmp_path: Path):
+        from plugins.nowplaying.store import PlayHistory
+
+        store = PlayHistory(tmp_path, max_entries=50)
+        store.load()
+        for i in range(30):
+            store.record(f"player-{i}")
+        assert store.count == 30
+
+        store.update_max_entries(20)
+        assert store.count == 20
+        # Should keep newest entries
+        assert store.entries[-1]["play_number"] == 30
+
+    def test_update_max_entries_no_trim_needed(self, tmp_path: Path):
+        from plugins.nowplaying.store import PlayHistory
+
+        store = PlayHistory(tmp_path, max_entries=50)
+        store.load()
+        for i in range(5):
+            store.record(f"player-{i}")
+
+        store.update_max_entries(100)
+        assert store.count == 5
+
+    def test_update_max_entries_minimum_clamped(self, tmp_path: Path):
+        from plugins.nowplaying.store import PlayHistory
+
+        store = PlayHistory(tmp_path, max_entries=50)
+        store.load()
+        for i in range(30):
+            store.record(f"player-{i}")
+
+        # Even if 5 is requested, minimum is 20
+        store.update_max_entries(5)
+        assert store.count == 20
+
+
+# =============================================================================
+# SDUI tests — get_ui, handle_action, tab builders
+# =============================================================================
+
+
+class TestSDUI:
+    """Tests for the NowPlaying SDUI dashboard."""
+
+    def _setup_module_state(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+        from plugins.nowplaying.store import PlayHistory
+
+        mod._store = PlayHistory(tmp_path)
+        mod._store.load()
+        mod._ctx = MagicMock()
+        mod._ctx.get_setting = MagicMock(return_value=None)
+        mod._ctx.set_setting = MagicMock()
+        mod._ctx.notify_ui_update = MagicMock()
+
+    def _teardown_module_state(self) -> None:
+        import plugins.nowplaying as mod
+
+        mod._store = None
+        mod._ctx = None
+
+    @pytest.mark.asyncio
+    async def test_get_ui_returns_page(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            page = await mod.get_ui(mod._ctx)
+            assert page.title == "Play Stats"
+            assert page.icon == "activity"
+            assert page.refresh_interval == 10
+            assert len(page.components) == 1
+            tabs = page.components[0]
+            assert tabs.type == "tabs"
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_has_three_tabs(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            page = await mod.get_ui(mod._ctx)
+            page_dict = page.to_dict("nowplaying")
+            tabs_data = page_dict["components"][0]["props"]["tabs"]
+            tab_labels = [t["label"] for t in tabs_data]
+            assert tab_labels == ["Stats", "Settings", "About"]
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_stats_tab_empty(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            page = await mod.get_ui(mod._ctx)
+            page_dict = page.to_dict("nowplaying")
+            stats_tab = page_dict["components"][0]["props"]["tabs"][0]
+            assert stats_tab["label"] == "Stats"
+            # Should have statistics card + empty recent card + button row
+            assert len(stats_tab["children"]) >= 3
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_stats_tab_with_plays(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            mod._store.record("player-a")
+            mod._store.record("player-b")
+            mod._store.record("player-a")
+
+            page = await mod.get_ui(mod._ctx)
+            page_dict = page.to_dict("nowplaying")
+            stats_tab = page_dict["components"][0]["props"]["tabs"][0]
+            assert stats_tab["label"] == "Stats"
+            # Should have statistics card + recent card (with table) + button row
+            assert len(stats_tab["children"]) >= 3
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_stats_tab_shows_player_summary(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            for _ in range(5):
+                mod._store.record("player-a")
+            for _ in range(3):
+                mod._store.record("player-b")
+
+            page = await mod.get_ui(mod._ctx)
+            page_dict = page.to_dict("nowplaying")
+            stats_tab = page_dict["components"][0]["props"]["tabs"][0]
+            # The statistics card should contain the "Most Active Players" collapsible
+            stats_card = stats_tab["children"][0]
+            assert stats_card["props"]["title"] == "Statistics"
+            # Children include Row (badges), KeyValue (totals), Card (most active)
+            assert len(stats_card["children"]) >= 3
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_settings_tab(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            page = await mod.get_ui(mod._ctx)
+            page_dict = page.to_dict("nowplaying")
+            settings_tab = page_dict["components"][0]["props"]["tabs"][1]
+            assert settings_tab["label"] == "Settings"
+            # Should have form + alert
+            assert len(settings_tab["children"]) == 2
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_about_tab(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            page = await mod.get_ui(mod._ctx)
+            page_dict = page.to_dict("nowplaying")
+            about_tab = page_dict["components"][0]["props"]["tabs"][2]
+            assert about_tab["label"] == "About"
+            assert len(about_tab["children"]) >= 1
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_serializes_cleanly(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            mod._store.record("player-x")
+            mod._store.record("player-y")
+
+            page = await mod.get_ui(mod._ctx)
+            d = page.to_dict("nowplaying")
+            json_str = json.dumps(d)
+            assert json_str
+            parsed = json.loads(json_str)
+            assert parsed["title"] == "Play Stats"
+            assert parsed["plugin_id"] == "nowplaying"
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_recent_table_newest_first(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            mod._store.record("first-player")
+            mod._store.record("second-player")
+            mod._store.record("third-player")
+
+            page = await mod.get_ui(mod._ctx)
+            page_dict = page.to_dict("nowplaying")
+            stats_tab = page_dict["components"][0]["props"]["tabs"][0]
+            # Find the recent plays card (second child after stats card)
+            recent_card = stats_tab["children"][1]
+            assert "Recent Plays" in recent_card["props"]["title"]
+            # Table rows should be newest first
+            table = recent_card["children"][0]
+            rows = table["props"]["rows"]
+            assert rows[0]["player_id"] == "third-player"
+            assert rows[2]["player_id"] == "first-player"
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_get_ui_store_none(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        self._setup_module_state(tmp_path)
+        mod._store = None
+        try:
+            page = await mod.get_ui(mod._ctx)
+            page_dict = page.to_dict("nowplaying")
+            stats_tab = page_dict["components"][0]["props"]["tabs"][0]
+            assert stats_tab["label"] == "Stats"
+            # Should show warning alert
+            assert len(stats_tab["children"]) >= 1
+        finally:
+            self._teardown_module_state()
+
+
+class TestSDUIActions:
+    """Tests for the NowPlaying SDUI action handlers."""
+
+    def _setup_module_state(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+        from plugins.nowplaying.store import PlayHistory
+
+        mod._store = PlayHistory(tmp_path)
+        mod._store.load()
+        mod._ctx = MagicMock()
+        mod._ctx.get_setting = MagicMock(return_value=None)
+        mod._ctx.set_setting = MagicMock()
+        mod._ctx.notify_ui_update = MagicMock()
+
+    def _teardown_module_state(self) -> None:
+        import plugins.nowplaying as mod
+
+        mod._store = None
+        mod._ctx = None
+
+    @pytest.mark.asyncio
+    async def test_handle_action_clear(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            mod._store.record("player-a")
+            mod._store.record("player-b")
+            assert mod._store.count == 2
+            assert mod._store.total == 2
+
+            result = await mod.handle_action("clear", {}, mod._ctx)
+            assert "message" in result
+            assert "2" in result["message"]
+            assert mod._store.count == 0
+            assert mod._store.total == 0
+            mod._ctx.notify_ui_update.assert_called()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_clear_empty(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await mod.handle_action("clear", {}, mod._ctx)
+            assert "message" in result
+            assert "0" in result["message"]
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_clear_store_none(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        self._setup_module_state(tmp_path)
+        mod._store = None
+        try:
+            result = await mod.handle_action("clear", {}, mod._ctx)
+            assert "error" in result
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_save_settings(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await mod.handle_action(
+                "save_settings",
+                {"max_entries": 100},
+                mod._ctx,
+            )
+            assert "message" in result
+            assert "max_entries" in result["message"]
+            mod._ctx.set_setting.assert_called_once_with("max_entries", 100)
+            mod._ctx.notify_ui_update.assert_called()
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_save_settings_trims_store(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            for i in range(50):
+                mod._store.record(f"player-{i}")
+            assert mod._store.count == 50
+
+            result = await mod.handle_action(
+                "save_settings",
+                {"max_entries": 25},
+                mod._ctx,
+            )
+            assert "message" in result
+            assert mod._store.count == 25
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_save_settings_invalid(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await mod.handle_action(
+                "save_settings",
+                {"max_entries": "not_a_number"},
+                mod._ctx,
+            )
+            assert "error" in result
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_save_settings_no_changes(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await mod.handle_action(
+                "save_settings", {}, mod._ctx,
+            )
+            assert "message" in result
+            assert "No changes" in result["message"]
+        finally:
+            self._teardown_module_state()
+
+    @pytest.mark.asyncio
+    async def test_handle_action_unknown(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        self._setup_module_state(tmp_path)
+        try:
+            result = await mod.handle_action(
+                "nonexistent_action", {}, mod._ctx,
+            )
+            assert "error" in result
+            assert "Unknown" in result["error"]
+        finally:
+            self._teardown_module_state()
+
+
+class TestSDUISetupRegistration:
+    """Test that setup registers SDUI handlers."""
+
+    @pytest.mark.asyncio
+    async def test_setup_registers_sdui_handlers(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        old_store = mod._store
+        old_ctx = mod._ctx
+
+        try:
+            ctx = MagicMock()
+            ctx.plugin_id = "nowplaying"
+            ctx.data_dir = tmp_path
+            ctx.ensure_data_dir = MagicMock(return_value=tmp_path)
+            ctx.event_bus = MagicMock()
+            ctx.register_command = MagicMock()
+            ctx.register_menu_node = MagicMock()
+            ctx.register_ui_handler = MagicMock()
+            ctx.register_action_handler = MagicMock()
+            ctx.subscribe = AsyncMock()
+            ctx.get_setting = MagicMock(return_value=None)
+
+            await mod.setup(ctx)
+
+            ctx.register_ui_handler.assert_called_once_with(mod.get_ui)
+            ctx.register_action_handler.assert_called_once_with(mod.handle_action)
+        finally:
+            await mod.teardown(MagicMock())
+            mod._store = old_store
+            mod._ctx = old_ctx
+
+    @pytest.mark.asyncio
+    async def test_teardown_clears_ctx(self, tmp_path: Path) -> None:
+        import plugins.nowplaying as mod
+
+        old_store = mod._store
+        old_ctx = mod._ctx
+
+        try:
+            ctx = MagicMock()
+            ctx.plugin_id = "nowplaying"
+            ctx.ensure_data_dir = MagicMock(return_value=tmp_path)
+            ctx.event_bus = MagicMock()
+            ctx.register_command = MagicMock()
+            ctx.register_menu_node = MagicMock()
+            ctx.register_ui_handler = MagicMock()
+            ctx.register_action_handler = MagicMock()
+            ctx.subscribe = AsyncMock()
+            ctx.get_setting = MagicMock(return_value=None)
+
+            await mod.setup(ctx)
+            assert mod._ctx is not None
+
+            await mod.teardown(ctx)
+            assert mod._ctx is None
+            assert mod._store is None
+        finally:
+            mod._store = old_store
+            mod._ctx = old_ctx
+
+
+class TestFormatTimestamp:
+    """Tests for the _format_timestamp helper."""
+
+    def test_empty_string(self) -> None:
+        import plugins.nowplaying as mod
+
+        assert mod._format_timestamp("") == "—"
+
+    def test_none_like(self) -> None:
+        import plugins.nowplaying as mod
+
+        assert mod._format_timestamp("") == "—"
+
+    def test_short_string(self) -> None:
+        import plugins.nowplaying as mod
+
+        assert mod._format_timestamp("2026") == "—"
+
+    def test_recent_timestamp(self) -> None:
+        import time as _time
+        from datetime import datetime, timezone
+
+        import plugins.nowplaying as mod
+
+        now = datetime.now(timezone.utc)
+        iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        result = mod._format_timestamp(iso)
+        assert result == "just now"
+
+    def test_minutes_ago(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        import plugins.nowplaying as mod
+
+        ts = datetime.now(timezone.utc) - timedelta(minutes=5)
+        iso = ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+        result = mod._format_timestamp(iso)
+        assert "m ago" in result
+
+    def test_hours_ago(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        import plugins.nowplaying as mod
+
+        ts = datetime.now(timezone.utc) - timedelta(hours=3)
+        iso = ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+        result = mod._format_timestamp(iso)
+        assert "h ago" in result
+
+    def test_yesterday(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        import plugins.nowplaying as mod
+
+        ts = datetime.now(timezone.utc) - timedelta(days=1)
+        iso = ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+        result = mod._format_timestamp(iso)
+        assert result == "yesterday"
+
+    def test_days_ago(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        import plugins.nowplaying as mod
+
+        ts = datetime.now(timezone.utc) - timedelta(days=4)
+        iso = ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+        result = mod._format_timestamp(iso)
+        assert "d ago" in result
+
+    def test_old_timestamp_shows_date(self) -> None:
+        import plugins.nowplaying as mod
+
+        result = mod._format_timestamp("2025-01-15T14:30:00Z")
+        assert "2025-01-15" in result
+        assert "14:30:00" in result
+
+    def test_non_z_suffix(self) -> None:
+        import plugins.nowplaying as mod
+
+        result = mod._format_timestamp("2025-01-15T14:30:00+00:00")
+        assert "2025-01-15" in result
+
+    def test_malformed_falls_back_to_time(self) -> None:
+        import plugins.nowplaying as mod
+
+        # Enough chars but not parseable as ISO — should fallback to time slice
+        result = mod._format_timestamp("XXXX-XX-XXTXX:XX:XXZ")
+        # Falls back to extracting characters 11:19 → "XX:XX:XX"
+        assert len(result) > 0

@@ -1,6 +1,25 @@
 [plugin]
 name = "nowplaying"
-version = "0.1.0"
-description = "Tracks recently played songs and provides play statistics"
-author = "Tutorial"
+version = "1.0.0"
+description = "Tracks recently played songs and provides play statistics with SDUI dashboard, configurable history, and full Jive menu integration"
+author = "Resonance"
 min_resonance_version = "0.1.0"
+category = "tools"
+
+[ui]
+enabled = true
+sidebar_label = "Play Stats"
+sidebar_icon = "activity"
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+
+[settings.max_entries]
+type = "int"
+label = "Maximum History Entries"
+description = "How many track plays to keep in the history file. Older entries are trimmed automatically. The total play count is always preserved regardless of this limit."
+default = 500
+min = 20
+max = 5000
+order = 10

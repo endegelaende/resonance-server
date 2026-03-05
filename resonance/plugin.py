@@ -580,7 +580,11 @@ class PluginContext:
         """Register a function that handles UI button actions.
 
         The handler must be an async function with signature:
-        ``async def handle_action(action: str, params: dict) -> dict``
+        ``async def handle_action(action: str, params: dict, ctx: PluginContext) -> dict``
+
+        The framework passes the :class:`PluginContext` as the third
+        argument so that handlers can access settings, player registry,
+        and other server resources.
         """
         self._action_handler = handler
         logger.debug("[%s] Registered action handler", self.plugin_id)

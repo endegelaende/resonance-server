@@ -586,6 +586,10 @@ async def setup(ctx: PluginContext) -> None:
         window={"titleStyle": "album"},
     )
 
+    # ── SDUI ───────────────────────────────────────────────────
+    ctx.register_ui_handler(get_ui)
+    ctx.register_action_handler(handle_action)
+
     # ── Start background refresh task ──────────────────────────
     _refresh_task = asyncio.create_task(
         _background_refresh_loop(),
@@ -593,7 +597,7 @@ async def setup(ctx: PluginContext) -> None:
     )
 
     logger.info(
-        "Podcast plugin v2 started (%d subscriptions, %d resume, %d played, provider=%s)",
+        "Podcast plugin v2.2 started (%d subscriptions, %d resume, %d played, provider=%s)",
         _store.subscription_count,
         len(_store.resume_positions),
         _store.played_count,
@@ -636,6 +640,1187 @@ async def teardown(ctx: PluginContext) -> None:
     _ctx = None
 
     logger.info("Podcast plugin stopped")
+
+
+# ---------------------------------------------------------------------------
+# SDUI — Server-Driven UI
+# ---------------------------------------------------------------------------
+
+
+async def get_ui(ctx: PluginContext) -> Any:
+    """Build the SDUI page for the Podcast plugin."""
+    from resonance.ui import Page, Tabs
+
+    subscriptions_tab = _build_subscriptions_tab()
+    recent_tab = _build_recent_tab()
+    continue_tab = _build_continue_tab()
+    settings_tab = _build_settings_tab()
+    about_tab = _build_about_tab()
+
+    return Page(
+        title="Podcasts",
+        icon="podcast",
+        refresh_interval=60,
+        components=[
+            Tabs(tabs=[
+                subscriptions_tab,
+                recent_tab,
+                continue_tab,
+                settings_tab,
+                about_tab,
+            ]),
+        ],
+    )
+
+
+def _build_subscriptions_tab() -> Any:
+    """Build the 'Subscriptions' tab showing all subscribed podcasts."""
+    from resonance.ui import (
+        Alert,
+        Button,
+        Card,
+        Form,
+        Modal,
+        Row,
+        StatusBadge,
+        Tab,
+        Table,
+        TableColumn,
+        Text,
+        TextInput,
+    )
+
+    if _store is None:
+        return Tab(label="Subscriptions", children=[
+            Alert(message="Podcast plugin not initialized.", severity="warning"),
+        ])
+
+    stats = _store.get_stats()
+    subs = _store.subscriptions
+
+    # Stats summary card
+    stats_children: list[Any] = [
+        Row(gap="md", children=[
+            StatusBadge(
+                label="Subscriptions",
+                status=str(stats["subscriptions"]),
+                color="blue" if stats["subscriptions"] > 0 else "gray",
+            ),
+            StatusBadge(
+                label="New Episodes",
+                status=str(stats["total_new_episodes"]),
+                color="green" if stats["total_new_episodes"] > 0 else "gray",
+            ),
+            StatusBadge(
+                label="In Progress",
+                status=str(stats["in_progress_episodes"]),
+                color="yellow" if stats["in_progress_episodes"] > 0 else "gray",
+            ),
+            StatusBadge(
+                label="Played",
+                status=str(stats["played_episodes"]),
+                color="blue" if stats["played_episodes"] > 0 else "gray",
+            ),
+        ]),
+    ]
+
+    # OPML Import modal (always shown — works with or without subscriptions)
+    import_modal = Modal(
+        title="Import OPML",
+        trigger_label="Import OPML",
+        trigger_style="secondary",
+        trigger_icon="upload",
+        size="md",
+        children=[
+            Text(content="Import podcast subscriptions from an OPML URL or file path."),
+            Form(
+                action="import_opml_url",
+                submit_label="Import",
+                children=[
+                    TextInput(
+                        name="opml_source",
+                        label="OPML URL or file path",
+                        placeholder="https://example.com/podcasts.opml or /path/to/file.opml",
+                        required=True,
+                        help_text="Enter a URL to an OPML file (http/https) or a local file path. "
+                                  "Duplicate subscriptions will be skipped automatically.",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    if not subs:
+        return Tab(label="Subscriptions", children=[
+            Card(title="Overview", children=stats_children),
+            Card(title="Subscriptions", children=[
+                Alert(
+                    message="No podcast subscriptions yet. Use the Podcasts menu on your player to search and subscribe, or import an OPML file.",
+                    severity="info",
+                ),
+            ]),
+            Row(gap="md", children=[
+                import_modal,
+            ]),
+        ])
+
+    # Build subscription table with move and browse actions
+    columns = [
+        TableColumn(key="order", label="#"),
+        TableColumn(key="name", label="Podcast"),
+        TableColumn(key="author", label="Author"),
+        TableColumn(key="new", label="New"),
+        TableColumn(key="description", label="Description"),
+        TableColumn(key="actions", label="", variant="actions"),
+    ]
+
+    rows: list[dict[str, Any]] = []
+    total = len(subs)
+    for idx, sub in enumerate(subs):
+        desc = sub.description
+        if len(desc) > 80:
+            desc = desc[:77] + "..."
+
+        new_badge = str(sub.new_episode_count) if sub.new_episode_count > 0 else "—"
+
+        actions: list[dict[str, Any]] = []
+
+        # Move up (not for first item)
+        if idx > 0:
+            actions.append({
+                "label": "↑ Move Up",
+                "action": "move_up",
+                "params": {"_url": sub.url, "name": sub.name},
+                "style": "secondary",
+            })
+
+        # Move down (not for last item)
+        if idx < total - 1:
+            actions.append({
+                "label": "↓ Move Down",
+                "action": "move_down",
+                "params": {"_url": sub.url, "name": sub.name},
+                "style": "secondary",
+            })
+
+        # Browse episodes
+        actions.append({
+            "label": "Browse Episodes",
+            "action": "browse_episodes",
+            "params": {"_url": sub.url, "name": sub.name},
+            "style": "primary",
+        })
+
+        # Mark all played
+        actions.append({
+            "label": "Mark All Played",
+            "action": "mark_feed_played",
+            "params": {"_url": sub.url, "name": sub.name},
+            "style": "secondary",
+            "confirm": True,
+        })
+
+        # Unsubscribe
+        actions.append({
+            "label": "Unsubscribe",
+            "action": "unsubscribe",
+            "params": {"_url": sub.url, "name": sub.name},
+            "style": "danger",
+            "confirm": True,
+        })
+
+        rows.append({
+            "order": str(idx + 1),
+            "name": sub.name or sub.url[:50],
+            "author": sub.author or "—",
+            "new": new_badge,
+            "description": desc or "—",
+            "_url": sub.url,
+            "_image": sub.image,
+            "actions": actions,
+        })
+
+    return Tab(label="Subscriptions", children=[
+        Card(title="Overview", children=stats_children),
+        Card(title=f"Subscriptions ({len(subs)})", children=[
+            Table(
+                columns=columns,
+                rows=rows,
+                row_key="_url",
+            ),
+        ]),
+        Row(gap="md", children=[
+            Button(
+                label="Refresh All Feeds",
+                action="refresh_feeds",
+                style="secondary",
+                icon="refresh-cw",
+            ),
+            import_modal,
+            Button(
+                label="Export OPML",
+                action="export_opml",
+                style="secondary",
+                icon="download",
+            ),
+            Button(
+                label="Clear Feed Cache",
+                action="clear_feed_cache",
+                style="secondary",
+                icon="trash-2",
+            ),
+        ]),
+    ])
+
+
+def _build_recent_tab() -> Any:
+    """Build the 'Recent' tab showing recently played episodes."""
+    from resonance.ui import (
+        Alert,
+        Button,
+        Card,
+        Row,
+        Tab,
+        Table,
+        TableColumn,
+    )
+
+    if _store is None or _store.recent_count == 0:
+        return Tab(label="Recent", children=[
+            Card(title="Recently Played", children=[
+                Alert(
+                    message="No episodes played yet. Browse your subscriptions and start listening!",
+                    severity="info",
+                ),
+            ]),
+        ])
+
+    from .feed_parser import format_duration
+
+    recent = _store.recent
+    columns = [
+        TableColumn(key="title", label="Episode"),
+        TableColumn(key="show", label="Podcast"),
+        TableColumn(key="duration", label="Duration"),
+        TableColumn(key="played_at", label="Played"),
+        TableColumn(key="actions", label="", variant="actions"),
+    ]
+
+    rows: list[dict[str, Any]] = []
+    for ep in recent:
+        # Format played_at as relative time
+        played_str = _format_relative_time(ep.played_at) if ep.played_at else "—"
+        dur_str = format_duration(ep.duration) if ep.duration else "—"
+
+        actions: list[dict[str, Any]] = [
+            {
+                "label": "▶ Play",
+                "action": "play_episode",
+                "params": {
+                    "_url": ep.url,
+                    "title": ep.title,
+                    "feed_url": ep.feed_url,
+                    "feed_title": ep.show,
+                    "icon": ep.image,
+                    "duration": ep.duration,
+                },
+                "style": "primary",
+            },
+            {
+                "label": "Mark Played",
+                "action": "mark_played",
+                "params": {"_url": ep.url, "title": ep.title},
+                "style": "secondary",
+            },
+            {
+                "label": "Mark Unplayed",
+                "action": "mark_unplayed",
+                "params": {"_url": ep.url, "title": ep.title},
+                "style": "secondary",
+            },
+        ]
+
+        rows.append({
+            "title": ep.title or ep.url[:50],
+            "show": ep.show or "—",
+            "duration": dur_str,
+            "played_at": played_str,
+            "_url": ep.url,
+            "_feed_url": ep.feed_url,
+            "actions": actions,
+        })
+
+    return Tab(label="Recent", children=[
+        Card(title=f"Recently Played ({len(recent)})", children=[
+            Table(
+                columns=columns,
+                rows=rows,
+                row_key="_url",
+            ),
+        ]),
+        Row(gap="md", children=[
+            Button(
+                label="Clear History",
+                action="clear_recent",
+                style="danger",
+                confirm=True,
+                icon="trash-2",
+            ),
+        ]),
+    ])
+
+
+def _build_continue_tab() -> Any:
+    """Build the 'Continue' tab showing in-progress episodes."""
+    from resonance.ui import (
+        Alert,
+        Button,
+        Card,
+        KeyValue,
+        KVItem,
+        Progress,
+        Row,
+        Tab,
+        Text,
+    )
+
+    if _store is None:
+        return Tab(label="Continue", children=[
+            Alert(message="Podcast plugin not initialized.", severity="warning"),
+        ])
+
+    from .feed_parser import format_duration
+
+    in_progress = _store.get_in_progress_episodes()
+
+    if not in_progress:
+        return Tab(label="Continue", children=[
+            Card(title="Continue Listening", children=[
+                Alert(
+                    message="No episodes in progress. Start listening to a podcast episode and your progress will be tracked automatically.",
+                    severity="info",
+                ),
+            ]),
+        ])
+
+    children: list[Any] = []
+    for ep in in_progress:
+        title = ep.get("title", "")
+        show = ep.get("show", "")
+        position = ep.get("position", 0)
+        duration = ep.get("duration", 0)
+        percentage = ep.get("percentage", 0)
+        image = ep.get("image", "")
+        feed_url = ep.get("feed_url", "")
+
+        label = title or ep["url"][:50]
+        if show:
+            label = f"{show} — {label}"
+
+        pos_str = format_duration(position) if position else "0:00"
+        dur_str = format_duration(duration) if duration else "?"
+
+        kv_items = [
+            KVItem(key="Position", value=f"{pos_str} / {dur_str}"),
+        ]
+        if show:
+            kv_items.insert(0, KVItem(key="Podcast", value=show))
+
+        children.append(
+            Card(title=label, collapsible=True, children=[
+                Progress(
+                    value=percentage,
+                    label=f"{percentage}% complete",
+                ),
+                KeyValue(items=kv_items),
+                Row(gap="md", children=[
+                    Button(
+                        label="▶ Resume",
+                        action="play_episode",
+                        params={
+                            "_url": ep["url"],
+                            "title": title,
+                            "feed_url": feed_url,
+                            "feed_title": show,
+                            "icon": image,
+                            "duration": duration,
+                            "resume_from": int(position),
+                        },
+                        style="primary",
+                        icon="play",
+                    ),
+                    Button(
+                        label="Mark Played",
+                        action="mark_played",
+                        params={"_url": ep["url"], "title": title},
+                        style="secondary",
+                    ),
+                ]),
+            ])
+        )
+
+    return Tab(label="Continue", children=[
+        Text(content=f"**{len(in_progress)}** episode(s) in progress"),
+        *children,
+    ])
+
+
+def _build_settings_tab() -> Any:
+    """Build the 'Settings' tab with a form for podcast configuration."""
+    from resonance.ui import (
+        Alert,
+        Form,
+        NumberInput,
+        Select,
+        SelectOption,
+        Tab,
+    )
+
+    skip_back = int(_setting("skip_back_seconds", 15) or 15)
+    skip_forward = int(_setting("skip_forward_seconds", 30) or 30)
+    search_provider = str(_setting("search_provider", "podcastindex") or "podcastindex")
+    new_since_days = int(_setting("new_since_days", 7) or 7)
+    max_new = int(_setting("max_new_episodes", 50) or 50)
+    auto_mark = int(_setting("auto_mark_played_percent", 90) or 90)
+    cache_ttl = int(_setting("feed_cache_ttl", 600) or 600)
+    max_recent = int(_setting("max_recent", 50) or 50)
+    auto_refresh = int(_setting("auto_refresh_minutes", 60) or 60)
+    playback_speed = str(_setting("default_playback_speed", "1.0") or "1.0")
+
+    return Tab(label="Settings", children=[
+        Form(
+            action="save_settings",
+            submit_label="Save Settings",
+            children=[
+                Select(
+                    name="search_provider",
+                    label="Search Provider",
+                    value=search_provider,
+                    help_text="Which podcast directory to use when searching for new podcasts.",
+                    options=[
+                        SelectOption(value="podcastindex", label="PodcastIndex (recommended)"),
+                        SelectOption(value="gpodder", label="gPodder"),
+                        SelectOption(value="itunes", label="iTunes"),
+                    ],
+                ),
+                NumberInput(
+                    name="skip_back_seconds",
+                    label="Skip Back (seconds)",
+                    value=skip_back,
+                    min=5,
+                    max=120,
+                    help_text="Number of seconds to skip backward during podcast playback.",
+                ),
+                NumberInput(
+                    name="skip_forward_seconds",
+                    label="Skip Forward (seconds)",
+                    value=skip_forward,
+                    min=5,
+                    max=120,
+                    help_text="Number of seconds to skip forward during podcast playback.",
+                ),
+                NumberInput(
+                    name="new_since_days",
+                    label="What's New — Days",
+                    value=new_since_days,
+                    min=1,
+                    max=90,
+                    help_text="Show episodes published within this many days in the What's New feed.",
+                ),
+                NumberInput(
+                    name="max_new_episodes",
+                    label="What's New — Max Episodes",
+                    value=max_new,
+                    min=10,
+                    max=500,
+                    help_text="Maximum number of episodes to show in the What's New aggregated feed.",
+                ),
+                NumberInput(
+                    name="auto_mark_played_percent",
+                    label="Auto Mark Played (%)",
+                    value=auto_mark,
+                    min=50,
+                    max=100,
+                    help_text="Automatically mark an episode as played at this percentage. Set to 100 to disable.",
+                ),
+                NumberInput(
+                    name="feed_cache_ttl",
+                    label="Feed Cache (seconds)",
+                    value=cache_ttl,
+                    min=60,
+                    max=7200,
+                    help_text="How long parsed RSS feeds are cached in memory before re-fetching.",
+                ),
+                NumberInput(
+                    name="max_recent",
+                    label="Max Recently Played",
+                    value=max_recent,
+                    min=10,
+                    max=200,
+                    help_text="Maximum number of recently played episodes to remember.",
+                ),
+                NumberInput(
+                    name="auto_refresh_minutes",
+                    label="Auto-Refresh Interval (minutes)",
+                    value=auto_refresh,
+                    min=0,
+                    max=1440,
+                    help_text="Background interval for refreshing subscribed feeds. Set to 0 to disable.",
+                ),
+                Select(
+                    name="default_playback_speed",
+                    label="Default Playback Speed",
+                    value=playback_speed,
+                    help_text="Default playback speed for podcast episodes (hardware support varies).",
+                    options=[
+                        SelectOption(value="0.5", label="0.5×"),
+                        SelectOption(value="0.75", label="0.75×"),
+                        SelectOption(value="1.0", label="1.0× (normal)"),
+                        SelectOption(value="1.25", label="1.25×"),
+                        SelectOption(value="1.5", label="1.5×"),
+                        SelectOption(value="1.75", label="1.75×"),
+                        SelectOption(value="2.0", label="2.0×"),
+                    ],
+                ),
+            ],
+        ),
+        Alert(
+            message="Changes to search provider and cache settings take effect after restarting the server. Other settings apply immediately.",
+            severity="info",
+        ),
+    ])
+
+
+def _build_about_tab() -> Any:
+    """Build the 'About' tab with plugin information."""
+    from resonance.ui import Markdown, Tab
+
+    md = """## Podcast Plugin v2.2
+
+**Full-Featured Podcast Manager** for Resonance.
+
+### Features
+
+| Feature | Description |
+|---------|-------------|
+| **Subscribe** | Add podcasts by searching or entering RSS feed URLs |
+| **What's New** | Aggregated feed of recent episodes across all subscriptions |
+| **Continue Listening** | Resume where you left off — positions tracked automatically |
+| **▶ Play from SDUI** | Play or resume episodes directly from this dashboard |
+| **Search** | Find new podcasts via PodcastIndex, gPodder, or iTunes |
+| **Trending** | Discover popular podcasts via PodcastIndex/gPodder/iTunes charts |
+| **Skip Controls** | Configurable skip-forward/back from Jive remote buttons |
+| **OPML Import/Export** | Import from URL or file path, export to data directory |
+| **Progress Tracking** | Per-episode position, duration, and percentage |
+| **Auto Mark Played** | Automatically marks episodes as played at configurable threshold |
+| **Background Refresh** | Periodically checks for new episodes |
+| **Subscription Order** | Move subscriptions up/down to organize your list |
+| **Jive Menu** | Full Squeezebox Touch/Radio/Boom/Controller integration |
+| **SDUI Dashboard** | This page — manage subscriptions, track progress, configure |
+
+### Search Providers
+
+| Provider | Trending | New Episodes | Notes |
+|----------|----------|--------------|-------|
+| PodcastIndex | ✅ | ✅ | Recommended — open index, API key optional |
+| gPodder | ✅ | ❌ | Open-source, community top-lists |
+| iTunes | ✅ | ❌ | Apple Podcasts charts |
+
+### SDUI Actions
+
+| Action | Where | What it does |
+|--------|-------|-------------|
+| **▶ Play / Resume** | Recent tab, Continue tab | Plays on the first connected player |
+| **↑ Move Up / ↓ Move Down** | Subscriptions tab | Reorder your subscription list |
+| **Import OPML** | Subscriptions tab | Import from a URL (http/https) or local file path |
+| **Export OPML** | Subscriptions tab | Saves to the plugin data directory |
+| **Browse Episodes** | Subscriptions tab | Mark feed as browsed, reset new-episode badge |
+| **Mark Played / Unplayed** | Recent tab, Subscriptions tab | Toggle episode or feed played state |
+| **Refresh All Feeds** | Subscriptions tab | Force-refresh all RSS feeds |
+
+### Tips
+
+- **▶ Play buttons** use the first connected player — make sure a Squeezebox or Squeezelite is online
+- **OPML import** accepts URLs (`https://example.com/podcasts.opml`) or local file paths
+- **Browse podcasts** via the Podcasts menu on your Squeezebox or player app for full episode browsing
+- **Auto-refresh** checks for new episodes in the background — configure the interval in Settings
+- Episode **resume positions** are saved automatically when playback pauses or stops
+
+### Credits
+
+Built on the Resonance plugin framework. Podcast directory search powered by
+[PodcastIndex](https://podcastindex.org), [gPodder](https://gpodder.net),
+and [iTunes Search API](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/).
+"""
+
+    return Tab(label="About", children=[
+        Markdown(content=md),
+    ])
+
+
+def _format_relative_time(timestamp: float) -> str:
+    """Format a Unix timestamp as a relative time string (e.g. '2h ago')."""
+    if timestamp <= 0:
+        return "—"
+    delta = time.time() - timestamp
+    if delta < 60:
+        return "just now"
+    if delta < 3600:
+        mins = int(delta / 60)
+        return f"{mins}m ago"
+    if delta < 86400:
+        hours = int(delta / 3600)
+        return f"{hours}h ago"
+    days = int(delta / 86400)
+    if days == 1:
+        return "yesterday"
+    if days < 30:
+        return f"{days}d ago"
+    months = int(days / 30)
+    if months == 1:
+        return "1 month ago"
+    return f"{months} months ago"
+
+
+# ---------------------------------------------------------------------------
+# SDUI action handlers
+# ---------------------------------------------------------------------------
+
+
+async def handle_action(
+    action: str, params: dict[str, Any], ctx: PluginContext
+) -> dict[str, Any] | None:
+    """Handle SDUI actions from the frontend."""
+    match action:
+        case "mark_played":
+            return _handle_mark_played(params)
+        case "mark_unplayed":
+            return _handle_mark_unplayed(params)
+        case "mark_feed_played":
+            return await _handle_mark_feed_played(params)
+        case "unsubscribe":
+            return _handle_unsubscribe(params)
+        case "move_up":
+            return _handle_move_up(params)
+        case "move_down":
+            return _handle_move_down(params)
+        case "clear_recent":
+            return _handle_clear_recent()
+        case "refresh_feeds":
+            return await _handle_refresh_feeds()
+        case "export_opml":
+            return _handle_export_opml()
+        case "import_opml_url":
+            return await _handle_import_opml_url(params)
+        case "browse_episodes":
+            return await _handle_browse_episodes(params)
+        case "play_episode":
+            return await _handle_play_episode(params, ctx)
+        case "clear_feed_cache":
+            return _handle_clear_feed_cache()
+        case "save_settings":
+            return await _handle_save_settings(params, ctx)
+        case _:
+            return {"error": f"Unknown action: {action}"}
+
+
+def _handle_mark_played(params: dict[str, Any]) -> dict[str, Any]:
+    """Mark an episode as played."""
+    if _store is None:
+        return {"error": "Store not available"}
+
+    row = params.get("row", params)
+    url = row.get("_url", "")
+    title = row.get("title", "")
+
+    if not url:
+        return {"error": "No episode URL found"}
+
+    _store.mark_played(url)
+
+    if _ctx is not None:
+        _ctx.notify_ui_update()
+
+    return {"message": f"Marked '{title or 'episode'}' as played"}
+
+
+def _handle_mark_unplayed(params: dict[str, Any]) -> dict[str, Any]:
+    """Mark an episode as unplayed (reset progress)."""
+    if _store is None:
+        return {"error": "Store not available"}
+
+    row = params.get("row", params)
+    url = row.get("_url", "")
+    title = row.get("title", "")
+
+    if not url:
+        return {"error": "No episode URL found"}
+
+    _store.mark_unplayed(url)
+
+    if _ctx is not None:
+        _ctx.notify_ui_update()
+
+    return {"message": f"Marked '{title or 'episode'}' as unplayed"}
+
+
+async def _handle_mark_feed_played(params: dict[str, Any]) -> dict[str, Any]:
+    """Mark all episodes from a feed as played."""
+    if _store is None:
+        return {"error": "Store not available"}
+
+    feed_url = params.get("_url", "")
+    name = params.get("name", "podcast")
+
+    if not feed_url:
+        return {"error": "No feed URL found"}
+
+    # Fetch the feed to get episode URLs
+    try:
+        feed = await _get_feed(feed_url)
+        episode_urls = [ep.url for ep in feed.episodes if ep.url]
+        if episode_urls:
+            count = _store.mark_feed_played(episode_urls)
+            if _ctx is not None:
+                _ctx.notify_ui_update()
+            return {"message": f"Marked {count} episode(s) from '{name}' as played"}
+        else:
+            return {"message": f"No episodes found in '{name}'"}
+    except Exception as exc:
+        logger.warning("Failed to fetch feed for mark-all-played: %s", exc)
+        return {"error": f"Could not fetch feed: {exc}"}
+
+
+def _handle_unsubscribe(params: dict[str, Any]) -> dict[str, Any]:
+    """Unsubscribe from a podcast feed."""
+    if _store is None:
+        return {"error": "Store not available"}
+
+    url = params.get("_url", "")
+    name = params.get("name", "podcast")
+
+    if not url:
+        return {"error": "No feed URL found"}
+
+    removed = _store.remove_subscription(url)
+    if removed:
+        if _ctx is not None:
+            _ctx.notify_ui_update()
+        return {"message": f"Unsubscribed from '{name}'"}
+    else:
+        return {"error": f"'{name}' not found in subscriptions"}
+
+
+def _handle_clear_recent() -> dict[str, Any]:
+    """Clear all recently played episodes."""
+    if _store is None:
+        return {"error": "Store not available"}
+
+    count = _store.recent_count
+    _store.clear_recent()
+
+    if _ctx is not None:
+        _ctx.notify_ui_update()
+
+    return {"message": f"Cleared {count} recently played episode(s)"}
+
+
+async def _handle_refresh_feeds() -> dict[str, Any]:
+    """Trigger a manual refresh of all subscribed feeds."""
+    if _store is None:
+        return {"error": "Store not available"}
+
+    subs = _store.subscriptions
+    if not subs:
+        return {"message": "No subscriptions to refresh"}
+
+    refreshed = 0
+    errors = 0
+    total_new = 0
+
+    for sub in subs:
+        try:
+            feed = await _get_feed(sub.url, force=True)
+            refreshed += 1
+
+            # Count new episodes since last browse
+            if sub.last_browsed_at > 0:
+                new_count = sum(
+                    1 for ep in feed.episodes
+                    if ep.published_epoch > sub.last_browsed_at
+                )
+                _store.set_new_episode_count(sub.url, new_count)
+                total_new += new_count
+        except Exception as exc:
+            logger.debug("Refresh failed for %s: %s", sub.url, exc)
+            errors += 1
+
+    if _ctx is not None:
+        _ctx.notify_ui_update()
+
+    parts = [f"Refreshed {refreshed}/{len(subs)} feed(s)"]
+    if total_new > 0:
+        parts.append(f"{total_new} new episode(s) found")
+    if errors > 0:
+        parts.append(f"{errors} error(s)")
+    return {"message": ". ".join(parts)}
+
+
+def _handle_export_opml() -> dict[str, Any]:
+    """Export subscriptions as OPML to the plugin data directory."""
+    if _store is None:
+        return {"error": "Store not available"}
+
+    count = _store.subscription_count
+    if count == 0:
+        return {"message": "No subscriptions to export"}
+
+    # Export to data directory automatically
+    if _ctx is not None:
+        from .opml import export_opml_file
+
+        try:
+            data_dir = _ctx.ensure_data_dir()
+            export_path = data_dir / "subscriptions.opml"
+            subs = _store.export_subscriptions()
+            export_opml_file(export_path, subs)
+            return {
+                "message": f"Exported {count} subscription(s) to {export_path}"
+            }
+        except Exception as exc:
+            logger.warning("OPML export failed: %s", exc)
+            return {"error": f"Export failed: {exc}"}
+
+    return {
+        "message": f"To export {count} subscription(s) as OPML, use the command: "
+                   "podcast opmlexport"
+    }
+
+
+def _handle_clear_feed_cache() -> dict[str, Any]:
+    """Clear the in-memory feed cache."""
+    count = len(_feed_cache)
+    _clear_feed_cache()
+
+    if _ctx is not None:
+        _ctx.notify_ui_update()
+
+    return {"message": f"Cleared {count} cached feed(s)"}
+
+
+def _handle_move_up(params: dict[str, Any]) -> dict[str, Any]:
+    """Move a subscription up in the list."""
+    if _store is None:
+        return {"error": "Store not available"}
+
+    row = params.get("row", params)
+    url = row.get("_url", "")
+    name = row.get("name", "podcast")
+
+    if not url:
+        return {"error": "No feed URL found"}
+
+    moved = _store.move_subscription(url, -1)
+    if moved:
+        if _ctx is not None:
+            _ctx.notify_ui_update()
+        return {"message": f"Moved '{name}' up"}
+    else:
+        return {"error": f"Cannot move '{name}' up (already at top)"}
+
+
+def _handle_move_down(params: dict[str, Any]) -> dict[str, Any]:
+    """Move a subscription down in the list."""
+    if _store is None:
+        return {"error": "Store not available"}
+
+    row = params.get("row", params)
+    url = row.get("_url", "")
+    name = row.get("name", "podcast")
+
+    if not url:
+        return {"error": "No feed URL found"}
+
+    moved = _store.move_subscription(url, 1)
+    if moved:
+        if _ctx is not None:
+            _ctx.notify_ui_update()
+        return {"message": f"Moved '{name}' down"}
+    else:
+        return {"error": f"Cannot move '{name}' down (already at bottom)"}
+
+
+async def _handle_import_opml_url(params: dict[str, Any]) -> dict[str, Any]:
+    """Import subscriptions from an OPML URL or local file path."""
+    if _store is None:
+        return {"error": "Store not available"}
+
+    source = params.get("opml_source", "").strip()
+    if not source:
+        return {"error": "Please enter a URL or file path"}
+
+    from .opml import import_opml_file, parse_opml
+
+    try:
+        if source.startswith("http://") or source.startswith("https://"):
+            # Fetch OPML from URL
+            if _http_client is None:
+                return {"error": "HTTP client not available"}
+            response = await _http_client.get(source)
+            response.raise_for_status()
+            doc = parse_opml(response.text)
+        else:
+            # Local file path
+            doc = import_opml_file(source)
+
+        feeds = [f.to_dict() for f in doc.feeds]
+        added, skipped = _store.import_subscriptions(feeds)
+
+        if _ctx is not None:
+            _ctx.notify_ui_update()
+
+        parts = [f"Imported {added} subscription(s)"]
+        if skipped > 0:
+            parts.append(f"{skipped} skipped (duplicates)")
+        if doc.title:
+            parts.append(f"from '{doc.title}'")
+        return {"message": ". ".join(parts)}
+
+    except Exception as exc:
+        logger.warning("OPML import failed from %s: %s", source, exc)
+        return {"error": f"Import failed: {exc}"}
+
+
+async def _handle_browse_episodes(params: dict[str, Any]) -> dict[str, Any]:
+    """Browse episodes for a subscription — returns episode data for UI display.
+
+    Since SDUI is declarative (no dynamic modals from action results), this
+    action marks the feed as browsed, refreshes new-episode counts, and
+    returns a summary message.  The actual episode browsing happens via the
+    Jive/JSON-RPC menu system.
+
+    Future: when SDUI supports dynamic content injection from action results,
+    this can return a full episode list.
+    """
+    if _store is None:
+        return {"error": "Store not available"}
+
+    row = params.get("row", params)
+    feed_url = row.get("_url", "")
+    name = row.get("name", "podcast")
+
+    if not feed_url:
+        return {"error": "No feed URL found"}
+
+    try:
+        feed = await _get_feed(feed_url)
+
+        # Mark the feed as browsed (resets new-episode badge)
+        _store.mark_feed_browsed(feed_url)
+
+        # Build episode summary
+        total = len(feed.episodes)
+        played_count = sum(
+            1 for ep in feed.episodes
+            if ep.url and _store.is_played(ep.url)
+        )
+        in_progress_count = sum(
+            1 for ep in feed.episodes
+            if ep.url and _store.has_resume_position(ep.url)
+            and not _store.is_played(ep.url)
+        )
+        unplayed = total - played_count
+
+        if _ctx is not None:
+            _ctx.notify_ui_update()
+
+        parts = [f"'{name}': {total} episodes"]
+        if unplayed > 0:
+            parts.append(f"{unplayed} unplayed")
+        if in_progress_count > 0:
+            parts.append(f"{in_progress_count} in progress")
+        if played_count > 0:
+            parts.append(f"{played_count} played")
+        parts.append("Browse episodes via the Podcasts menu on your player.")
+
+        return {"message": " · ".join(parts)}
+
+    except Exception as exc:
+        logger.warning("Failed to browse episodes for %s: %s", name, exc)
+        return {"error": f"Could not load feed: {exc}"}
+
+
+async def _handle_play_episode(
+    params: dict[str, Any], ctx: PluginContext
+) -> dict[str, Any]:
+    """Play a podcast episode via JSON-RPC self-call.
+
+    Uses the server's own JSON-RPC endpoint (``podcast play``) to start
+    playback.  This reuses the full playback pipeline — playlist, streaming,
+    Slimproto — without needing to reconstruct a ``CommandContext`` inside
+    the SDUI action handler.
+
+    The approach:
+    1. Find the first connected player via ``PlayerRegistry``.
+    2. Send a ``slim.request`` JSON-RPC call to ``localhost:<port>``
+       with the ``podcast play`` command.
+    3. The existing ``_podcast_play`` handler does the rest.
+    """
+    if _store is None:
+        return {"error": "Store not available"}
+
+    row = params.get("row", params)
+    episode_url = row.get("_url", "")
+    title = row.get("title", "")
+    feed_url = row.get("feed_url", "")
+    feed_title = row.get("feed_title", "")
+    icon = row.get("icon", "")
+    duration = int(row.get("duration", 0) or 0)
+    resume_from = int(row.get("resume_from", 0) or 0)
+
+    if not episode_url:
+        return {"error": "No episode URL found"}
+
+    # Find a player to play on
+    player_registry = ctx.player_registry
+    if player_registry is None:
+        return {"error": "Player registry not available"}
+
+    players = await player_registry.get_all()
+    if not players:
+        return {
+            "error": "No players connected. Connect a Squeezebox or "
+                     "Squeezelite player first."
+        }
+
+    # Use the first connected player
+    player = players[0]
+    player_id = player.mac_address
+
+    # Determine server address from PluginContext.server_info
+    host = ctx.server_info.get("host", "127.0.0.1") if ctx.server_info else "127.0.0.1"
+    port = ctx.server_info.get("port", 9000) if ctx.server_info else 9000
+    # Always use 127.0.0.1 for self-calls (avoid 0.0.0.0)
+    if host == "0.0.0.0":
+        host = "127.0.0.1"
+
+    # Build the podcast play command array
+    cmd: list[Any] = [
+        "podcast", "play",
+        f"url:{episode_url}",
+        f"cmd:play",
+    ]
+    if title:
+        cmd.append(f"title:{title}")
+    if icon:
+        cmd.append(f"icon:{icon}")
+    if feed_url:
+        cmd.append(f"feed_url:{feed_url}")
+    if feed_title:
+        cmd.append(f"feed_title:{feed_title}")
+    if duration:
+        cmd.append(f"duration:{duration}")
+
+    rpc_body = {
+        "id": 1,
+        "method": "slim.request",
+        "params": [player_id, cmd],
+    }
+
+    try:
+        if _http_client is None:
+            return {"error": "HTTP client not available"}
+
+        rpc_url = f"http://{host}:{port}/jsonrpc.js"
+        resp = await _http_client.post(rpc_url, json=rpc_body)
+        resp.raise_for_status()
+        result = resp.json()
+
+        # Check for errors in the JSON-RPC response
+        if "error" in result:
+            error_detail = result["error"]
+            if isinstance(error_detail, dict):
+                error_detail = error_detail.get("message", str(error_detail))
+            return {"error": f"Playback failed: {error_detail}"}
+
+        rpc_result = result.get("result", {})
+        if "error" in rpc_result:
+            return {"error": f"Playback failed: {rpc_result['error']}"}
+
+        logger.info(
+            "SDUI play: %s → %s on player %s (via JSON-RPC)",
+            title, episode_url[:80], player.name or player_id,
+        )
+
+        if _ctx is not None:
+            _ctx.notify_ui_update()
+
+        play_msg = f"Playing '{title or 'episode'}' on {player.name or player_id}"
+        if resume_from > 0:
+            from .feed_parser import format_duration
+            play_msg += f" (resuming from {format_duration(resume_from)})"
+        return {"message": play_msg}
+
+    except Exception as exc:
+        logger.warning("SDUI play failed for %s: %s", episode_url, exc)
+        return {
+            "error": f"Could not start playback: {exc}. "
+                     f"Try playing via the Podcasts menu on your player instead."
+        }
+
+
+async def _handle_save_settings(
+    params: dict[str, Any], ctx: PluginContext
+) -> dict[str, Any]:
+    """Save settings from the SDUI settings form."""
+    saved: list[str] = []
+
+    int_keys = [
+        "skip_back_seconds", "skip_forward_seconds", "new_since_days",
+        "max_new_episodes", "auto_mark_played_percent", "feed_cache_ttl",
+        "max_recent", "auto_refresh_minutes",
+    ]
+    str_keys = ["search_provider", "default_playback_speed"]
+
+    for key in int_keys:
+        if key in params:
+            try:
+                value = int(params[key])
+                ctx.set_setting(key, value)
+                saved.append(key)
+            except (ValueError, TypeError):
+                continue
+
+    for key in str_keys:
+        if key in params:
+            ctx.set_setting(key, params[key])
+            saved.append(key)
+
+    # Apply live-updatable settings to the store
+    if _store is not None:
+        if "max_recent" in params:
+            try:
+                _store.update_max_recent(int(params["max_recent"]))
+            except (ValueError, TypeError):
+                pass
+        if "auto_mark_played_percent" in params:
+            try:
+                _store.update_auto_mark_played_percent(
+                    int(params["auto_mark_played_percent"])
+                )
+            except (ValueError, TypeError):
+                pass
+
+    if _ctx is not None:
+        _ctx.notify_ui_update()
+
+    if saved:
+        return {
+            "message": f"Saved {len(saved)} setting(s): {', '.join(saved)}. "
+                       "Search provider and cache changes require a restart."
+        }
+    else:
+        return {"message": "No changes to save"}
 
 
 # ---------------------------------------------------------------------------
