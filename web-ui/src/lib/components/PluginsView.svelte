@@ -20,7 +20,7 @@
     type RepositoryPlugin,
   } from "$lib/api";
   import { toastStore } from "$lib/stores/toast.svelte";
-  import { PlugZap, RefreshCw, AlertTriangle } from "lucide-svelte";
+  import { PlugZap, RefreshCw, AlertTriangle, RotateCw } from "lucide-svelte";
 
   import PluginsInstalled from "./PluginsInstalled.svelte";
   import PluginsAvailable from "./PluginsAvailable.svelte";
@@ -37,6 +37,7 @@
   let loadingAvailable = $state(false);
   let savingSettings = $state(false);
   let busyPlugin = $state<string | null>(null);
+  let restarting = $state(false);
 
   let plugins = $state<PluginInfo[]>([]);
   let repositoryPlugins = $state<RepositoryPlugin[]>([]);
@@ -213,6 +214,36 @@
   // Lifecycle
   // ---------------------------------------------------------------------------
 
+  async function restartServer() {
+    if (!confirm("Restart the server now? Active playback will be interrupted.")) return;
+    restarting = true;
+    try {
+      await api.restartServer();
+      toastStore.info("Server is restarting…");
+      // Wait for the server to come back, then reload the page
+      setTimeout(() => {
+        const check = setInterval(async () => {
+          try {
+            const resp = await fetch("/api/status");
+            if (resp.ok) {
+              clearInterval(check);
+              window.location.reload();
+            }
+          } catch {
+            // Server still down, keep polling
+          }
+        }, 2000);
+        // Stop trying after 60s
+        setTimeout(() => clearInterval(check), 60000);
+      }, 3000);
+    } catch (err) {
+      toastStore.error("Failed to restart server", {
+        detail: (err as Error).message,
+      });
+      restarting = false;
+    }
+  }
+
   onMount(async () => {
     await Promise.all([loadPlugins(), loadRepository()]);
   });
@@ -243,12 +274,25 @@
   <!-- Restart-required banner -->
   {#if restartRequired}
     <div
-      class="p-3 rounded-lg border border-yellow-500/40 bg-yellow-500/10 text-yellow-200 flex items-start gap-3"
+      class="p-3 rounded-lg border border-yellow-500/40 bg-yellow-500/10 text-yellow-200 flex items-center justify-between gap-3"
     >
-      <AlertTriangle size={18} class="mt-0.5 shrink-0" />
-      <p class="text-sm">
-        Plugin changes require a server restart to take full effect.
-      </p>
+      <div class="flex items-center gap-3">
+        <AlertTriangle size={18} class="shrink-0" />
+        <p class="text-sm">
+          Plugin changes require a server restart to take full effect.
+        </p>
+      </div>
+      <button
+        class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 shrink-0
+               {restarting
+                 ? 'bg-yellow-500/20 text-yellow-300 cursor-wait'
+                 : 'bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-100'}"
+        onclick={restartServer}
+        disabled={restarting}
+      >
+        <RotateCw size={14} class={restarting ? 'animate-spin' : ''} />
+        {restarting ? 'Restarting…' : 'Restart Now'}
+      </button>
     </div>
   {/if}
 

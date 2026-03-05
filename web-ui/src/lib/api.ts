@@ -1885,6 +1885,17 @@ class ResonanceAPI {
     if (!response.ok) throw new Error(`Action failed: ${response.statusText}`);
     return response.json();
   }
+
+  // ---------------------------------------------------------------------------
+  // Server Management
+  // ---------------------------------------------------------------------------
+
+  async restartServer(): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/api/server/restart`, {
+      method: "POST",
+    });
+    if (!response.ok) throw new Error(`Restart failed: ${response.statusText}`);
+  }
 }
 
 // Export singleton instance

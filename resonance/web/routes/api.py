@@ -14,6 +14,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import signal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -1249,4 +1251,34 @@ async def reset_settings_endpoint() -> dict[str, Any]:
         "settings": settings.to_dict(),
         "warnings": warnings,
         "config_file": str(config_path) if config_path else None,
+    }
+
+
+# =============================================================================
+# Server restart
+# =============================================================================
+
+
+@router.post("/api/server/restart")
+async def restart_server() -> dict[str, Any]:
+    """Gracefully shut down the server process.
+
+    In a Docker environment with ``restart: unless-stopped``, the container
+    will be automatically restarted by the Docker daemon.  Outside Docker
+    the process simply exits with code 0.
+    """
+    logger.info("Server restart requested via REST API")
+
+    async def _delayed_shutdown() -> None:
+        """Give the HTTP response time to be sent before killing the process."""
+        await asyncio.sleep(0.5)
+        logger.info("Shutting down for restart...")
+        # SIGTERM triggers the graceful shutdown path in __main__.py
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    asyncio.create_task(_delayed_shutdown())
+
+    return {
+        "restarting": True,
+        "message": "Server is restarting. Please wait a few seconds and reload.",
     }
