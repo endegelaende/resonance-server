@@ -87,5 +87,9 @@ community-repo/
 .env.local
 nul
 
+# === AI Assistant Context (local only) ===
+CLAUDE.md
+.claude/
+
 # === Design Scratch Files ===
 assets/logos/logo-gallery*.html
