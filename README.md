@@ -139,12 +139,12 @@ Resonance speaks the same protocols as LMS. The server gives commands, players e
 
 ### Audio
 
-| Feature                                       | Status |
-| --------------------------------------------- | ------ |
-| HTTP Streaming (MP3, FLAC, OGG, WAV)          | Yes    |
-| On-the-fly Transcoding (M4A, M4B, AAC, ALAC)  | Yes    |
-| Internet Radio (radio-browser.info via plugin)  | Yes    |
-| Podcasts (RSS + PodcastIndex via plugin)        | Yes    |
+| Feature                                        | Status |
+| ---------------------------------------------- | ------ |
+| HTTP Streaming (MP3, FLAC, OGG, WAV)           | Yes    |
+| On-the-fly Transcoding (M4A, M4B, AAC, ALAC)   | Yes    |
+| Internet Radio (radio-browser.info via plugin) | Yes    |
+| Podcasts (RSS + PodcastIndex via plugin)       | Yes    |
 | Remote URL Proxy (HTTPS → HTTP for hardware)   | Yes    |
 | Gapless Playback                               | Yes    |
 | Crossfade (configurable overlap)               | Yes    |
@@ -169,11 +169,11 @@ Resonance speaks the same protocols as LMS. The server gives commands, players e
 
 ### Frontends
 
-| Frontend                                                    | Status         |
-| ----------------------------------------------------------- | -------------- |
-| **Web UI** — Svelte 5 + Tailwind v4 (see [below](#web-ui))  | Yes            |
-| **iPeng** (iOS)                                              | Verified       |
-| **Squeezer** (Android)                                       | Verified       |
+| Frontend                                                   | Status   |
+| ---------------------------------------------------------- | -------- |
+| **Web UI** — Svelte 5 + Tailwind v4 (see [below](#web-ui)) | Yes      |
+| **iPeng** (iOS)                                            | Verified |
+| **Squeezer** (Android)                                     | Verified |
 
 ---
 
@@ -186,21 +186,20 @@ Below are additional details for reference.
 Go to https://github.com/endegelaende/resonance-server → green **Code** button → **Download ZIP**.
 
 > **Tip:** If `python3` is not found or too old, install Python 3.11+ via your package manager:
-> 
+>
 > - Debian/Ubuntu: `sudo apt install python3 python3-venv python3-pip`
 > - Fedora: `sudo dnf install python3`
 > - macOS: `brew install python@3`
 
 ### Python Dependencies
 
-| Package     | Purpose                                               |
-|-------------|-------------------------------------------------------|
-| `mutagen`   | Read audio file metadata (tags, duration, cover art)  |
-| `aiosqlite` | Async SQLite for the music library database           |
-| `fastapi`   | Web framework for JSON-RPC, REST API, streaming       |
-| `uvicorn`   | ASGI server that runs FastAPI                         |
-| `httpx`     | Fully featured HTTP client for Python 3               |
-
+| Package     | Purpose                                              |
+| ----------- | ---------------------------------------------------- |
+| `mutagen`   | Read audio file metadata (tags, duration, cover art) |
+| `aiosqlite` | Async SQLite for the music library database          |
+| `fastapi`   | Web framework for JSON-RPC, REST API, streaming      |
+| `uvicorn`   | ASGI server that runs FastAPI                        |
+| `httpx`     | Fully featured HTTP client for Python 3              |
 
 ### Optional Dependencies
 
@@ -222,12 +221,12 @@ MP3, FLAC, OGG, and WAV are passthrough for most players (Squeezelite, SB2+, Rad
 
 **Cases that require external tools:**
 
-| Tool     | When needed                                                           |
-| -------- | --------------------------------------------------------------------- |
-| **faad** | M4A, M4B, ALAC, AAC-in-MP4 — decodes audio from MP4 containers       |
-| **lame** | Used together with faad — encodes the decoded stream to MP3           |
+| Tool     | When needed                                                               |
+| -------- | ------------------------------------------------------------------------- |
+| **faad** | M4A, M4B, ALAC, AAC-in-MP4 — decodes audio from MP4 containers            |
+| **lame** | Used together with faad — encodes the decoded stream to MP3               |
 | **flac** | FLAC → PCM conversion (devices requesting raw PCM), server-side crossfade |
-| **sox**  | Opus support, OGG → PCM fallback, server-side crossfade              |
+| **sox**  | Opus support, OGG → PCM fallback, server-side crossfade                   |
 
 > **Example:** MP4-container formats (M4A, M4B, ALAC) always need transcoding
 > because no Squeezebox hardware or Squeezelite can reliably stream MP4 over HTTP.
@@ -327,12 +326,12 @@ Make sure the backend is running first.
 
 The frontend communicates with Resonance via:
 
-| Protocol | Endpoint                        | Purpose                                              |
-| -------- | ------------------------------- | ---------------------------------------------------- |
-| JSON-RPC | `/jsonrpc.js`                   | LMS-compatible API (player control, library queries) |
-| REST     | `/api/*`                        | Modern endpoints (folders, scan, artwork, plugins)   |
-| Cometd   | `/cometd`                       | Real-time updates (currently uses polling)           |
-| SSE      | `/api/plugins/{id}/events`      | Server-Sent Events for plugin UI live updates        |
+| Protocol | Endpoint                   | Purpose                                              |
+| -------- | -------------------------- | ---------------------------------------------------- |
+| JSON-RPC | `/jsonrpc.js`              | LMS-compatible API (player control, library queries) |
+| REST     | `/api/*`                   | Modern endpoints (folders, scan, artwork, plugins)   |
+| Cometd   | `/cometd`                  | Real-time updates (currently uses polling)           |
+| SSE      | `/api/plugins/{id}/events` | Server-Sent Events for plugin UI live updates        |
 
 ### Project Structure
 
@@ -472,10 +471,9 @@ resonance-server/
 ├── docs/                         # Documentation
 │   ├── ARCHITECTURE.md           #   System architecture
 │   ├── CHANGELOG.md              #   Change log
-│   ├── HARDWARE_TESTING.md       #   Bitmap display hardware test runbook
+
 │   ├── PLUGINS.md                #   Plugin system overview
 │   ├── PLUGIN_API.md             #   Plugin API reference (incl. SDUI §19)
-│   ├── PLUGIN_REPOSITORY.md      #   Community plugin publishing guide
 │   └── PLUGIN_TUTORIAL.md        #   Plugin tutorial (step by step)
 ├── pyproject.toml                # Python project config
 └── LICENSE                       # GPL-2.0
@@ -508,9 +506,9 @@ Some tests require optional dependencies (Pillow, external audio tools like
 `flac`, `lame`, `sox`). These tests are tagged with **pytest markers** and will
 be **auto-skipped** when the dependency is missing — no failures, just skips.
 
-| Marker | Requires | Install |
-|---|---|---|
-| `@pytest.mark.requires_pil` | Pillow (PIL) | `pip install -e ".[blurhash]"` |
+| Marker                        | Requires                      | Install                                              |
+| ----------------------------- | ----------------------------- | ---------------------------------------------------- |
+| `@pytest.mark.requires_pil`   | Pillow (PIL)                  | `pip install -e ".[blurhash]"`                       |
 | `@pytest.mark.requires_tools` | `flac`, `lame`, `sox` on PATH | See [Transcoding Tools](#transcoding-tools-optional) |
 
 ```bash

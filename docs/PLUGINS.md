@@ -8,7 +8,7 @@ via radio-browser.info and Podcasts.
 For the developer perspective (API, code examples, tutorial):
 → [`PLUGIN_API.md`](PLUGIN_API.md)
 → [`PLUGIN_TUTORIAL.md`](PLUGIN_TUTORIAL.md)
-→ [`PLUGIN_REPOSITORY.md`](PLUGIN_REPOSITORY.md)
+→ [Community Plugins Repository](https://github.com/endegelaende/resonance-community-plugins)
 
 ---
 
@@ -55,12 +55,12 @@ write some code — done. The plugin is active on the next server start.
 
 ## 2) Why a Plugin System?
 
-| Problem | Solution via Plugins |
-|---|---|
-| Everyone wants different features (Internet Radio, Podcasts, Spotify, …) | Everyone builds only the plugin they need |
-| New features require changes to the server core | Plugins run alongside the core without modifying it |
-| A bug in one feature can bring down the entire server | Plugins are **fault-isolated** — a crash in Plugin A does not affect Plugin B |
-| Hard to test when everything is intertwined | Plugins have their own tests, data directories, and lifecycle |
+| Problem                                                                  | Solution via Plugins                                                          |
+| ------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| Everyone wants different features (Internet Radio, Podcasts, Spotify, …) | Everyone builds only the plugin they need                                     |
+| New features require changes to the server core                          | Plugins run alongside the core without modifying it                           |
+| A bug in one feature can bring down the entire server                    | Plugins are **fault-isolated** — a crash in Plugin A does not affect Plugin B |
+| Hard to test when everything is intertwined                              | Plugins have their own tests, data directories, and lifecycle                 |
 
 ### LMS Background
 
@@ -81,7 +81,7 @@ New commands that clients (Material Skin, iPeng, Squeezer, …) can call
 via the JSON-RPC interface — just like built-in commands
 (`play`, `pause`, `status`, …).
 
-> *Example:* The Favorites plugin registers `favorites` and `jivefavorites`.
+> _Example:_ The Favorites plugin registers `favorites` and `jivefavorites`.
 > A client can send `["favorites", "items", 0, 100]` and receives
 > the favorites list in return.
 
@@ -91,7 +91,7 @@ Entries in the touchscreen menu of Squeezebox Touch, Radio, Boom, and Controller
 Plugins define where the entry appears (e.g. in the home menu) and what
 happens when it is tapped.
 
-> *Example:* The Favorites plugin shows "Favorites" in the home menu.
+> _Example:_ The Favorites plugin shows "Favorites" in the home menu.
 > Tapping it navigates the device into the favorites list.
 
 ### 3.3) HTTP Routes (REST API)
@@ -105,7 +105,7 @@ React to server events (e.g. "player connected", "track started",
 "library scan completed"). Subscriptions are automatically cleaned up
 when the plugin is stopped.
 
-> *Example:* A scrobbling plugin could subscribe to `player.track_started`
+> _Example:_ A scrobbling plugin could subscribe to `player.track_started`
 > to report every played track to Last.fm.
 
 ### 3.5) Content Providers
@@ -114,24 +114,24 @@ Supply external audio sources — Internet Radio stations, podcast episodes,
 or streaming service tracks. The server proxies the remote audio stream
 to the player (required because Squeezebox hardware cannot handle HTTPS).
 
-> *Example:* The Radio plugin registers a `ContentProvider` that browses
+> _Example:_ The Radio plugin registers a `ContentProvider` that browses
 > radio-browser.info categories, searches for stations, and resolves station UUIDs
 > to direct stream URLs. The user sees "Radio" in the Jive home menu.
 
 A content provider implements three methods:
 
-| Method | Purpose |
-|---|---|
-| `browse(path)` | Return a hierarchical menu of playable items |
-| `search(query)` | Find items by text query |
-| `get_stream_info(item_id)` | Resolve an item to a concrete stream URL |
+| Method                     | Purpose                                      |
+| -------------------------- | -------------------------------------------- |
+| `browse(path)`             | Return a hierarchical menu of playable items |
+| `search(query)`            | Find items by text query                     |
+| `get_stream_info(item_id)` | Resolve an item to a concrete stream URL     |
 
 ### 3.6) Data Directory
 
 Each plugin gets its own directory under `data/plugins/<name>/`
 where it can store files (configuration, cache, databases, …).
 
-> *Example:* The Favorites plugin stores `favorites.json` in
+> _Example:_ The Favorites plugin stores `favorites.json` in
 > `data/plugins/favorites/`.
 
 ### 3.7) Web UI Pages (Server-Driven UI)
@@ -141,16 +141,16 @@ without writing any JavaScript. The plugin describes its UI declaratively
 in Python using widget classes (`Heading`, `Table`, `Form`, `Button`, …),
 and the frontend renders it automatically via a generic recursive renderer.
 
-> *Example:* The raopbridge community plugin provides a 5-tab UI page
+> _Example:_ The raopbridge community plugin provides a 5-tab UI page
 > (Status, Devices, Settings, Advanced, About) with device management,
 > inline editing, settings forms, and per-device configuration modals —
 > all defined in Python, zero Svelte code.
 
 A SDUI plugin implements two functions:
 
-| Function | Purpose |
-|---|---|
-| `get_ui(ctx)` | Return a `Page` object describing the current UI state |
+| Function                             | Purpose                                                           |
+| ------------------------------------ | ----------------------------------------------------------------- |
+| `get_ui(ctx)`                        | Return a `Page` object describing the current UI state            |
 | `handle_action(ctx, action, params)` | Process user interactions (button clicks, form submissions, etc.) |
 
 20+ widget types are available: display widgets (headings, tables, badges, cards, markdown),
@@ -206,12 +206,12 @@ For details, see [`PLUGIN_API.md` §19](PLUGIN_API.md#19-server-driven-ui-sdui).
 
 ### Key Properties
 
-| Property | Description |
-|---|---|
-| **Auto-Discovery** | Any folder with a `plugin.toml` is detected — no manual registration needed |
-| **Auto-Cleanup** | Everything registered in `setup()` is automatically removed after `teardown()` |
+| Property            | Description                                                                                                             |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **Auto-Discovery**  | Any folder with a `plugin.toml` is detected — no manual registration needed                                             |
+| **Auto-Cleanup**    | Everything registered in `setup()` is automatically removed after `teardown()`                                          |
 | **Fault Isolation** | If a plugin crashes during startup, its partial registrations are rolled back. Other plugins continue to start normally |
-| **Order Guarantee** | Plugins are started in alphabetical order and stopped in reverse order (LIFO) |
+| **Order Guarantee** | Plugins are started in alphabetical order and stopped in reverse order (LIFO)                                           |
 
 ---
 
@@ -219,45 +219,45 @@ For details, see [`PLUGIN_API.md` §19](PLUGIN_API.md#19-server-driven-ui-sdui).
 
 ### 5.1) Example Plugin
 
-| | |
-|---|---|
+|             |                                                           |
+| ----------- | --------------------------------------------------------- |
 | **Purpose** | Template and API demo — showcases all plugin capabilities |
-| **Folder** | `plugins/example/` |
-| **Command** | `example.hello` — returns a greeting |
-| **Menu** | "Example Plugin" in the Jive home menu |
-| **Events** | Counts started tracks, logs server start |
+| **Folder**  | `plugins/example/`                                        |
+| **Command** | `example.hello` — returns a greeting                      |
+| **Menu**    | "Example Plugin" in the Jive home menu                    |
+| **Events**  | Counts started tracks, logs server start                  |
 
 The Example plugin is intentionally simple. It serves as a copy-paste
 template for your own plugins.
 
 ### 5.2) Favorites Plugin
 
-| | |
-|---|---|
-| **Purpose** | Favorites management — LMS-compatible |
-| **Folder** | `plugins/favorites/` |
+|              |                                                                            |
+| ------------ | -------------------------------------------------------------------------- |
+| **Purpose**  | Favorites management — LMS-compatible                                      |
+| **Folder**   | `plugins/favorites/`                                                       |
 | **Commands** | `favorites` (items, add, addlevel, delete, rename, move, exists, playlist) |
-| | `jivefavorites` (add/delete confirmation, preset buttons) |
-| **Menu** | "Favorites" in the Jive home menu (weight 55, matching LMS) |
-| **Storage** | `data/plugins/favorites/favorites.json` |
-| **Features** | Hierarchical folders, URL deduplication, search filter, pagination |
-| **Tests** | 152 tests |
+|              | `jivefavorites` (add/delete confirmation, preset buttons)                  |
+| **Menu**     | "Favorites" in the Jive home menu (weight 55, matching LMS)                |
+| **Storage**  | `data/plugins/favorites/favorites.json`                                    |
+| **Features** | Hierarchical folders, URL deduplication, search filter, pagination         |
+| **Tests**    | 152 tests                                                                  |
 
 The Favorites plugin is a **reference implementation** — a complete,
 production-ready plugin that serves as a model for complex plugins.
 
 ### 5.3) Radio Plugin (radio-browser.info)
 
-| | |
-|---|---|
-| **Purpose** | Internet Radio — browse, search, and stream live radio via radio-browser.info |
-| **Folder** | `plugins/radio/` |
-| **Commands** | `radio` (items, search, play) |
-| **Menu** | "Radio" in the Jive home menu (weight 45 — between My Music and Favorites) |
-| **Content Provider** | Registered as `"radio"` — first ContentProvider plugin |
-| **Features** | radio-browser.info API (~40,000+ stations), browse by country/genre/language, full-text search, pre-resolved stream URLs, play/add/insert, add-to-favorites context menu. Free community API, no API key required. |
-| **Caching** | 10-minute TTL browse cache (256 entries) |
-| **Tests** | 114 tests |
+|                      |                                                                                                                                                                                                                    |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Purpose**          | Internet Radio — browse, search, and stream live radio via radio-browser.info                                                                                                                                      |
+| **Folder**           | `plugins/radio/`                                                                                                                                                                                                   |
+| **Commands**         | `radio` (items, search, play)                                                                                                                                                                                      |
+| **Menu**             | "Radio" in the Jive home menu (weight 45 — between My Music and Favorites)                                                                                                                                         |
+| **Content Provider** | Registered as `"radio"` — first ContentProvider plugin                                                                                                                                                             |
+| **Features**         | radio-browser.info API (~40,000+ stations), browse by country/genre/language, full-text search, pre-resolved stream URLs, play/add/insert, add-to-favorites context menu. Free community API, no API key required. |
+| **Caching**          | 10-minute TTL browse cache (256 entries)                                                                                                                                                                           |
+| **Tests**            | 114 tests                                                                                                                                                                                                          |
 
 The Radio plugin is the **first ContentProvider plugin** — it demonstrates
 the full content-provider lifecycle: browsing a remote API, resolving
@@ -265,31 +265,31 @@ stream URLs, and starting playback through the server's URL proxy.
 
 ### 5.4) Now Playing Tutorial Plugin
 
-| | |
-|---|---|
-| **Purpose** | Companion code for the Plugin Tutorial |
-| **Folder** | `plugins/nowplaying/` |
-| **Commands** | `nowplaying.stats`, `nowplaying.recent` |
-| **Menu** | "Now Playing Stats" in the Jive home menu |
-| **Features** | Play history store, event subscription |
-| **Tests** | 58 tests |
+|              |                                           |
+| ------------ | ----------------------------------------- |
+| **Purpose**  | Companion code for the Plugin Tutorial    |
+| **Folder**   | `plugins/nowplaying/`                     |
+| **Commands** | `nowplaying.stats`, `nowplaying.recent`   |
+| **Menu**     | "Now Playing Stats" in the Jive home menu |
+| **Features** | Play history store, event subscription    |
+| **Tests**    | 58 tests                                  |
 
 The Now Playing plugin is a **tutorial companion** — it walks through
 building a plugin step by step in [`PLUGIN_TUTORIAL.md`](PLUGIN_TUTORIAL.md).
 
 ### 5.5) Podcast Plugin
 
-| | |
-|---|---|
-| **Purpose** | Podcasts — browse, search, subscribe, and stream episodes with resume support |
-| **Folder** | `plugins/podcast/` |
-| **Commands** | `podcast` (items, search, play, addshow, delshow) |
-| **Menu** | "Podcasts" in the Jive home menu (weight 50 — between Radio and Favorites) |
-| **Content Provider** | Registered as `"podcast"` — second ContentProvider plugin |
-| **Features** | RSS 2.0 feed parsing (iTunes namespace), PodcastIndex search API, subscription management (subscribe/unsubscribe), resume position tracking (LMS-compatible threshold logic), recently played episodes (LRU, 50 entries), play/add/insert, add-to-favorites context menu |
-| **Storage** | `data/plugins/podcast/podcasts.json` (subscriptions, resume positions, recently played) |
-| **Caching** | 10-minute TTL feed cache |
-| **Tests** | 178 tests |
+|                      |                                                                                                                                                                                                                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Purpose**          | Podcasts — browse, search, subscribe, and stream episodes with resume support                                                                                                                                                                                            |
+| **Folder**           | `plugins/podcast/`                                                                                                                                                                                                                                                       |
+| **Commands**         | `podcast` (items, search, play, addshow, delshow)                                                                                                                                                                                                                        |
+| **Menu**             | "Podcasts" in the Jive home menu (weight 50 — between Radio and Favorites)                                                                                                                                                                                               |
+| **Content Provider** | Registered as `"podcast"` — second ContentProvider plugin                                                                                                                                                                                                                |
+| **Features**         | RSS 2.0 feed parsing (iTunes namespace), PodcastIndex search API, subscription management (subscribe/unsubscribe), resume position tracking (LMS-compatible threshold logic), recently played episodes (LRU, 50 entries), play/add/insert, add-to-favorites context menu |
+| **Storage**          | `data/plugins/podcast/podcasts.json` (subscriptions, resume positions, recently played)                                                                                                                                                                                  |
+| **Caching**          | 10-minute TTL feed cache                                                                                                                                                                                                                                                 |
+| **Tests**            | 178 tests                                                                                                                                                                                                                                                                |
 
 The Podcast plugin is the **second ContentProvider plugin** — it
 demonstrates RSS feed parsing, subscription persistence, resume
@@ -401,12 +401,12 @@ and the raopbridge community plugin as a reference implementation.
 
 → [`PLUGIN_TUTORIAL.md`](PLUGIN_TUTORIAL.md) — Step-by-step guide
 → [`PLUGIN_API.md`](PLUGIN_API.md) — Complete API reference (including §19 SDUI)
-→ [`PLUGIN_REPOSITORY.md`](PLUGIN_REPOSITORY.md) — How to publish community plugins
+→ [Community Plugins Repository](https://github.com/endegelaende/resonance-community-plugins) — How to publish community plugins
 → `plugins/example/` — Minimal template
 → `plugins/favorites/` — Reference plugin (commands, menus, persistence)
 → `plugins/radio/` — Reference ContentProvider plugin (radio-browser.info, remote streaming)
 → `plugins/podcast/` — Reference ContentProvider plugin (RSS feeds, subscriptions, resume)
-→ `community-repo/plugins/raopbridge/` — Reference SDUI plugin (AirPlay bridge with full UI)
+→ [`raopbridge`](https://github.com/endegelaende/resonance-community-plugins/tree/main/plugins/raopbridge) — Reference SDUI plugin (AirPlay bridge with full UI)
 
 ---
 
@@ -434,8 +434,8 @@ The plugin system now supports full lifecycle operations without editing code.
 - Uninstall community plugins: `POST /api/plugins/{name}/uninstall`.
 
 For implementation details and manifest schema, see [`PLUGIN_API.md`](PLUGIN_API.md)
-and [`PLUGIN_REPOSITORY.md`](PLUGIN_REPOSITORY.md).
+and the [Community Plugins Repository](https://github.com/endegelaende/resonance-community-plugins).
 
 ---
 
-*Last updated: June 2025 (SDUI Phase 1–3 complete, raopbridge community plugin added)*
+_Last updated: March 2026_

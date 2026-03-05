@@ -13,22 +13,38 @@ Step-by-step tutorial: → [`PLUGIN_TUTORIAL.md`](PLUGIN_TUTORIAL.md)
 1. [Quick Start](#1-quick-start)
 2. [Manifest (`plugin.toml`)](#2-manifest-plugintoml)
 3. [Entry Point (`__init__.py`)](#3-entry-point-initpy)
-4. [PluginContext — Complete API](#4-plugincontext--complete-api)
-5. [JSON-RPC Commands](#5-json-rpc-commands)
-6. [Jive Menu System](#6-jive-menu-system)
-7. [Event System](#7-event-system)
-8. [HTTP Routes (FastAPI)](#8-http-routes-fastapi)
-9. [Data Persistence](#9-data-persistence)
-10. [Server Access (Read-Only)](#10-server-access-read-only)
-11. [Testing](#11-testing)
-12. [Best Practices](#12-best-practices)
-13. [Debugging & Logging](#13-debugging--logging)
-14. [Error Handling & Isolation](#14-error-handling--isolation)
-15. [Known Limitations](#15-known-limitations)
-16. [Content Providers](#16-content-providers)
-17. [Reference Plugins](#17-reference-plugins)
-18. [Plugin Settings & Management API](#18-plugin-settings--management-api)
+4. [Plugin Lifecycle](#4-plugin-lifecycle)
+5. [PluginContext — Complete API](#5-plugincontext--complete-api)
+6. [JSON-RPC Commands](#6-json-rpc-commands)
+7. [Jive Menu System](#7-jive-menu-system)
+8. [Event System](#8-event-system)
+9. [HTTP Routes (FastAPI)](#9-http-routes-fastapi)
+10. [Data Persistence](#10-data-persistence)
+11. [Server Access (Read-Only)](#11-server-access-read-only)
+12. [Testing](#12-testing)
+13. [Best Practices](#13-best-practices)
+14. [Debugging & Logging](#14-debugging--logging)
+15. [Error Handling & Isolation](#15-error-handling--isolation)
+16. [Known Limitations](#16-known-limitations)
+17. [Content Providers](#17-content-providers)
+18. [Reference Plugins](#18-reference-plugins)
 19. [Server-Driven UI (SDUI)](#19-server-driven-ui-sdui)
+    - [Overview](#overview)
+    - [Quick Start](#quick-start)
+    - [Widget Reference](#widget-reference)
+    - [Wire Format Specification](#wire-format-specification)
+    - [Colors, Styles & Constants](#colors-styles--constants)
+    - [Layout & Composition](#layout--composition)
+    - [Form System](#form-system)
+    - [Conditional Rendering (`visible_when`)](#conditional-rendering-visible_when)
+    - [Modal Dialogs](#modal-dialogs)
+    - [Action Handler Protocol](#action-handler-protocol)
+    - [REST Endpoints & SSE](#rest-endpoints--sse)
+    - [Error Responses](#error-responses)
+    - [Schema Versioning](#schema-versioning)
+    - [Security Model](#security-model)
+    - [Reference Implementation](#reference-implementation)
+20. [Plugin Settings & Management API](#20-plugin-settings--management-api)
 
 ---
 
@@ -73,7 +89,7 @@ async def cmd_hello(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
 Start the server — the plugin is active. Test it:
 
 ```json
-{"method": "slim.request", "params": ["-", ["myplugin.hello"]]}
+{ "method": "slim.request", "params": ["-", ["myplugin.hello"]] }
 ```
 
 → `{"result": {"message": "Hello from myplugin!"}}`
@@ -87,26 +103,26 @@ reads the `[plugin]` table and creates a `PluginManifest` object.
 
 ### Fields
 
-| Field | Required | Type | Description |
-|---|---|---|---|
-| `name` | ✅ | string | Unique identifier. Must match the directory name. Only `[a-z0-9_-]`. |
-| `version` | ✅ | string | Semver version, e.g. `"1.0.0"`. |
-| `description` | ❌ | string | One-line description. |
-| `author` | ❌ | string | Author or maintainer. |
-| `min_resonance_version` | ❌ | string | Minimum server version (informational, not enforced). |
-| `category` | ❌ | string | Optional category for UIs/repository (`radio`, `podcast`, `tools`, ...). |
-| `icon` | ❌ | string | Optional icon key/URL hint for UIs. |
+| Field                   | Required | Type   | Description                                                              |
+| ----------------------- | -------- | ------ | ------------------------------------------------------------------------ |
+| `name`                  | ✅       | string | Unique identifier. Must match the directory name. Only `[a-z0-9_-]`.     |
+| `version`               | ✅       | string | Semver version, e.g. `"1.0.0"`.                                          |
+| `description`           | ❌       | string | One-line description.                                                    |
+| `author`                | ❌       | string | Author or maintainer.                                                    |
+| `min_resonance_version` | ❌       | string | Minimum server version (informational, not enforced).                    |
+| `category`              | ❌       | string | Optional category for UIs/repository (`radio`, `podcast`, `tools`, ...). |
+| `icon`                  | ❌       | string | Optional icon key/URL hint for UIs.                                      |
 
 ### UI Page (`[ui]`)
 
 If your plugin wants to expose a page in the web UI sidebar, add a `[ui]`
 section to your manifest. See [§19 Server-Driven UI](#19-server-driven-ui-sdui) for the full guide.
 
-| Field | Required | Type | Description |
-|---|---|---|---|
-| `enabled` | ✅ | bool | Set `true` to enable the plugin UI page. |
-| `sidebar_label` | ❌ | string | Label shown in the sidebar (defaults to plugin name). |
-| `sidebar_icon` | ❌ | string | Lucide icon name for the sidebar entry (e.g. `"cast"`, `"radio"`, `"radar"`). Falls back to the plugin's `icon` field, then `"plug"`. |
+| Field           | Required | Type   | Description                                                                                                                           |
+| --------------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`       | ✅       | bool   | Set `true` to enable the plugin UI page.                                                                                              |
+| `sidebar_label` | ❌       | string | Label shown in the sidebar (defaults to plugin name).                                                                                 |
+| `sidebar_icon`  | ❌       | string | Lucide icon name for the sidebar entry (e.g. `"cast"`, `"radio"`, `"radar"`). Falls back to the plugin's `icon` field, then `"plug"`. |
 
 ```toml
 [ui]
@@ -121,6 +137,7 @@ Plugins can declare settings directly in `plugin.toml`. Each setting is a
 table under `[settings.<key>]` and is parsed into `SettingDefinition`.
 
 Supported setting types:
+
 - `string`
 - `int`
 - `float`
@@ -129,20 +146,20 @@ Supported setting types:
 
 Common setting fields:
 
-| Field | Type | Default | Meaning |
-|---|---|---|---|
-| `type` | string | `"string"` | Value type |
-| `label` | string | key | Display label |
-| `description` | string | `""` | Help text |
-| `default` | type-dependent | varies | Default value |
-| `required` | bool | `false` | Reject empty value |
-| `secret` | bool | `false` | Mask value in external responses |
-| `restart_required` | bool | `false` | Marks update as restart-relevant |
-| `order` | int | `0` | UI sort order |
-| `min` / `max` | number | `null` | Numeric range |
-| `min_length` / `max_length` | int | `null` | String length bounds |
-| `pattern` | string | `null` | Regex for strings |
-| `options` | list[string] | `[]` | Allowed values for `select` |
+| Field                       | Type           | Default    | Meaning                          |
+| --------------------------- | -------------- | ---------- | -------------------------------- |
+| `type`                      | string         | `"string"` | Value type                       |
+| `label`                     | string         | key        | Display label                    |
+| `description`               | string         | `""`       | Help text                        |
+| `default`                   | type-dependent | varies     | Default value                    |
+| `required`                  | bool           | `false`    | Reject empty value               |
+| `secret`                    | bool           | `false`    | Mask value in external responses |
+| `restart_required`          | bool           | `false`    | Marks update as restart-relevant |
+| `order`                     | int            | `0`        | UI sort order                    |
+| `min` / `max`               | number         | `null`     | Numeric range                    |
+| `min_length` / `max_length` | int            | `null`     | String length bounds             |
+| `pattern`                   | string         | `null`     | Regex for strings                |
+| `options`                   | list[string]   | `[]`       | Allowed values for `select`      |
 
 ### Full Example
 
@@ -298,7 +315,92 @@ plugins/myplugin/
 
 ---
 
-## 4) PluginContext — Complete API
+## 4) Plugin Lifecycle
+
+### Startup Sequence
+
+```
+Server starts
+│
+├─► Core initialization (DB, Library, PlayerRegistry, EventBus)
+│
+├─► PluginManager.discover()
+│     For each plugins/<name>/plugin.toml:
+│       ├─► Parse manifest → PluginManifest
+│       ├─► Check plugin_states.json → enabled?
+│       └─► Log: "Discovered plugin: <name> v<version>"
+│
+├─► PluginManager.start_all()
+│     For each discovered & enabled plugin (alphabetical):
+│       ├─► Create PluginContext(manifest, server_refs)
+│       ├─► Load module (importlib)
+│       ├─► Call setup(ctx)
+│       │     ├─► Plugin registers commands, menus, events, routes
+│       │     ├─► Plugin loads data, starts background tasks
+│       │     └─► ✅ Success → mark as started
+│       │         ❌ Exception → rollback all registrations, log error, skip
+│       └─► Log: "Started plugin: <name> — PluginContext(...)"
+│
+└─► Server ready (HTTP on :9000, Slimproto on :3483)
+```
+
+### Shutdown Sequence
+
+```
+Server shutdown signal (Ctrl+C, SIGTERM)
+│
+├─► PluginManager.stop_all()
+│     For each started plugin (REVERSE order — LIFO):
+│       ├─► Call teardown(ctx) if defined
+│       │     └─► Plugin saves state, releases resources
+│       ├─► ctx._cleanup()
+│       │     ├─► Unregister all commands
+│       │     ├─► Unregister all menu nodes/items
+│       │     ├─► Unsubscribe all event handlers
+│       │     ├─► Unregister content providers
+│       │     └─► Clear UI handlers
+│       └─► Log: "Stopped plugin: <name>"
+│
+├─► Core shutdown (close DB, disconnect players)
+│
+└─► Process exit
+```
+
+### State Transitions
+
+```
+  ┌────────────┐    discover()    ┌────────────┐
+  │            │ ───────────────► │            │
+  │  Unknown   │                  │ Discovered │
+  │            │                  │ (enabled)  │
+  └────────────┘                  └─────┬──────┘
+                                        │
+                                   setup(ctx)
+                                        │
+                              ┌─────────┴─────────┐
+                              │                    │
+                        ✅ Success            ❌ Exception
+                              │                    │
+                    ┌─────────▼──────┐    ┌────────▼───────┐
+                    │                │    │                 │
+                    │    Started     │    │ Failed (logged, │
+                    │   (running)    │    │  skipped)       │
+                    │                │    │                 │
+                    └─────────┬──────┘    └─────────────────┘
+                              │
+                         teardown(ctx)
+                         + _cleanup()
+                              │
+                    ┌─────────▼──────┐
+                    │                │
+                    │    Stopped     │
+                    │                │
+                    └────────────────┘
+```
+
+---
+
+## 5) PluginContext — Complete API
 
 The `PluginContext` is created per plugin by the `PluginManager` and
 passed to `setup()` / `teardown()`. It is the **only** gateway to
@@ -306,47 +408,51 @@ server functionality.
 
 ### Identity
 
-| Attribute | Type | Description |
-|---|---|---|
-| `plugin_id` | `str` | Name from manifest (e.g. `"favorites"`) |
-| `data_dir` | `Path` | `data/plugins/<plugin_id>/` |
+| Attribute     | Type             | Description                                       |
+| ------------- | ---------------- | ------------------------------------------------- |
+| `plugin_id`   | `str`            | Name from manifest (e.g. `"favorites"`)           |
+| `data_dir`    | `Path`           | `data/plugins/<plugin_id>/`                       |
+| `server_info` | `dict[str, Any]` | Server networking info (`{"host": …, "port": …}`) |
 
 ### Server Access (read-only)
 
-| Attribute | Type | Description |
-|---|---|---|
-| `event_bus` | `EventBus` | Pub/sub event system |
-| `music_library` | `MusicLibrary` | Query the music library |
-| `player_registry` | `PlayerRegistry` | Connected players |
-| `playlist_manager` | `PlaylistManager \| None` | Playlist access |
+| Attribute          | Type                      | Description             |
+| ------------------ | ------------------------- | ----------------------- |
+| `event_bus`        | `EventBus`                | Pub/sub event system    |
+| `music_library`    | `MusicLibrary`            | Query the music library |
+| `player_registry`  | `PlayerRegistry`          | Connected players       |
+| `playlist_manager` | `PlaylistManager \| None` | Playlist access         |
 
 ### Registration Methods
 
-| Method | Signature | Description |
-|---|---|---|
-| `register_command` | `(name: str, handler: CommandHandler) -> None` | JSON-RPC command |
-| `unregister_command` | `(name: str) -> None` | Remove a command |
-| `register_menu_node` | `(node_id, parent, text, weight, **kwargs) -> None` | Jive menu node |
-| `register_menu_item` | `(node_id: str, item: dict) -> None` | Jive menu entry |
-| `register_route` | `(router: APIRouter) -> None` | FastAPI router |
-| `register_content_provider` | `(provider_id: str, provider: ContentProvider) -> None` | External audio source (Radio, Podcast, …) |
-| `unregister_content_provider` | `(provider_id: str) -> None` | Remove a content provider |
-| `subscribe` | `async (event_type: str, handler) -> None` | Event with auto-cleanup |
-| `register_ui_handler` | `(handler: Callable) -> None` | SDUI page builder ([§19](#19-server-driven-ui-sdui)) |
-| `register_action_handler` | `(handler: Callable) -> None` | SDUI action dispatcher ([§19](#19-server-driven-ui-sdui)) |
+| Method                        | Signature                                               | Description                                               |
+| ----------------------------- | ------------------------------------------------------- | --------------------------------------------------------- |
+| `register_command`            | `(name: str, handler: CommandHandler) -> None`          | JSON-RPC command                                          |
+| `unregister_command`          | `(name: str) -> None`                                   | Remove a command                                          |
+| `register_menu_node`          | `(node_id, parent, text, weight, **kwargs) -> None`     | Jive menu node                                            |
+| `register_menu_item`          | `(node_id: str, item: dict) -> None`                    | Jive menu entry                                           |
+| `register_route`              | `(router: APIRouter) -> None`                           | FastAPI router                                            |
+| `register_content_provider`   | `(provider_id: str, provider: ContentProvider) -> None` | External audio source (Radio, Podcast, …)                 |
+| `unregister_content_provider` | `(provider_id: str) -> None`                            | Remove a content provider                                 |
+| `subscribe`                   | `async (event_type: str, handler) -> None`              | Event with auto-cleanup                                   |
+| `register_ui_handler`         | `(handler: Callable) -> None`                           | SDUI page builder ([§19](#19-server-driven-ui-sdui))      |
+| `register_action_handler`     | `(handler: Callable) -> None`                           | SDUI action dispatcher ([§19](#19-server-driven-ui-sdui)) |
 
 ### Utility Functions
 
-| Method | Signature | Description |
-|---|---|---|
-| `ensure_data_dir` | `() -> Path` | Create/return data directory |
-| `get_setting` | `(key: str) -> Any` | Read one setting (falls back to default) |
-| `set_setting` | `(key: str, value: Any) -> None` | Validate and persist one setting |
-| `set_settings` | `(values: dict[str, Any]) -> list[str]` | Validate and persist multiple settings atomically |
-| `get_all_settings` | `() -> dict[str, Any]` | All settings with defaults |
-| `get_all_settings_masked` | `() -> dict[str, Any]` | Same values, but secrets masked |
-| `get_settings_definitions` | `() -> list[dict[str, Any]]` | Serialized setting definitions for APIs |
-| `has_settings` | `@property -> bool` | Whether the plugin declared settings |
+| Method                     | Signature                               | Description                                        |
+| -------------------------- | --------------------------------------- | -------------------------------------------------- |
+| `ensure_data_dir`          | `() -> Path`                            | Create/return data directory                       |
+| `get_setting`              | `(key: str) -> Any`                     | Read one setting (falls back to default)           |
+| `set_setting`              | `(key: str, value: Any) -> None`        | Validate and persist one setting                   |
+| `set_settings`             | `(values: dict[str, Any]) -> list[str]` | Validate and persist multiple settings atomically  |
+| `get_all_settings`         | `() -> dict[str, Any]`                  | All settings with defaults                         |
+| `get_all_settings_masked`  | `() -> dict[str, Any]`                  | Same values, but secrets masked                    |
+| `get_settings_definitions` | `() -> list[dict[str, Any]]`            | Serialized setting definitions for APIs            |
+| `has_settings`             | `@property -> bool`                     | Whether the plugin declared settings               |
+| `notify_ui_update`         | `() -> None`                            | Push SSE refresh to all connected UI clients (§19) |
+| `ui_revision`              | `@property -> int`                      | Current UI revision counter (monotonic)            |
+| `wait_for_ui_update`       | `async (last_revision, timeout) -> int` | Block until revision changes or timeout            |
 
 ### Cleanup Guarantee
 
@@ -358,14 +464,14 @@ after `teardown()`:
 - Events → `event_bus.unsubscribe()` for each subscribed handler
 - Content providers → `unregister_content_provider()` for each registered provider
 - UI handlers → `_ui_handler` and `_action_handler` are set to `None`
-- Routes → *Note: FastAPI routes cannot currently be cleanly removed (framework limitation)*
+- Routes → _Note: FastAPI routes cannot currently be cleanly removed (framework limitation)_
 
 **Manual cleanup in `teardown()` is not needed** — only for your own
-resources (open files, network connections, etc.).
+resources (open files, network connections, subprocesses, etc.).
 
 ---
 
-## 5) JSON-RPC Commands
+## 6) JSON-RPC Commands
 
 ### Handler Signature
 
@@ -377,11 +483,11 @@ async def my_handler(
     ...
 ```
 
-| Parameter | Type | Description |
-|---|---|---|
-| `ctx` | `CommandContext` | Server context (player ID, library, registry, …) |
-| `command` | `list[Any]` | Raw command array, e.g. `["myplugin", "action", "key:value"]` |
-| **Return** | `dict[str, Any]` | Result dict, sent as `result` in the JSON-RPC response |
+| Parameter  | Type             | Description                                                   |
+| ---------- | ---------------- | ------------------------------------------------------------- |
+| `ctx`      | `CommandContext` | Server context (player ID, library, registry, …)              |
+| `command`  | `list[Any]`      | Raw command array, e.g. `["myplugin", "action", "key:value"]` |
+| **Return** | `dict[str, Any]` | Result dict, sent as `result` in the JSON-RPC response        |
 
 ### CommandContext — Available Fields
 
@@ -410,6 +516,7 @@ ctx.register_command("myplugin.hello", cmd_hello)
 ```
 
 **Rules:**
+
 - The command name must be **unique**.
 - Built-in commands (`play`, `pause`, `status`, …) **cannot** be overridden.
 - `register_command()` raises `RuntimeError` on duplicates.
@@ -500,19 +607,19 @@ Uncaught exceptions are caught by the JsonRpcHandler and logged as internal erro
 
 ---
 
-## 6) Jive Menu System
+## 7) Jive Menu System
 
 Squeezebox Touch/Radio/Boom/Controller use a tree-based menu system.
 Plugins can attach nodes and entries to this tree.
 
 ### Concepts
 
-| Concept | Description |
-|---|---|
-| **Node** | Menu folder, contains children. Has `isANode: 1`. |
-| **Item** | Menu entry with actions (go, play, add, do). |
-| **Weight** | Sort weight — lower = higher in the list. |
-| **Parent** | ID of the parent node. `"home"` = home menu. |
+| Concept     | Description                                                        |
+| ----------- | ------------------------------------------------------------------ |
+| **Node**    | Menu folder, contains children. Has `isANode: 1`.                  |
+| **Item**    | Menu entry with actions (go, play, add, do).                       |
+| **Weight**  | Sort weight — lower = higher in the list.                          |
+| **Parent**  | ID of the parent node. `"home"` = home menu.                       |
 | **Actions** | Dict with `go`/`play`/`add`/`do`/`more` — determines what happens. |
 
 ### Registering Menu Nodes
@@ -560,14 +667,14 @@ ctx.register_menu_item("myPlugin", {
 
 ### Standard Jive Weights (LMS Reference)
 
-| Weight | Entry |
-|---|---|
-| 11 | My Music |
-| 35 | Audio Settings |
-| 55 | Favorites |
-| 100 | Player Power |
-| 1000 | Example Plugin |
-| 1005 | Settings |
+| Weight | Entry          |
+| ------ | -------------- |
+| 11     | My Music       |
+| 35     | Audio Settings |
+| 55     | Favorites      |
+| 100    | Player Power   |
+| 1000   | Example Plugin |
+| 1005   | Settings       |
 
 ### Action Types
 
@@ -654,7 +761,7 @@ return {
 
 ---
 
-## 7) Event System
+## 8) Event System
 
 ### Subscription
 
@@ -684,18 +791,19 @@ but **do not** break event processing for other handlers.
 
 ### Available Event Types
 
-| Event String | Class | Fields | When |
-|---|---|---|---|
-| `server.started` | `ServerStartedEvent` | — | Server fully initialized |
-| `server.stopping` | `ServerStoppingEvent` | — | Shutdown begins |
-| `player.connected` | `PlayerConnectedEvent` | `player_id`, `name`, `model` | Player connects |
-| `player.disconnected` | `PlayerDisconnectedEvent` | `player_id` | Player disconnects |
-| `player.status` | `PlayerStatusEvent` | `player_id`, `state`, `volume`, `muted`, `elapsed_*`, `duration`, … | Status change |
-| `player.track_started` | `PlayerTrackStartedEvent` | `player_id`, `stream_generation` | Track playback started (STMs) |
-| `player.track_finished` | `PlayerTrackFinishedEvent` | `player_id`, `stream_generation` | Track playback finished |
-| `player.decode_ready` | `PlayerDecodeReadyEvent` | `player_id`, `stream_generation` | Decoder ready for next track (STMd) |
-| `player.playlist` | `PlayerPlaylistEvent` | `player_id`, `action`, `index`, `count` | Playlist changed |
-| `library.scan` | `LibraryScanEvent` | `status`, `scanned`, `total`, `current_path`, `error` | Library scan |
+| Event String                 | Class                      | Fields                                                                  | When                                 |
+| ---------------------------- | -------------------------- | ----------------------------------------------------------------------- | ------------------------------------ |
+| `server.started`             | `ServerStartedEvent`       | —                                                                       | Server fully initialized             |
+| `server.stopping`            | `ServerStoppingEvent`      | —                                                                       | Shutdown begins                      |
+| `player.connected`           | `PlayerConnectedEvent`     | `player_id`, `name`, `model`                                            | Player connects                      |
+| `player.disconnected`        | `PlayerDisconnectedEvent`  | `player_id`                                                             | Player disconnects                   |
+| `player.status`              | `PlayerStatusEvent`        | `player_id`, `state`, `volume`, `muted`, `elapsed_*`, `duration`, …     | Status change                        |
+| `player.track_started`       | `PlayerTrackStartedEvent`  | `player_id`, `stream_generation`                                        | Track playback started (STMs)        |
+| `player.track_finished`      | `PlayerTrackFinishedEvent` | `player_id`, `stream_generation`                                        | Track playback finished              |
+| `player.decode_ready`        | `PlayerDecodeReadyEvent`   | `player_id`, `stream_generation`                                        | Decoder ready for next track (STMd)  |
+| `player.live_stream_dropped` | `LiveStreamDroppedEvent`   | `player_id`, `stream_generation`, `remote_url`, `content_type`, `title` | Live/radio stream ended unexpectedly |
+| `player.playlist`            | `PlayerPlaylistEvent`      | `player_id`, `action`, `index`, `count`                                 | Playlist changed                     |
+| `library.scan`               | `LibraryScanEvent`         | `status`, `scanned`, `total`, `current_path`, `error`                   | Library scan                         |
 
 ### Wildcard Subscriptions
 
@@ -725,7 +833,7 @@ Other plugins (or your own) can then subscribe to
 
 ---
 
-## 8) HTTP Routes (FastAPI)
+## 9) HTTP Routes (FastAPI)
 
 Plugins can register custom REST endpoints:
 
@@ -755,7 +863,7 @@ a problem since plugins are rarely loaded/unloaded at runtime.
 
 ---
 
-## 9) Data Persistence
+## 10) Data Persistence
 
 ### Data Directory
 
@@ -809,50 +917,136 @@ reference implementation with:
 
 ---
 
-## 10) Server Access (Read-Only)
+## 11) Server Access (Read-Only)
+
+Plugins access the server through the `PluginContext` attributes listed
+in [§5](#5-plugincontext--complete-api). This section documents the
+available methods on each server object.
 
 ### MusicLibrary
 
+`ctx.music_library` — query the indexed music database.
+
+| Method              | Signature                                                             | Returns              | Description                                |
+| ------------------- | --------------------------------------------------------------------- | -------------------- | ------------------------------------------ |
+| `get_artists`       | `async (*, offset=0, limit=100) -> tuple[Artist, ...]`                | Tuple of `Artist`    | List artists with stable IDs (paginated)   |
+| `get_albums`        | `async (*, artist_id=None, offset=0, limit=100) -> tuple[Album, ...]` | Tuple of `Album`     | List albums, optionally filtered by artist |
+| `get_tracks`        | `async (*, album_id=None, offset=0, limit=200) -> tuple[Track, ...]`  | Tuple of `Track`     | List tracks, optionally filtered by album  |
+| `get_track_by_id`   | `async (track_id: TrackId) -> Track \| None`                          | `Track` or `None`    | Look up a single track                     |
+| `get_track_by_path` | `async (path: str \| Path) -> Track \| None`                          | `Track` or `None`    | Look up a track by file path               |
+| `get_years`         | `async () -> list[int]`                                               | List of integers     | Unique years in the library                |
+| `search`            | `async (query: str, *, limit=50) -> SearchResult`                     | `SearchResult`       | Full-text search across all tracks         |
+| `get_music_folders` | `async () -> list[str]`                                               | List of path strings | Configured music root directories          |
+| `start_scan`        | `async () -> bool`                                                    | `True` if started    | Trigger background library scan            |
+| `is_scanning`       | `@property -> bool`                                                   | Boolean              | Whether a scan is currently running        |
+| `scan_status`       | `@property -> ScanStatus`                                             | `ScanStatus`         | Detailed scan progress                     |
+
+**Key types:**
+
 ```python
-db = ctx.music_library._db
+@dataclass
+class Track:
+    id: TrackId
+    path: str
+    title: str
+    artist_id: ArtistId | None
+    album_id: AlbumId | None
+    artist_name: str
+    album_title: str
+    year: int | None
+    duration_ms: int
+    disc_no: int | None
+    track_no: int | None
 
-# Search tracks
-tracks = await db.search_tracks("Beethoven", limit=50, offset=0)
+@dataclass
+class Artist:
+    id: ArtistId
+    name: str
 
-# Get album
-album = await db.get_album(album_id=42)
+@dataclass
+class Album:
+    id: AlbumId
+    title: str
 
-# All genres
-genres = await db.list_genres(limit=500, offset=0)
+@dataclass
+class SearchResult:
+    artists: tuple[Artist, ...]
+    albums: tuple[Album, ...]
+    tracks: tuple[Track, ...]
+```
+
+**Example — search for tracks:**
+
+```python
+result = await ctx.music_library.search("Beethoven", limit=50)
+for track in result.tracks:
+    logger.info("%s — %s (%s)", track.artist_name, track.title, track.album_title)
 ```
 
 ### PlayerRegistry
 
-```python
-# All connected players
-players = await ctx.player_registry.get_all()
+`ctx.player_registry` — access connected Squeezebox players.
 
-# Player by MAC
-player = await ctx.player_registry.get_by_mac("aa:bb:cc:dd:ee:ff")
-if player:
-    print(player.name, player.model, player.device_capabilities)
+| Method             | Signature                                      | Returns          | Description                      |
+| ------------------ | ---------------------------------------------- | ---------------- | -------------------------------- |
+| `get_all`          | `async () -> list[PlayerClient]`               | List of players  | All connected players            |
+| `get_by_mac`       | `async (mac: str) -> PlayerClient \| None`     | Player or `None` | Look up by MAC address           |
+| `get_by_ip`        | `async (ip: str) -> PlayerClient \| None`      | Player or `None` | Look up by IP (first match)      |
+| `get_by_name`      | `async (name: str) -> PlayerClient \| None`    | Player or `None` | Look up by display name          |
+| `get_sync_buddies` | `async (player_id: str) -> list[PlayerClient]` | List of players  | Players synced with given player |
+| `get_sync_groups`  | `async () -> list[list[PlayerClient]]`         | List of groups   | All sync groups (master first)   |
+| `__len__`          | `() -> int`                                    | Integer          | Number of connected players      |
+| `__contains__`     | `(mac: str) -> bool`                           | Boolean          | Check if MAC is registered       |
+
+**Key attributes on `PlayerClient`:**
+
+| Attribute             | Type                 | Description                        |
+| --------------------- | -------------------- | ---------------------------------- |
+| `mac_address`         | `str`                | Player MAC (e.g. `"00:04:20:..."`) |
+| `name`                | `str \| None`        | Display name                       |
+| `model`               | `str`                | Model identifier                   |
+| `ip_address`          | `str`                | Player IP                          |
+| `device_capabilities` | `DeviceCapabilities` | Hardware capabilities              |
+
+**Example — list all players:**
+
+```python
+players = await ctx.player_registry.get_all()
+for p in players:
+    logger.info("Player: %s (%s) at %s", p.name, p.model, p.ip_address)
 ```
 
 ### PlaylistManager
 
+`ctx.playlist_manager` — access player playlists.
+
+| Method    | Signature                              | Returns           | Description                   |
+| --------- | -------------------------------------- | ----------------- | ----------------------------- |
+| `get`     | `(player_id: str) -> Playlist`         | `Playlist`        | Get or create player playlist |
+| `remove`  | `(player_id: str) -> Playlist \| None` | Removed or `None` | Remove a player's playlist    |
+| `__len__` | `() -> int`                            | Integer           | Number of active playlists    |
+
+**Key attributes on `Playlist`:**
+
+| Attribute       | Type                    | Description              |
+| --------------- | ----------------------- | ------------------------ |
+| `player_id`     | `str`                   | Owner player MAC         |
+| `current_track` | `PlaylistTrack \| None` | Currently playing track  |
+| `current_index` | `int`                   | Index in the track list  |
+| `__len__`       | `int`                   | Total tracks in playlist |
+
+**⚠️ Caution:** `playlist_manager` can be `None` (e.g. in tests).
+Always check before use:
+
 ```python
 if ctx.playlist_manager:
     playlist = ctx.playlist_manager.get("aa:bb:cc:dd:ee:ff")
-    current_track = playlist.current_track
-    total_tracks = len(playlist)
+    logger.info("Queue has %d tracks", len(playlist))
 ```
-
-**Caution:** `playlist_manager` can be `None` (e.g. in tests).
-Always check!
 
 ---
 
-## 11) Testing
+## 12) Testing
 
 ### Test Setup
 
@@ -972,55 +1166,55 @@ async def test_mutation_publishes_event(self, my_env):
 
 ### Test Conventions
 
-| Convention | Description |
-|---|---|
-| File name | `tests/test_<plugin>_plugin.py` |
-| Classes | `TestClassName` — group by feature/handler |
-| Fixture | `<plugin>_env` — sets up module state, cleans up after test |
+| Convention | Description                                                 |
+| ---------- | ----------------------------------------------------------- |
+| File name  | `tests/test_<plugin>_plugin.py`                             |
+| Classes    | `TestClassName` — group by feature/handler                  |
+| Fixture    | `<plugin>_env` — sets up module state, cleans up after test |
 | Assertions | Always check `"error" not in result` or `"error" in result` |
 
 ---
 
-## 12) Best Practices
+## 13) Best Practices
 
 ### Do
 
-| Rule | Reason |
-|---|---|
-| ✅ Always use `from __future__ import annotations` | Avoids circular imports with type hints |
-| ✅ `TYPE_CHECKING` guard for imports | Faster import, no runtime dependencies |
-| ✅ `ctx.subscribe()` instead of `event_bus.subscribe()` | Auto-cleanup on teardown |
-| ✅ `ensure_data_dir()` before file I/O | Directory is guaranteed to exist |
-| ✅ Atomic write (tmp + rename) | No data loss on crash |
-| ✅ Logging with `logger = logging.getLogger(__name__)` | Logger name = module name → filterable |
-| ✅ Check `playlist_manager` for `None` | Not always available (tests!) |
-| ✅ Parameter parsing for both `str` and `dict` | Cometd sends dicts, CLI sends `key:value` |
-| ✅ Write your own tests (target: 90%+ coverage) | Regression protection |
+| Rule                                                    | Reason                                    |
+| ------------------------------------------------------- | ----------------------------------------- |
+| ✅ Always use `from __future__ import annotations`      | Avoids circular imports with type hints   |
+| ✅ `TYPE_CHECKING` guard for imports                    | Faster import, no runtime dependencies    |
+| ✅ `ctx.subscribe()` instead of `event_bus.subscribe()` | Auto-cleanup on teardown                  |
+| ✅ `ensure_data_dir()` before file I/O                  | Directory is guaranteed to exist          |
+| ✅ Atomic write (tmp + rename)                          | No data loss on crash                     |
+| ✅ Logging with `logger = logging.getLogger(__name__)`  | Logger name = module name → filterable    |
+| ✅ Check `playlist_manager` for `None`                  | Not always available (tests!)             |
+| ✅ Parameter parsing for both `str` and `dict`          | Cometd sends dicts, CLI sends `key:value` |
+| ✅ Write your own tests (target: 90%+ coverage)         | Regression protection                     |
 
 ### Don't
 
-| Anti-Pattern | Problem |
-|---|---|
-| ❌ Override built-in commands | `RuntimeError` — protection is intentional |
-| ❌ Use `event_bus.subscribe()` directly | No auto-cleanup → memory leak |
-| ❌ Synchronous I/O in handlers | Blocks the event loop → server stalls |
-| ❌ Global variables without reset in `teardown()` | State leaks between server restarts |
-| ❌ Not catching exceptions in `teardown()` | Can block cleanup of other plugins |
+| Anti-Pattern                                        | Problem                                           |
+| --------------------------------------------------- | ------------------------------------------------- |
+| ❌ Override built-in commands                       | `RuntimeError` — protection is intentional        |
+| ❌ Use `event_bus.subscribe()` directly             | No auto-cleanup → memory leak                     |
+| ❌ Synchronous I/O in handlers                      | Blocks the event loop → server stalls             |
+| ❌ Global variables without reset in `teardown()`   | State leaks between server restarts               |
+| ❌ Not catching exceptions in `teardown()`          | Can block cleanup of other plugins                |
 | ❌ Directly importing and mutating server internals | Breaks on refactors; only use `PluginContext` API |
 
 ### Naming Conventions
 
-| Element | Convention | Example |
-|---|---|---|
-| Plugin directory | `lowercase`, `[a-z0-9_-]` | `plugins/my_radio/` |
-| Command (plugin-specific) | `<plugin>.<action>` | `"myradio.search"` |
-| Command (LMS-compatible) | Single name | `"favorites"` |
-| Menu node ID | camelCase | `"myRadio"` |
-| Event type | `<namespace>.<event>` | `"myradio.station_changed"` |
+| Element                   | Convention                | Example                     |
+| ------------------------- | ------------------------- | --------------------------- |
+| Plugin directory          | `lowercase`, `[a-z0-9_-]` | `plugins/my_radio/`         |
+| Command (plugin-specific) | `<plugin>.<action>`       | `"myradio.search"`          |
+| Command (LMS-compatible)  | Single name               | `"favorites"`               |
+| Menu node ID              | camelCase                 | `"myRadio"`                 |
+| Event type                | `<namespace>.<event>`     | `"myradio.station_changed"` |
 
 ---
 
-## 13) Debugging & Logging
+## 14) Debugging & Logging
 
 ### Setting Up a Logger
 
@@ -1067,13 +1261,13 @@ curl -X POST http://localhost:9000/jsonrpc.js \
 Or with the RPC test script:
 
 ```bash
-python scripts/rpc_test_console.py
+python scripts/rpc-console.py
 > myplugin.hello
 ```
 
 ---
 
-## 14) Error Handling & Isolation
+## 15) Error Handling & Isolation
 
 ### Setup Errors
 
@@ -1081,14 +1275,40 @@ If `setup()` raises an exception:
 
 1. All **already-made** registrations (commands, menus, events)
    are automatically rolled back (`ctx._cleanup()`).
-2. The error is logged.
-3. **Other plugins continue to start normally.**
+2. The error message is stored in the plugin's runtime state.
+3. The error is logged.
+4. **Other plugins continue to start normally.**
 
 ```
 ERROR Failed to start plugin 'broken_plugin': ValueError: something went wrong
 WARNING Cleanup after failed start of 'broken_plugin': ...
 INFO  Started plugin: good_plugin v1.0.0 — ...
 ```
+
+#### Error Visibility in the API
+
+The `list_plugin_info()` response (used by both the JSON-RPC `pluginmanager list`
+command and the REST `GET /api/plugins` endpoint) includes an `error` field for
+each plugin:
+
+| Field     | Type           | Description                                                        |
+| --------- | -------------- | ------------------------------------------------------------------ |
+| `error`   | `string\|null` | `null` when healthy; error message when `setup()` or import failed |
+| `started` | `bool`         | `true` only when `setup()` completed without exception             |
+
+This covers two failure modes:
+
+- **Import errors** — the plugin module could not be imported (syntax error,
+  missing dependency). The error message starts with `"Failed to load: …"`.
+- **Setup errors** — the module imported but `setup()` raised an exception.
+  The error message starts with `"Failed to start: …"`.
+
+The Web UI (`PluginsView`) uses these fields to show:
+
+- A **red "error" badge** and the error message when `error` is non-null.
+- A **yellow warning** ("Plugin is enabled but not running") when
+  `started` is `false` but `state` is `"enabled"` and there is no error
+  (e.g. after install, before server restart).
 
 ### Handler Errors
 
@@ -1115,20 +1335,20 @@ If `teardown()` raises an exception:
 
 ---
 
-## 15) Known Limitations
+## 16) Known Limitations
 
-| Limitation | Details | Planned Solution |
-|---|---|---|
-| No hot-reload | Plugins cannot be loaded/unloaded at runtime | Server restart required |
-| No sandbox/security | Plugins run in the same process, full Python access | Accepted (same as LMS) |
-| FastAPI routes not removable | `register_route()` is permanent | Framework limitation |
-| Enable/disable/install is restart-oriented | State changes set `restart_required`; running plugin instances are not hot-swapped | Explicit restart workflow in UI/API |
-| `playlist_manager` optional | Can be `None` in tests | Always check |
-| Content provider commands are per-plugin | No generic `content.browse` — each plugin defines its own commands (e.g. `radio items`) | By design |
+| Limitation                                 | Details                                                                                 | Planned Solution                    |
+| ------------------------------------------ | --------------------------------------------------------------------------------------- | ----------------------------------- |
+| No hot-reload                              | Plugins cannot be loaded/unloaded at runtime                                            | Server restart required             |
+| No sandbox/security                        | Plugins run in the same process, full Python access                                     | Accepted (same as LMS)              |
+| FastAPI routes not removable               | `register_route()` is permanent                                                         | Framework limitation                |
+| Enable/disable/install is restart-oriented | State changes set `restart_required`; running plugin instances are not hot-swapped      | Explicit restart workflow in UI/API |
+| `playlist_manager` optional                | Can be `None` in tests                                                                  | Always check                        |
+| Content provider commands are per-plugin   | No generic `content.browse` — each plugin defines its own commands (e.g. `radio items`) | By design                           |
 
 ---
 
-## 16) Content Providers
+## 17) Content Providers
 
 Plugins can supply external audio sources (Internet Radio, Podcasts,
 streaming services) by implementing the `ContentProvider` abstract base
@@ -1161,15 +1381,15 @@ User plays item:
 
 Import: `from resonance.content_provider import ContentProvider`
 
-| Method / Property | Signature | Description |
-|---|---|---|
-| `name` | `@property -> str` | Human-readable name (e.g. `"Internet Radio"`) |
-| `icon` | `@property -> str \| None` | Optional icon URL for top-level menu |
-| `browse` | `async (path: str = "") -> list[BrowseItem]` | Browse content tree (empty = root) |
-| `search` | `async (query: str) -> list[BrowseItem]` | Search for items by text |
-| `get_stream_info` | `async (item_id: str) -> StreamInfo \| None` | Resolve item to stream URL |
-| `on_stream_started` | `async (item_id: str, player_mac: str) -> None` | Called when playback starts (optional) |
-| `on_stream_stopped` | `async (item_id: str, player_mac: str) -> None` | Called when playback stops (optional) |
+| Method / Property   | Signature                                       | Description                                   |
+| ------------------- | ----------------------------------------------- | --------------------------------------------- |
+| `name`              | `@property -> str`                              | Human-readable name (e.g. `"Internet Radio"`) |
+| `icon`              | `@property -> str \| None`                      | Optional icon URL for top-level menu          |
+| `browse`            | `async (path: str = "") -> list[BrowseItem]`    | Browse content tree (empty = root)            |
+| `search`            | `async (query: str) -> list[BrowseItem]`        | Search for items by text                      |
+| `get_stream_info`   | `async (item_id: str) -> StreamInfo \| None`    | Resolve item to stream URL                    |
+| `on_stream_started` | `async (item_id: str, player_mac: str) -> None` | Called when playback starts (optional)        |
+| `on_stream_stopped` | `async (item_id: str, player_mac: str) -> None` | Called when playback stops (optional)         |
 
 All methods are `async` — providers are expected to make HTTP calls
 to external APIs.
@@ -1180,18 +1400,18 @@ Import: `from resonance.content_provider import StreamInfo`
 
 Frozen dataclass returned by `get_stream_info()`:
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `url` | `str` | *(required)* | Direct audio stream URL (HTTP or HTTPS) |
-| `content_type` | `str` | `"audio/mpeg"` | MIME type of the stream |
-| `title` | `str` | `""` | Display title |
-| `artist` | `str` | `""` | Artist or show name |
-| `album` | `str` | `""` | Album or category |
-| `artwork_url` | `str \| None` | `None` | Cover art URL |
-| `duration_ms` | `int` | `0` | Duration (0 = live/unknown) |
-| `bitrate` | `int` | `0` | Bitrate in kbps |
-| `is_live` | `bool` | `False` | `True` for infinite live streams |
-| `extra` | `dict` | `{}` | Provider-specific metadata |
+| Field          | Type          | Default        | Description                             |
+| -------------- | ------------- | -------------- | --------------------------------------- |
+| `url`          | `str`         | _(required)_   | Direct audio stream URL (HTTP or HTTPS) |
+| `content_type` | `str`         | `"audio/mpeg"` | MIME type of the stream                 |
+| `title`        | `str`         | `""`           | Display title                           |
+| `artist`       | `str`         | `""`           | Artist or show name                     |
+| `album`        | `str`         | `""`           | Album or category                       |
+| `artwork_url`  | `str \| None` | `None`         | Cover art URL                           |
+| `duration_ms`  | `int`         | `0`            | Duration (0 = live/unknown)             |
+| `bitrate`      | `int`         | `0`            | Bitrate in kbps                         |
+| `is_live`      | `bool`        | `False`        | `True` for infinite live streams        |
+| `extra`        | `dict`        | `{}`           | Provider-specific metadata              |
 
 ### BrowseItem
 
@@ -1199,16 +1419,16 @@ Import: `from resonance.content_provider import BrowseItem`
 
 Frozen dataclass representing one entry in a browse tree:
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `id` | `str` | *(required)* | Provider-scoped unique ID |
-| `title` | `str` | *(required)* | Display text |
-| `type` | `str` | `"audio"` | `"audio"`, `"folder"`, or `"search"` |
-| `url` | `str \| None` | `None` | Hint URL (authoritative URL from `get_stream_info()`) |
-| `icon` | `str \| None` | `None` | Icon / artwork URL |
-| `subtitle` | `str \| None` | `None` | Secondary text |
-| `items` | `list[BrowseItem] \| None` | `None` | Pre-loaded children (for small static sub-menus) |
-| `extra` | `dict` | `{}` | Provider-specific data |
+| Field      | Type                       | Default      | Description                                           |
+| ---------- | -------------------------- | ------------ | ----------------------------------------------------- |
+| `id`       | `str`                      | _(required)_ | Provider-scoped unique ID                             |
+| `title`    | `str`                      | _(required)_ | Display text                                          |
+| `type`     | `str`                      | `"audio"`    | `"audio"`, `"folder"`, or `"search"`                  |
+| `url`      | `str \| None`              | `None`       | Hint URL (authoritative URL from `get_stream_info()`) |
+| `icon`     | `str \| None`              | `None`       | Icon / artwork URL                                    |
+| `subtitle` | `str \| None`              | `None`       | Secondary text                                        |
+| `items`    | `list[BrowseItem] \| None` | `None`       | Pre-loaded children (for small static sub-menus)      |
+| `extra`    | `dict`                     | `{}`         | Provider-specific data                                |
 
 ### Registration
 
@@ -1296,21 +1516,21 @@ versions is maintained (remote fields default to local-track values).
 The registry is a server-level singleton. Plugins do not interact with
 it directly — use `PluginContext.register_content_provider()` instead.
 
-| Method | Description |
-|---|---|
-| `browse(provider_id, path)` | Delegate to provider with error handling |
-| `search(provider_id, query)` | Delegate to provider with error handling |
-| `get_stream_info(provider_id, item_id)` | Delegate to provider with error handling |
-| `search_all(query)` | Search across all providers, returns `dict[provider_id, list[BrowseItem]]` |
-| `list_providers()` | All `(id, provider)` pairs |
-| `provider_ids` | List of registered IDs |
+| Method                                  | Description                                                                |
+| --------------------------------------- | -------------------------------------------------------------------------- |
+| `browse(provider_id, path)`             | Delegate to provider with error handling                                   |
+| `search(provider_id, query)`            | Delegate to provider with error handling                                   |
+| `get_stream_info(provider_id, item_id)` | Delegate to provider with error handling                                   |
+| `search_all(query)`                     | Search across all providers, returns `dict[provider_id, list[BrowseItem]]` |
+| `list_providers()`                      | All `(id, provider)` pairs                                                 |
+| `provider_ids`                          | List of registered IDs                                                     |
 
 All wrapper methods catch exceptions from providers and return empty
 results / `None` — a failing provider does not crash the server.
 
 ---
 
-## 17) Reference Plugins
+## 18) Reference Plugins
 
 ### Example Plugin (`plugins/example/`)
 
@@ -1388,83 +1608,6 @@ Companion code for the [Plugin Tutorial](PLUGIN_TUTORIAL.md):
 
 ---
 
-## 18) Plugin Settings & Management API
-
-This section documents the built-in management surface introduced with the
-plugin modernization (phases A-E).
-
-### JSON-RPC Commands
-
-#### `pluginsettings`
-
-| Command | Purpose |
-|---|---|
-| `["pluginsettings", "getdef", "<plugin>"]` | Returns only setting definitions |
-| `["pluginsettings", "get", "<plugin>"]` | Returns definitions + current (masked) values |
-| `["pluginsettings", "set", "<plugin>", "key:value", ...]` | Validates, persists, and updates values |
-
-Notes:
-- `set` performs type parsing (`int/float/bool/string/select`) before validation.
-- Secret values are masked in responses.
-- If a changed setting has `restart_required = true`, response includes `restart_required: true`.
-
-#### `pluginmanager`
-
-| Command | Purpose |
-|---|---|
-| `["pluginmanager", "list"]` | List installed plugins with state/type metadata |
-| `["pluginmanager", "info", "<plugin>"]` | One plugin + setting definitions |
-| `["pluginmanager", "enable", "<plugin>"]` | Persist state as enabled |
-| `["pluginmanager", "disable", "<plugin>"]` | Persist state as disabled |
-| `["pluginmanager", "install", "<url>", "<sha256>"]` | Download and install plugin ZIP |
-| `["pluginmanager", "uninstall", "<plugin>"]` | Uninstall community plugin |
-| `["pluginmanager", "repository"]` | Fetch repository index + compare with installed |
-| `["pluginmanager", "installrepo", "<plugin>"]` | Install plugin directly from repository |
-
-### REST Endpoints
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/plugins` | `GET` | List plugins + `restart_required` |
-| `/api/plugins/{name}/settings` | `GET` | Get definitions + masked values |
-| `/api/plugins/{name}/settings` | `PUT` | Update settings with validation |
-| `/api/plugins/{name}/enable` | `POST` | Enable plugin |
-| `/api/plugins/{name}/disable` | `POST` | Disable plugin |
-| `/api/plugins/install` | `POST` | Install from ZIP URL + SHA256 |
-| `/api/plugins/{name}/uninstall` | `POST` | Uninstall community plugin |
-| `/api/plugins/repository` | `GET` | List repository plugins (`force_refresh` optional) |
-| `/api/plugins/install-from-repo` | `POST` | Install by repository plugin name |
-
-### Settings Storage Format
-
-Per plugin, settings are stored at:
-
-```
-data/plugins/<plugin_name>/settings.json
-```
-
-Payload structure:
-
-```json
-{
-  "_version": 1,
-  "_plugin_version": "1.0.0",
-  "my_setting": "value"
-}
-```
-
-### State Storage Format
-
-Plugin enable/disable states are stored globally at:
-
-```
-data/plugin_states.json
-```
-
-Unknown plugins default to `enabled` for backwards compatibility.
-
----
-
 ## 19) Server-Driven UI (SDUI)
 
 Plugins can expose pages in the web UI without writing any JavaScript.
@@ -1473,6 +1616,8 @@ components). The frontend has a generic renderer that maps each component
 `type` to a Svelte widget.
 
 **Plugins supply data. The frontend supplies presentation.**
+
+---
 
 ### Overview
 
@@ -1485,6 +1630,8 @@ get_ui(ctx) → Page   →   GET /api/plugins/{id}/ui   →   PluginRenderer
                                                       (Card, Table, Button, …)
 
 handle_action(action, params)  ←  POST /api/plugins/{id}/actions/{action}
+
+ctx.notify_ui_update()   →   SSE: {"event": "ui_refresh"}  →  Re-fetch UI
 ```
 
 ### Quick Start
@@ -1555,116 +1702,248 @@ async def setup(ctx):
 
 That's it. The plugin now has a page in the web UI sidebar.
 
-### Available Widgets
+---
 
-#### Display Widgets
+### Widget Reference
 
-| Widget | Constructor | Key Props | Description |
-|---|---|---|---|
-| `heading` | `Heading(text, level=2)` | `text`, `level` (1–4) | Section heading |
-| `text` | `Text(content, color?, size?)` | `content`, `color`, `size` | Paragraph text |
-| `status_badge` | `StatusBadge(label, status?, color)` | `label`, `status`, `color` | Colored status indicator |
-| `key_value` | `KeyValue(items)` | `items: list[KVItem]` | Key-value pair list |
-| `table` | `Table(columns, rows, title?, edit_action?, row_key?)` | `columns`, `rows`, `title`, `edit_action`, `row_key` | Data table (supports row actions and inline editing) |
-| `button` | `Button(label, action, params?, style?, confirm?, icon?, disabled?)` | `label`, `action`, `style`, `confirm`, `disabled` | Action trigger |
-| `card` | `Card(title?, children?, collapsible?, collapsed?)` | `title`, `children`, `collapsible`, `collapsed` | Grouped content box with optional expand/collapse |
-| `row` | `Row(children?, gap?, justify?, align?)` | `children`, `gap` | Horizontal flex layout |
-| `column` | `Column(children?, gap?)` | `children`, `gap` | Vertical flex layout |
-| `alert` | `Alert(message, severity?, title?)` | `message`, `severity` | Info/warning/error/success banner |
-| `progress` | `Progress(value, label?, color?)` | `value` (0–100), `label` | Progress bar |
-| `markdown` | `Markdown(content)` | `content` | Rendered markdown text |
+Every widget is documented with its full constructor signature, all
+props, types, defaults, validation rules, and what it renders as.
 
-#### Layout Widgets (Phase 2)
-
-| Widget | Constructor | Key Props | Description |
-|---|---|---|---|
-| `tabs` | `Tabs(tabs)` | `tabs: list[Tab]` | Tab-based navigation (client-side, no backend roundtrip) |
-
-Each `Tab` has: `label` (str), `children` (list of components), `icon` (optional str).
-
-#### Modal / Dialog Widget (Phase 2.5)
-
-| Widget | Constructor | Key Props | Description |
-|---|---|---|---|
-| `modal` | `Modal(title, trigger_label, children?, trigger_style?, trigger_icon?, size?)` | `title`, `trigger_label`, `size` | Modal dialog overlay triggered by a button |
-
-**Props:**
-
-- `title` (str, required) — shown in the modal header.
-- `trigger_label` (str, required) — text on the button that opens the modal.
-- `trigger_style` (str, default `"secondary"`) — button style: `"primary"`, `"secondary"`, `"danger"`.
-- `trigger_icon` (str, optional) — icon name for the trigger button.
-- `size` (str, default `"md"`) — modal width: `"sm"` (384px), `"md"` (512px), `"lg"` (672px), `"xl"` (896px).
-- `children` (list, optional) — components rendered inside the modal body.
-
-**Usage:** The modal renders a trigger button inline. When clicked, a dialog overlay
-appears with the header, close button, and the children components. Clicking the
-backdrop or pressing Escape closes the modal. Modals can contain any widget,
-including `Form`, `KeyValue`, `Table`, etc.
-
-#### Form Widgets (Phase 2)
-
-| Widget | Constructor | Key Props | Description |
-|---|---|---|---|
-| `form` | `Form(action, children?, submit_label?, submit_style?, disabled?)` | `action`, `submit_label`, `disabled` | Container that collects input values and submits as action params |
-| `text_input` | `TextInput(name, label, value?, placeholder?, required?, pattern?, disabled?)` | `name`, `label`, `value` | Single-line text field |
-| `textarea` | `Textarea(name, label, value?, placeholder?, rows?, maxlength?, required?, disabled?)` | `name`, `label`, `value`, `rows` | Multi-line text field with optional character limit |
-| `number_input` | `NumberInput(name, label, value?, min?, max?, step?, required?, disabled?)` | `name`, `label`, `value`, `min`, `max` | Numeric input with range constraints |
-| `select` | `Select(name, label, value?, options?, required?, disabled?)` | `name`, `label`, `options: list[SelectOption]` | Dropdown selection |
-| `toggle` | `Toggle(name, label, value?, disabled?)` | `name`, `label`, `value` (bool) | Boolean on/off switch |
-
-Each `SelectOption` has: `value` (str), `label` (str).
-
-**Textarea props:** `rows` (int, default 4) sets the visible height. `maxlength` (int, optional)
-limits the character count and shows a live counter in the UI. The textarea is vertically resizable.
-
-**Form behaviour:** On submit, the `Form` widget collects all child input values
-(identified by their `name` prop) into a `params` dict and sends it to
-`POST /api/plugins/{id}/actions/{action}`. The submit button is disabled until
-the user changes a value (dirty tracking). After a successful submission, the
-dirty state resets.
-
-### Color Values
-
-All color props accept: `"green"`, `"red"`, `"yellow"`, `"blue"`, `"gray"`.
-
-### Button Styles
-
-- `"primary"` — Accent-colored, for primary actions
-- `"secondary"` — Neutral, for secondary actions (default)
-- `"danger"` — Red, for destructive actions
-
-### Alert Severities
-
-`"info"` (default), `"warning"`, `"error"`, `"success"`.
-
-### Card: Collapsible Mode
-
-Cards can be made collapsible so the user can expand/collapse the body:
+Import all widgets from `resonance.ui`:
 
 ```python
-# Always expanded (default)
-Card(title="Status", children=[...])
-
-# Collapsible, starts expanded
-Card(title="Details", collapsible=True, children=[...])
-
-# Collapsible, starts collapsed
-Card(title="Common Options (read-only)", collapsible=True, collapsed=True, children=[...])
+from resonance.ui import (
+    # Display
+    Heading, Text, StatusBadge, KeyValue, KVItem, Markdown, Progress,
+    # Data
+    Table, TableColumn, TableAction,
+    # Actions
+    Button,
+    # Layout
+    Card, Row, Column, Tabs, Tab,
+    # Modal
+    Modal,
+    # Forms
+    Form, TextInput, Textarea, NumberInput, Select, SelectOption, Toggle,
+    # Page envelope
+    Page,
+)
 ```
 
-- `collapsible` (bool, default `False`) — renders a toggle chevron in the header.
-- `collapsed` (bool, default `False`) — initial state; only used when `collapsible=True`.
-- When `collapsed=True` is set without `collapsible=True`, it is silently ignored.
-- Both flags are only serialised when `collapsible` is `True` to keep payloads compact.
+---
 
-### Table Usage
+#### `Heading`
+
+Section heading. Renders as `<h1>` through `<h4>` depending on level.
+
+```python
+Heading(text: str, level: int = 2)
+```
+
+| Prop    | Type  | Default | Description                                     |
+| ------- | ----- | ------- | ----------------------------------------------- |
+| `text`  | `str` | —       | Heading text (required)                         |
+| `level` | `int` | `2`     | Heading level: 1 (largest) through 4 (smallest) |
+
+**Rendering:**
+
+| Level | HTML   | Style                                   |
+| ----- | ------ | --------------------------------------- |
+| 1     | `<h1>` | 2xl, bold                               |
+| 2     | `<h2>` | xl, semibold                            |
+| 3     | `<h3>` | sm, semibold, uppercase, tracking-wider |
+| 4     | `<h4>` | sm, medium                              |
+
+**Example:**
+
+```python
+Heading("Device Configuration", level=2)
+```
+
+---
+
+#### `Text`
+
+Paragraph text with optional color and size.
+
+```python
+Text(content: str, color: str | None = None, size: str | None = None)
+```
+
+| Prop      | Type          | Default | Validation                                         | Description  |
+| --------- | ------------- | ------- | -------------------------------------------------- | ------------ |
+| `content` | `str`         | —       | Required                                           | Text content |
+| `color`   | `str \| None` | `None`  | Must be a [valid color](#colors-styles--constants) | Text color   |
+| `size`    | `str \| None` | `None`  | `"sm"`, `"md"`, or `"lg"`                          | Font size    |
+
+**Size mapping:**
+
+| Value  | CSS class   | Description |
+| ------ | ----------- | ----------- |
+| `"sm"` | `text-sm`   | Small       |
+| `"md"` | `text-base` | Medium      |
+| `"lg"` | `text-lg`   | Large       |
+
+**Example:**
+
+```python
+Text("Bridge is currently inactive.", color="yellow", size="sm")
+```
+
+---
+
+#### `StatusBadge`
+
+Colored pill-shaped status indicator with a dot.
+
+```python
+StatusBadge(label: str, status: str | None = None, color: str = "gray")
+```
+
+| Prop     | Type          | Default  | Validation                                         | Description                         |
+| -------- | ------------- | -------- | -------------------------------------------------- | ----------------------------------- |
+| `label`  | `str`         | —        | Required                                           | Display text                        |
+| `status` | `str \| None` | `None`   | —                                                  | Status string (defaults to `label`) |
+| `color`  | `str`         | `"gray"` | Must be a [valid color](#colors-styles--constants) | Badge color                         |
+
+**Renders as:** A rounded pill with a small colored dot and the label text.
+
+**Example:**
+
+```python
+StatusBadge(label="Active", color="green")
+StatusBadge(label="Stopped", color="red")
+StatusBadge(label="3 devices", status="ok", color="blue")
+```
+
+---
+
+#### `KeyValue`
+
+Vertically stacked list of key-value pairs. Each row shows a label on
+the left and a value on the right.
+
+```python
+KeyValue(items: list[KVItem])
+```
+
+| Prop    | Type           | Default | Description             |
+| ------- | -------------- | ------- | ----------------------- |
+| `items` | `list[KVItem]` | —       | List of key-value pairs |
+
+**`KVItem` (frozen dataclass):**
+
+```python
+KVItem(key: str, value: str, color: str | None = None)
+```
+
+| Field   | Type          | Default | Description                          |
+| ------- | ------------- | ------- | ------------------------------------ |
+| `key`   | `str`         | —       | Label (left side)                    |
+| `value` | `str`         | —       | Value (right side)                   |
+| `color` | `str \| None` | `None`  | Value text color (valid color value) |
+
+**Example:**
+
+```python
+KeyValue(items=[
+    KVItem("Status", "Active", color="green"),
+    KVItem("Binary", "/usr/bin/squeeze2raop"),
+    KVItem("Server", "192.168.1.1:9000"),
+    KVItem("Uptime", "3h 42m", color="blue"),
+])
+```
+
+---
+
+#### `Table`
+
+Data table with column definitions, row data, and optional inline
+editing and action buttons.
+
+```python
+Table(
+    columns: list[TableColumn],
+    rows: list[dict[str, Any]],
+    title: str | None = None,
+    edit_action: str | None = None,
+    row_key: str = "udn",
+)
+```
+
+| Prop          | Type                   | Default | Description                                    |
+| ------------- | ---------------------- | ------- | ---------------------------------------------- |
+| `columns`     | `list[TableColumn]`    | —       | Column definitions (required)                  |
+| `rows`        | `list[dict[str, Any]]` | —       | Row data where keys match column `key` values  |
+| `title`       | `str \| None`          | `None`  | Table heading above the table                  |
+| `edit_action` | `str \| None`          | `None`  | Plugin action dispatched on inline edit commit |
+| `row_key`     | `str`                  | `"udn"` | Column key that uniquely identifies rows       |
+
+`edit_action` and `row_key` are only serialized when `edit_action` is set.
+
+**`TableColumn` (frozen dataclass):**
+
+```python
+TableColumn(key: str, label: str, variant: str = "text")
+```
+
+| Field     | Type  | Default  | Description                          |
+| --------- | ----- | -------- | ------------------------------------ |
+| `key`     | `str` | —        | Column identifier (matches row keys) |
+| `label`   | `str` | —        | Column header text                   |
+| `variant` | `str` | `"text"` | Rendering variant (see table below)  |
+
+**Column variants:**
+
+| Variant      | Description                     | Cell Value Format                                       |
+| ------------ | ------------------------------- | ------------------------------------------------------- |
+| `"text"`     | Plain text (default)            | `str`                                                   |
+| `"badge"`    | Colored badge pill              | `{"text": "Yes", "color": "green"}`                     |
+| `"actions"`  | Action buttons per row          | `[TableAction(...).to_dict(), ...]`                     |
+| `"editable"` | Click-to-edit inline text field | `str` (current value; editable if `edit_action` is set) |
+
+**`TableAction` (frozen dataclass):**
+
+```python
+TableAction(
+    label: str,
+    action: str,
+    params: dict[str, Any] | None = None,
+    style: str = "secondary",
+    confirm: bool = False,
+)
+```
+
+| Field     | Type           | Default       | Description                        |
+| --------- | -------------- | ------------- | ---------------------------------- |
+| `label`   | `str`          | —             | Button text                        |
+| `action`  | `str`          | —             | Plugin action name                 |
+| `params`  | `dict \| None` | `None`        | Params merged into action dispatch |
+| `style`   | `str`          | `"secondary"` | Button style (valid button style)  |
+| `confirm` | `bool`         | `False`       | Show browser confirmation dialog   |
+
+**Inline editing behaviour:**
+
+When a column has `variant="editable"`, clicking the cell opens an inline
+text input. On Enter or blur, the frontend dispatches:
+
+```python
+# Sent to handle_action(edit_action, params):
+params = {
+    "<row_key>": "<row[row_key] value>",  # e.g. "udn": "uuid-123"
+    "<col.key>": "<new_value>",           # e.g. "name": "Kitchen"
+}
+```
+
+Pressing Escape cancels. Only changed values trigger a dispatch.
+
+**Example:**
 
 ```python
 Table(
     title="Detected Devices",
     columns=[
-        TableColumn(key="name", label="Name"),
+        TableColumn(key="name", label="Name", variant="editable"),
         TableColumn(key="mac", label="MAC Address"),
         TableColumn(key="enabled", label="Enabled", variant="badge"),
         TableColumn(key="actions", label="", variant="actions"),
@@ -1680,51 +1959,300 @@ Table(
             ],
         },
     ],
-)
-```
-
-Each row is a `dict` whose keys match the column `key` values.
-
-**Column variants:**
-- `"text"` (default) — plain text display
-- `"badge"` — renders cell as a colored badge; cell value must be `{"text": "...", "color": "..."}`
-- `"actions"` — renders `TableAction` buttons per row; cell value is a list of action dicts
-
-### Table: Inline Editing
-
-Columns with `variant="editable"` render as click-to-edit text fields. When the
-user commits an edit (Enter or blur), the table dispatches `edit_action` with the
-row identifier and the new value:
-
-```python
-Table(
-    columns=[
-        TableColumn(key="name", label="Name", variant="editable"),
-        TableColumn(key="mac", label="MAC Address"),
-        TableColumn(key="enabled", label="Enabled", variant="badge"),
-        TableColumn(key="actions", label="", variant="actions"),
-    ],
-    rows=device_rows,
-    title="Detected AirPlay Devices",
     edit_action="update_device",
     row_key="udn",
 )
 ```
 
-- `edit_action` (str, optional) — plugin action to dispatch on edit commit.
-- `row_key` (str, default `"udn"`) — which column uniquely identifies a row.
-- On commit, the frontend dispatches: `{<row_key>: <row[row_key]>, <col.key>: <new_value>}`.
-- Pressing Escape cancels the edit. Only changed values trigger a dispatch.
-- The column variants are: `"text"` (default), `"badge"`, `"actions"`, `"editable"`.
+---
 
-### Tabs Usage
+#### `Button`
+
+Action button that triggers a POST to the plugin's action endpoint.
 
 ```python
-from resonance.ui import Tabs, Tab
+Button(
+    label: str,
+    action: str,
+    params: dict[str, Any] | None = None,
+    style: str = "secondary",
+    confirm: bool = False,
+    icon: str | None = None,
+    disabled: bool = False,
+)
+```
 
+| Prop       | Type           | Default       | Validation            | Description                                 |
+| ---------- | -------------- | ------------- | --------------------- | ------------------------------------------- |
+| `label`    | `str`          | —             | Required              | Button text                                 |
+| `action`   | `str`          | —             | Required              | Action name sent to `handle_action()`       |
+| `params`   | `dict \| None` | `None`        | —                     | Params dict sent with the action            |
+| `style`    | `str`          | `"secondary"` | Must be a valid style | Visual style (see [Styles](#button-styles)) |
+| `confirm`  | `bool`         | `False`       | —                     | Show browser `confirm()` dialog first       |
+| `icon`     | `str \| None`  | `None`        | —                     | Lucide icon name rendered before the label  |
+| `disabled` | `bool`         | `False`       | —                     | Disable the button                          |
+
+**Renders as:** A rounded button with loading state during dispatch.
+While the action is in flight, a spinning `Loader2` icon replaces the
+button icon and the button is disabled. The label text remains visible.
+
+**Example:**
+
+```python
+Button("Start Bridge", action="activate", style="primary")
+Button("Delete All", action="delete_all", style="danger", confirm=True)
+Button("Refresh", action="refresh", params={"force": True})
+```
+
+---
+
+#### `Card`
+
+Grouped content container with an optional title and optional
+expand/collapse behavior.
+
+```python
+Card(
+    title: str = "",
+    children: list[UIComponent] | None = None,
+    collapsible: bool = False,
+    collapsed: bool = False,
+)
+```
+
+| Prop          | Type                        | Default | Description                                     |
+| ------------- | --------------------------- | ------- | ----------------------------------------------- |
+| `title`       | `str`                       | `""`    | Card header text                                |
+| `children`    | `list[UIComponent] \| None` | `None`  | Child widgets rendered inside the card          |
+| `collapsible` | `bool`                      | `False` | Show chevron toggle in header                   |
+| `collapsed`   | `bool`                      | `False` | Initial collapsed state (only when collapsible) |
+
+**Serialization:** `collapsible` and `collapsed` are only emitted when
+`collapsible=True`, keeping payloads compact. Setting `collapsed=True`
+without `collapsible=True` is silently ignored.
+
+**Renders as:** A rounded bordered container with subtle background.
+When collapsible, the header becomes a clickable toggle with an
+animated chevron (▼ expanded, ► collapsed).
+
+**Example:**
+
+```python
+# Always expanded
+Card(title="Status", children=[
+    StatusBadge(label="Running", color="green"),
+])
+
+# Collapsible, starts expanded
+Card(title="Details", collapsible=True, children=[...])
+
+# Collapsible, starts collapsed
+Card(title="Advanced Options", collapsible=True, collapsed=True, children=[...])
+```
+
+---
+
+#### `Row`
+
+Horizontal flex layout container.
+
+```python
+Row(
+    children: list[UIComponent] | None = None,
+    gap: str = "4",
+    justify: str | None = None,
+    align: str | None = None,
+)
+```
+
+| Prop       | Type                        | Default | Allowed Values                              | Description             |
+| ---------- | --------------------------- | ------- | ------------------------------------------- | ----------------------- |
+| `children` | `list[UIComponent] \| None` | `None`  | —                                           | Child widgets           |
+| `gap`      | `str`                       | `"4"`   | Tailwind spacing values (`"2"`, `"4"`, etc) | Gap between children    |
+| `justify`  | `str \| None`               | `None`  | `"start"`, `"center"`, `"end"`, `"between"` | Horizontal distribution |
+| `align`    | `str \| None`               | `None`  | `"start"`, `"center"`, `"end"`, `"stretch"` | Vertical alignment      |
+
+**Renders as:** A `flex flex-wrap` container. Children wrap on small screens.
+
+**Example:**
+
+```python
+Row(children=[
+    Button("Save", action="save", style="primary"),
+    Button("Cancel", action="cancel"),
+], gap="3", justify="end")
+```
+
+---
+
+#### `Column`
+
+Vertical flex layout container.
+
+```python
+Column(children: list[UIComponent] | None = None, gap: str = "4")
+```
+
+| Prop       | Type                        | Default | Description                |
+| ---------- | --------------------------- | ------- | -------------------------- |
+| `children` | `list[UIComponent] \| None` | `None`  | Child widgets              |
+| `gap`      | `str`                       | `"4"`   | Vertical gap between items |
+
+**Renders as:** A `flex flex-col` container.
+
+---
+
+#### `Alert`
+
+Colored banner for informational messages, warnings, errors, or success.
+
+```python
+Alert(message: str, severity: str = "info", title: str | None = None)
+```
+
+| Prop       | Type          | Default  | Validation                                    | Description       |
+| ---------- | ------------- | -------- | --------------------------------------------- | ----------------- |
+| `message`  | `str`         | —        | Required                                      | Alert body text   |
+| `severity` | `str`         | `"info"` | `"info"`, `"warning"`, `"error"`, `"success"` | Visual variant    |
+| `title`    | `str \| None` | `None`   | —                                             | Bold heading line |
+
+**Renders as:** A rounded bordered box with colored background and
+border matching the severity. Title (if present) is rendered bold
+above the message.
+
+**Example:**
+
+```python
+Alert(message="Bridge will restart. Active streams will be interrupted.",
+      severity="warning", title="Warning")
+Alert(message="Settings saved successfully.", severity="success")
+```
+
+---
+
+#### `Progress`
+
+Horizontal progress bar (0–100%).
+
+```python
+Progress(value: int | float, label: str | None = None, color: str | None = None)
+```
+
+| Prop    | Type           | Default | Validation            | Description                 |
+| ------- | -------------- | ------- | --------------------- | --------------------------- |
+| `value` | `int \| float` | —       | Clamped to 0–100      | Progress percentage         |
+| `label` | `str \| None`  | `None`  | —                     | Text label above the bar    |
+| `color` | `str \| None`  | `None`  | Must be a valid color | Bar color (default: accent) |
+
+**Renders as:** A thin rounded bar. When `label` is set, the label and
+percentage are shown side-by-side above the bar.
+
+**Example:**
+
+```python
+Progress(value=65, label="Download Progress", color="blue")
+```
+
+---
+
+#### `Markdown`
+
+Rendered markdown text block with full [GFM](https://github.github.com/gfm/)
+support.
+
+```python
+Markdown(content: str)
+```
+
+| Prop      | Type  | Default | Description          |
+| --------- | ----- | ------- | -------------------- |
+| `content` | `str` | —       | Markdown source text |
+
+**Supported syntax:** Headings, bold, italic, strikethrough, links,
+images, inline code, fenced code blocks (with language label),
+blockquotes, ordered and unordered lists, tables, horizontal rules, and
+line breaks. All elements are styled to match the Catppuccin theme.
+
+**Renders as:** Themed HTML produced by a custom `marked` renderer.
+Each Markdown element maps to a specific set of Tailwind classes (e.g.
+headings use the same hierarchy as the `Heading` widget, code blocks get
+`bg-crust` with monospace font, links are accent-colored with
+`target="_blank"`).
+
+**Security model:** The renderer uses `marked` with **raw HTML disabled**
+(the default — `options.html` is never set to `true`). Any HTML tags in
+the Markdown source are escaped to `&lt;` / `&gt;` by the parser before
+they reach the renderer. The custom `Renderer` only emits known-safe
+HTML elements with explicitly constructed attributes. All attribute
+values pass through `escapeAttr()`, and URLs are validated against an
+allowlist of safe schemes (`http:`, `https:`, `mailto:`) plus relative
+paths. This is equivalent to a strict allowlist sanitizer but without
+the overhead of parsing untrusted HTML.
+
+**Example:**
+
+```python
+Markdown(content="""
+## About This Plugin
+
+AirPlay Bridge for **Resonance** — uses philippe44's
+[squeeze2raop](https://github.com/philippe44/AirConnect) binary.
+
+### Features
+
+- Automatic device discovery
+- Per-device volume control
+- `enabled` / `disabled` state per device
+
+> Note: Requires network access to AirPlay receivers.
+
+| Setting   | Default |
+|-----------|---------|
+| Port      | 49152   |
+| Interface | 0.0.0.0 |
+""")
+```
+
+---
+
+#### `Tabs`
+
+Tab-based navigation — purely client-side, no backend roundtrip on
+tab switch. The frontend renders tab buttons and shows the active tab's
+content.
+
+```python
+Tabs(tabs: list[Tab])
+```
+
+| Prop   | Type        | Default | Validation                | Description     |
+| ------ | ----------- | ------- | ------------------------- | --------------- |
+| `tabs` | `list[Tab]` | —       | At least one tab required | Tab definitions |
+
+**`Tab` (frozen dataclass):**
+
+```python
+Tab(label: str, children: list[UIComponent] = [], icon: str | None = None)
+```
+
+| Field      | Type                | Default | Description                              |
+| ---------- | ------------------- | ------- | ---------------------------------------- |
+| `label`    | `str`               | —       | Tab button text                          |
+| `children` | `list[UIComponent]` | `[]`    | Widgets rendered when this tab is active |
+| `icon`     | `str \| None`       | `None`  | Lucide icon name next to the label       |
+
+**Renders as:** Horizontal tab bar with an accent-colored underline on the
+active tab. Icons render at 16px via `DynamicIcon`.
+
+**Example:**
+
+```python
 Tabs(tabs=[
     Tab(label="Status", icon="activity", children=[
         Card(title="Bridge Status", children=[...]),
+    ]),
+    Tab(label="Devices", icon="speaker", children=[
+        Table(columns=[...], rows=[...]),
     ]),
     Tab(label="Settings", icon="settings", children=[
         Form(action="save_settings", children=[...]),
@@ -1732,64 +2260,676 @@ Tabs(tabs=[
 ])
 ```
 
-Tab switching is purely client-side — no backend roundtrip on tab change.
-The `icon` parameter is optional and accepts any Lucide icon name.
+---
 
-### Form Usage
+#### `Modal`
+
+Modal dialog overlay triggered by a button. The modal appears as a
+centered overlay with backdrop blur.
 
 ```python
-from resonance.ui import Form, TextInput, NumberInput, Select, SelectOption, Toggle
+Modal(
+    title: str,
+    trigger_label: str,
+    children: list[UIComponent] | None = None,
+    trigger_style: str = "secondary",
+    trigger_icon: str | None = None,
+    size: str = "md",
+)
+```
 
-Form(
-    action="save_settings",
-    submit_label="Save Settings",
-    disabled=is_active,  # disable when bridge is running
+| Prop            | Type                        | Default       | Validation                     | Description                                         |
+| --------------- | --------------------------- | ------------- | ------------------------------ | --------------------------------------------------- |
+| `title`         | `str`                       | —             | Non-empty required             | Modal header text                                   |
+| `trigger_label` | `str`                       | —             | Non-empty required             | Text on the button that opens the modal             |
+| `children`      | `list[UIComponent] \| None` | `None`        | —                              | Content rendered inside the modal body              |
+| `trigger_style` | `str`                       | `"secondary"` | Valid button style             | Trigger button appearance                           |
+| `trigger_icon`  | `str \| None`               | `None`        | —                              | Icon on the trigger button (not rendered currently) |
+| `size`          | `str`                       | `"md"`        | `"sm"`, `"md"`, `"lg"`, `"xl"` | Modal width                                         |
+
+**Size mapping:**
+
+| Value  | CSS class   | Width |
+| ------ | ----------- | ----- |
+| `"sm"` | `max-w-sm`  | 384px |
+| `"md"` | `max-w-lg`  | 512px |
+| `"lg"` | `max-w-2xl` | 672px |
+| `"xl"` | `max-w-4xl` | 896px |
+
+**Behaviour:**
+
+- Clicking the trigger button opens the modal.
+- Clicking the backdrop (dark area) closes the modal.
+- Pressing Escape closes the modal.
+- **Focus trap:** Tab and Shift+Tab cycle through focusable elements
+  inside the modal without escaping to the page behind it.
+- **Autofocus:** On open, the first focusable element inside the modal
+  receives focus (or the modal container itself if there are none).
+- **Focus restore:** On close, focus returns to the element that opened
+  the modal (the trigger button).
+- The modal body scrolls independently (max 85vh).
+- Modals can contain any widget: `Form`, `Table`, `KeyValue`, nested `Tabs`, etc.
+
+**Example:**
+
+```python
+Modal(
+    title="Device Settings — Living Room",
+    trigger_label="Configure",
+    trigger_style="secondary",
+    size="lg",
     children=[
-        Select(
-            name="mode",
-            label="Volume Mode",
-            value="hardware",
-            options=[
-                SelectOption(value="hardware", label="Hardware"),
-                SelectOption(value="software", label="Software"),
-                SelectOption(value="disabled", label="Disabled"),
+        Form(
+            action="update_device",
+            submit_label="Save",
+            children=[
+                TextInput(name="name", label="Display Name", value="Living Room"),
+                Select(name="volume_mode", label="Volume", value="2", options=[
+                    SelectOption(value="2", label="Hardware"),
+                    SelectOption(value="1", label="Software"),
+                ]),
             ],
-        ),
-        TextInput(
-            name="interface",
-            label="Network Interface",
-            value="127.0.0.1",
-            placeholder="e.g. 192.168.1.100",
-        ),
-        NumberInput(
-            name="port",
-            label="Port",
-            value=9000,
-            min=1,
-            max=65535,
-        ),
-        Toggle(
-            name="autostart",
-            label="Auto-start at server startup",
-            value=True,
         ),
     ],
 )
 ```
 
-When submitted, `handle_action("save_settings", params)` receives:
+---
+
+#### `Form`
+
+Container that groups input widgets and submits their collected values
+as a single action. The submit button tracks dirty state and disables
+until a value changes.
+
 ```python
+Form(
+    action: str,
+    children: list[UIComponent] | None = None,
+    submit_label: str = "Save",
+    submit_style: str = "primary",
+    disabled: bool = False,
+)
+```
+
+| Prop           | Type                        | Default     | Validation         | Description                               |
+| -------------- | --------------------------- | ----------- | ------------------ | ----------------------------------------- |
+| `action`       | `str`                       | —           | Non-empty required | Action name dispatched on submit          |
+| `children`     | `list[UIComponent] \| None` | `None`      | —                  | Form input widgets + any display widgets  |
+| `submit_label` | `str`                       | `"Save"`    | —                  | Text on the submit button                 |
+| `submit_style` | `str`                       | `"primary"` | Valid button style | Submit button appearance                  |
+| `disabled`     | `bool`                      | `False`     | —                  | Disable entire form (all inputs + submit) |
+
+**Behaviour:**
+
+- On submit, all child input values (identified by `name`) are collected
+  into a `params` dict and sent to `POST /api/plugins/{id}/actions/{action}`.
+- The submit button is disabled until the user changes a value (dirty tracking).
+- After successful submission, dirty state resets.
+- Shows a spinner ("Saving…") during dispatch.
+- Shows "Unsaved changes" indicator when dirty.
+- Individual inputs can also be independently disabled via their own `disabled` prop.
+
+**Submission payload example:**
+
+```python
+# If the form contains:
+#   TextInput(name="interface", value="192.168.1.1")
+#   NumberInput(name="port", value=9000)
+#   Toggle(name="autostart", value=True)
+
+# Then handle_action receives:
 params = {
-    "mode": "hardware",
-    "interface": "127.0.0.1",
+    "interface": "192.168.1.1",
     "port": 9000,
     "autostart": True,
 }
 ```
 
-**Disabled state:** Setting `disabled=True` on a `Form` disables all child
-inputs and the submit button. Individual inputs can also be disabled
-independently via their own `disabled` prop.
+---
+
+#### `TextInput`
+
+Single-line text input field for use inside a `Form`.
+
+```python
+TextInput(
+    name: str,
+    label: str,
+    value: str = "",
+    placeholder: str = "",
+    required: bool = False,
+    pattern: str | None = None,
+    disabled: bool = False,
+    help_text: str | None = None,
+)
+```
+
+| Prop          | Type          | Default | Validation         | Description                                   |
+| ------------- | ------------- | ------- | ------------------ | --------------------------------------------- |
+| `name`        | `str`         | —       | Non-empty required | Field identifier in form submission           |
+| `label`       | `str`         | —       | —                  | Label text above the input                    |
+| `value`       | `str`         | `""`    | —                  | Initial value                                 |
+| `placeholder` | `str`         | `""`    | —                  | Placeholder text                              |
+| `required`    | `bool`        | `False` | —                  | Show `*` marker; validate non-empty on blur   |
+| `pattern`     | `str \| None` | `None`  | Valid regex        | Regex pattern validated on the frontend       |
+| `disabled`    | `bool`        | `False` | —                  | Prevent editing                               |
+| `help_text`   | `str \| None` | `None`  | —                  | Hint text shown below the input (gray, small) |
+
+**Renders as:** Label + single-line `<input type="text">` + validation
+error or help text below. Required fields show a red asterisk. Validation
+errors appear on blur (touched state).
+
+**Example:**
+
+```python
+TextInput(
+    name="interface",
+    label="Network Interface",
+    value="127.0.0.1",
+    placeholder="e.g. 192.168.1.100",
+    help_text="The IP address the bridge will bind to.",
+)
+```
+
+---
+
+#### `Textarea`
+
+Multi-line text input with optional character limit.
+
+```python
+Textarea(
+    name: str,
+    label: str,
+    value: str = "",
+    placeholder: str = "",
+    rows: int = 4,
+    maxlength: int | None = None,
+    required: bool = False,
+    disabled: bool = False,
+    help_text: str | None = None,
+)
+```
+
+| Prop          | Type          | Default | Validation         | Description                              |
+| ------------- | ------------- | ------- | ------------------ | ---------------------------------------- |
+| `name`        | `str`         | —       | Non-empty required | Field identifier in form submission      |
+| `label`       | `str`         | —       | —                  | Label text above the textarea            |
+| `value`       | `str`         | `""`    | —                  | Initial value                            |
+| `placeholder` | `str`         | `""`    | —                  | Placeholder text                         |
+| `rows`        | `int`         | `4`     | Must be ≥ 1        | Visible height in text rows              |
+| `maxlength`   | `int \| None` | `None`  | Must be ≥ 1 if set | Max character count (shows live counter) |
+| `required`    | `bool`        | `False` | —                  | Validate non-empty on blur               |
+| `disabled`    | `bool`        | `False` | —                  | Prevent editing                          |
+| `help_text`   | `str \| None` | `None`  | —                  | Hint text shown below the textarea       |
+
+**Renders as:** Label + vertically resizable `<textarea>` + character
+counter (when maxlength is set) + validation error or help text.
+
+**Example:**
+
+```python
+Textarea(
+    name="notes",
+    label="Notes",
+    value="",
+    rows=6,
+    maxlength=500,
+    placeholder="Optional notes...",
+    help_text="Free-form notes about this configuration.",
+)
+```
+
+---
+
+#### `NumberInput`
+
+Numeric input with optional min/max/step constraints.
+
+```python
+NumberInput(
+    name: str,
+    label: str,
+    value: int | float = 0,
+    min: int | float | None = None,
+    max: int | float | None = None,
+    step: int | float = 1,
+    required: bool = False,
+    disabled: bool = False,
+    help_text: str | None = None,
+)
+```
+
+| Prop        | Type                   | Default | Validation         | Description                                |
+| ----------- | ---------------------- | ------- | ------------------ | ------------------------------------------ |
+| `name`      | `str`                  | —       | Non-empty required | Field identifier in form submission        |
+| `label`     | `str`                  | —       | —                  | Label text above the input                 |
+| `value`     | `int \| float`         | `0`     | —                  | Initial value                              |
+| `min`       | `int \| float \| None` | `None`  | —                  | Minimum allowed value                      |
+| `max`       | `int \| float \| None` | `None`  | —                  | Maximum allowed value                      |
+| `step`      | `int \| float`         | `1`     | —                  | Increment step                             |
+| `required`  | `bool`                 | `False` | —                  | Validate non-empty on blur                 |
+| `disabled`  | `bool`                 | `False` | —                  | Prevent editing                            |
+| `help_text` | `str \| None`          | `None`  | —                  | Hint text (overrides auto-generated range) |
+
+**Renders as:** Label + `<input type="number">` (browser spinners hidden) +
+range hint or help text below. If `help_text` is not set and min/max are
+provided, an automatic "Range: min – max" hint is shown.
+
+**Example:**
+
+```python
+NumberInput(
+    name="port",
+    label="Port",
+    value=9000,
+    min=1,
+    max=65535,
+    help_text="TCP port for the bridge listener.",
+)
+```
+
+---
+
+#### `Select`
+
+Dropdown selection field.
+
+```python
+Select(
+    name: str,
+    label: str,
+    value: str = "",
+    options: list[SelectOption] | None = None,
+    required: bool = False,
+    disabled: bool = False,
+    help_text: str | None = None,
+)
+```
+
+| Prop        | Type                         | Default | Validation         | Description                         |
+| ----------- | ---------------------------- | ------- | ------------------ | ----------------------------------- |
+| `name`      | `str`                        | —       | Non-empty required | Field identifier in form submission |
+| `label`     | `str`                        | —       | —                  | Label text above the select         |
+| `value`     | `str`                        | `""`    | —                  | Initially selected value            |
+| `options`   | `list[SelectOption] \| None` | `None`  | —                  | Available choices                   |
+| `required`  | `bool`                       | `False` | —                  | Validate non-empty on blur          |
+| `disabled`  | `bool`                       | `False` | —                  | Prevent selection                   |
+| `help_text` | `str \| None`                | `None`  | —                  | Hint text below the dropdown        |
+
+**`SelectOption` (frozen dataclass):**
+
+```python
+SelectOption(value: str, label: str)
+```
+
+| Field   | Type  | Description                   |
+| ------- | ----- | ----------------------------- |
+| `value` | `str` | Value sent in form submission |
+| `label` | `str` | Display text in the dropdown  |
+
+**Renders as:** Label + custom-styled `<select>` with chevron indicator +
+validation error or help text.
+
+**Example:**
+
+```python
+Select(
+    name="codec",
+    label="Output Codec",
+    value="flac",
+    options=[
+        SelectOption(value="flac", label="FLAC (lossless)"),
+        SelectOption(value="pcm", label="PCM (raw)"),
+        SelectOption(value="mp3", label="MP3"),
+    ],
+    help_text="Audio codec used for player output.",
+)
+```
+
+---
+
+#### `Toggle`
+
+Boolean on/off switch.
+
+```python
+Toggle(
+    name: str,
+    label: str,
+    value: bool = False,
+    disabled: bool = False,
+    help_text: str | None = None,
+)
+```
+
+| Prop        | Type          | Default | Validation         | Description                         |
+| ----------- | ------------- | ------- | ------------------ | ----------------------------------- |
+| `name`      | `str`         | —       | Non-empty required | Field identifier in form submission |
+| `label`     | `str`         | —       | —                  | Label text (left side)              |
+| `value`     | `bool`        | `False` | —                  | Initial state                       |
+| `disabled`  | `bool`        | `False` | —                  | Prevent toggling                    |
+| `help_text` | `str \| None` | `None`  | —                  | Hint text below the toggle          |
+
+**Renders as:** Label on the left + toggle switch on the right. The
+switch uses accent color when on, overlay color when off. Has proper
+ARIA `role="switch"` and `aria-checked`.
+
+**Example:**
+
+```python
+Toggle(
+    name="autostart",
+    label="Auto-start at server startup",
+    value=True,
+    help_text="When enabled, the bridge starts automatically with the server.",
+)
+```
+
+---
+
+#### `Page`
+
+Top-level envelope returned by `get_ui()`. Not a widget itself — it
+wraps the component tree and provides metadata.
+
+```python
+Page(
+    title: str,
+    components: list[UIComponent] = [],
+    icon: str | None = None,
+    refresh_interval: int = 0,
+)
+```
+
+| Prop               | Type                | Default | Description                                    |
+| ------------------ | ------------------- | ------- | ---------------------------------------------- |
+| `title`            | `str`               | —       | Page heading (required)                        |
+| `components`       | `list[UIComponent]` | `[]`    | Top-level widgets                              |
+| `icon`             | `str \| None`       | `None`  | Lucide icon name                               |
+| `refresh_interval` | `int`               | `0`     | Polling fallback interval in seconds (0 = off) |
+
+---
+
+#### `UIComponent` (Base Class)
+
+All widgets inherit from `UIComponent`. You normally don't use this
+directly — use the convenience constructors above.
+
+| Attribute       | Type                        | Default | Description                                                               |
+| --------------- | --------------------------- | ------- | ------------------------------------------------------------------------- |
+| `type`          | `str`                       | —       | Widget type identifier (from `ALLOWED_TYPES`)                             |
+| `props`         | `dict[str, Any]`            | `{}`    | Widget-specific properties                                                |
+| `children`      | `list[UIComponent] \| None` | `None`  | Child components (for container widgets)                                  |
+| `fallback_text` | `str \| None`               | `None`  | Text shown if the widget type is unknown to frontend                      |
+| `visible_when`  | `dict[str, Any] \| None`    | `None`  | Conditional visibility (see [below](#conditional-rendering-visible_when)) |
+
+**`fallback_text`** — When the server sends a widget type that the frontend
+does not recognize (e.g. a new widget added in a newer server version), the
+frontend renders a gray box with `"Unknown widget: <type>"` and the
+`fallback_text` if provided. This enables graceful degradation.
+
+```python
+# Hypothetical future widget with fallback for older frontends
+UIComponent(
+    type="chart",
+    props={"data": [...]},
+    fallback_text="Chart widget requires frontend update.",
+)
+```
+
+---
+
+### Wire Format Specification
+
+This section documents the exact JSON structure returned by
+`GET /api/plugins/{plugin_id}/ui`. This is the contract between
+server and frontend.
+
+#### Page Envelope
+
+```json
+{
+    "schema_version": "1.0",
+    "plugin_id": "myplugin",
+    "title": "My Plugin",
+    "icon": "star",
+    "refresh_interval": 10,
+    "components": [
+        { "type": "...", "props": {...}, "children": [...] },
+        ...
+    ]
+}
+```
+
+| Field              | Type     | Description                             |
+| ------------------ | -------- | --------------------------------------- |
+| `schema_version`   | `string` | Schema version (currently `"1.0"`)      |
+| `plugin_id`        | `string` | Plugin identifier                       |
+| `title`            | `string` | Page title                              |
+| `icon`             | `string` | Lucide icon name (empty string if none) |
+| `refresh_interval` | `int`    | Polling interval in seconds (0 = off)   |
+| `components`       | `array`  | Array of component objects              |
+
+#### Component Object
+
+Every component serializes to:
+
+```json
+{
+    "type": "button",
+    "props": {
+        "label": "Restart",
+        "action": "restart",
+        "style": "danger",
+        "confirm": true
+    }
+}
+```
+
+With children (containers like `Card`, `Row`, `Form`, etc.):
+
+```json
+{
+    "type": "card",
+    "props": { "title": "Status" },
+    "children": [
+        {
+            "type": "status_badge",
+            "props": { "label": "Active", "status": "Active", "color": "green" }
+        },
+        {
+            "type": "key_value",
+            "props": { "items": [{ "key": "Version", "value": "1.0" }] }
+        }
+    ]
+}
+```
+
+With `visible_when` (inside a Form):
+
+```json
+{
+    "type": "text_input",
+    "props": { "name": "debug_path", "label": "Debug Path", "value": "" },
+    "visible_when": { "field": "debug_enabled", "value": true }
+}
+```
+
+With `fallback_text`:
+
+```json
+{
+    "type": "future_widget",
+    "props": { ... },
+    "fallback_text": "Upgrade your frontend to see this widget."
+}
+```
+
+#### Compact Serialization Rules
+
+The Python `to_dict()` methods follow these rules to minimize payload size:
+
+| Field           | Omitted when                             |
+| --------------- | ---------------------------------------- |
+| `children`      | `None` or empty list                     |
+| `fallback_text` | `None`                                   |
+| `visible_when`  | `None`                                   |
+| `collapsible`   | `False` (Card)                           |
+| `collapsed`     | `False` or `collapsible=False` (Card)    |
+| `variant`       | `"text"` (TableColumn)                   |
+| `style`         | `"secondary"` (TableAction)              |
+| `confirm`       | `False` (TableAction, Button)            |
+| `params`        | `None` or empty (Button, TableAction)    |
+| `icon`          | `None` (Button, Tab)                     |
+| `disabled`      | `False` (Button, Form, inputs)           |
+| `help_text`     | `None` (all form inputs)                 |
+| `operator`      | `"eq"` (visible_when — default operator) |
+
+#### Complete Allowed Types
+
+```
+heading, text, status_badge, key_value, table, button,
+card, row, column, alert, progress, markdown,
+tabs, form, text_input, textarea, number_input, select, toggle,
+modal
+```
+
+Total: **20 widget types**.
+
+---
+
+### Colors, Styles & Constants
+
+#### Color Values
+
+All color props (`StatusBadge.color`, `KVItem.color`, `Text.color`,
+`Progress.color`, badge cells in `Table`) accept:
+
+| Value      | Semantic | CSS Effect                  |
+| ---------- | -------- | --------------------------- |
+| `"green"`  | Success  | Green badge/text/bar        |
+| `"red"`    | Error    | Red badge/text/bar          |
+| `"yellow"` | Warning  | Yellow/amber badge/text/bar |
+| `"blue"`   | Accent   | Blue/accent badge/text/bar  |
+| `"gray"`   | Neutral  | Gray/muted badge/text/bar   |
+
+Invalid colors raise `ValueError` on the Python side.
+
+#### Button Styles
+
+Used by `Button.style`, `Form.submit_style`, `Modal.trigger_style`,
+and `TableAction.style`:
+
+| Value         | Appearance                                |
+| ------------- | ----------------------------------------- |
+| `"primary"`   | Accent-colored background, crust text     |
+| `"secondary"` | Surface background, normal text (default) |
+| `"danger"`    | Red/error background, crust text          |
+
+Invalid styles raise `ValueError`.
+
+#### Alert Severities
+
+| Value       | Appearance                 |
+| ----------- | -------------------------- |
+| `"info"`    | Accent/blue tint (default) |
+| `"warning"` | Yellow/amber tint          |
+| `"error"`   | Red tint                   |
+| `"success"` | Green tint                 |
+
+#### Modal Sizes
+
+| Value  | CSS Class   | Max Width |
+| ------ | ----------- | --------- |
+| `"sm"` | `max-w-sm`  | 384px     |
+| `"md"` | `max-w-lg`  | 512px     |
+| `"lg"` | `max-w-2xl` | 672px     |
+| `"xl"` | `max-w-4xl` | 896px     |
+
+---
+
+### Layout & Composition
+
+Widgets can be arbitrarily nested to build complex UIs:
+
+```python
+Page(title="My Plugin", components=[
+    Tabs(tabs=[
+        Tab(label="Overview", children=[
+            Card(title="Status", children=[
+                Row(children=[
+                    StatusBadge(label="Running", color="green"),
+                    Button("Restart", action="restart", style="danger"),
+                ]),
+                KeyValue(items=[...]),
+            ]),
+            Alert(message="All systems operational.", severity="success"),
+        ]),
+        Tab(label="Devices", children=[
+            Table(columns=[...], rows=[
+                {
+                    ...,
+                    "actions": [
+                        # Each row can open a Modal
+                    ],
+                },
+            ]),
+            # Device modals (one per device)
+            Modal(title="Device Settings", trigger_label="Configure", children=[
+                Tabs(tabs=[                  # Nested tabs inside a modal
+                    Tab(label="General", children=[
+                        Form(action="save_device", children=[...]),
+                    ]),
+                    Tab(label="Audio", children=[
+                        Form(action="save_device", children=[...]),
+                    ]),
+                ]),
+            ]),
+        ]),
+    ]),
+])
+```
+
+---
+
+### Form System
+
+#### How Forms Collect Values
+
+1. `Form` creates a Svelte context (`formContext`).
+2. Each child input widget (`TextInput`, `Select`, etc.) registers
+   its current value via `formContext.setValue(name, value)`.
+3. On submit, the form collects all registered values into a `params` dict.
+4. The dict is POSTed to `POST /api/plugins/{id}/actions/{action}`.
+
+#### Dirty Tracking
+
+The form snapshots initial values after all children register. Any
+change marks the form as "dirty". The submit button is disabled until
+dirty. After successful submission, the snapshot is updated and dirty
+state resets.
+
+#### Form-Level vs Input-Level Disabled
+
+- `Form(disabled=True)` → disables **all** child inputs and the submit button.
+- `TextInput(disabled=True)` → disables only that specific input.
+- Both can be combined: form-level disabled overrides individual settings.
+
+#### Validation
+
+Validation runs on the **frontend** (on blur / touched state):
+
+- `required` fields must be non-empty.
+- `pattern` (TextInput) is checked via `new RegExp(pattern)`.
+- `min`/`max` (NumberInput) are checked against the current value.
+- `maxlength` (Textarea) prevents exceeding the limit.
+
+Validation errors are shown as red text below the field. They do not
+prevent form submission — backend validation is the authoritative check.
+
+---
 
 ### Conditional Rendering (`visible_when`)
 
@@ -1809,21 +2949,27 @@ Select(
 
 The `Select` above is only rendered when the `debug_enabled` toggle is `True`.
 
+#### The `.when()` Method
+
+```python
+.when(field: str, value: Any, operator: str = "eq") -> self
+```
+
+Returns `self` for chaining. Calling `.when()` multiple times on the same
+component **replaces** the previous condition (last call wins).
+
 #### Operators
 
-By default `.when()` uses equality (`eq`). You can pass an `operator` argument
-to use a different comparison:
-
-| Operator | Meaning | Example |
-|----------|---------|---------|
-| `eq` | Equal (default) | `.when("mode", "hardware")` |
-| `ne` | Not equal | `.when("mode", "disabled", operator="ne")` |
-| `gt` | Greater than | `.when("port", 1024, operator="gt")` |
-| `lt` | Less than | `.when("volume", 10, operator="lt")` |
-| `gte` | Greater than or equal | `.when("level", 5, operator="gte")` |
-| `lte` | Less than or equal | `.when("level", 100, operator="lte")` |
-| `in` | Value is in list | `.when("codec", ["aac", "alac"], operator="in")` |
-| `not_in` | Value is not in list | `.when("codec", ["pcm", "wav"], operator="not_in")` |
+| Operator | Meaning               | Example                                             |
+| -------- | --------------------- | --------------------------------------------------- |
+| `eq`     | Equal (default)       | `.when("mode", "hardware")`                         |
+| `ne`     | Not equal             | `.when("mode", "disabled", operator="ne")`          |
+| `gt`     | Greater than          | `.when("port", 1024, operator="gt")`                |
+| `lt`     | Less than             | `.when("volume", 10, operator="lt")`                |
+| `gte`    | Greater than or equal | `.when("level", 5, operator="gte")`                 |
+| `lte`    | Less than or equal    | `.when("level", 100, operator="lte")`               |
+| `in`     | Value is in list      | `.when("codec", ["aac", "alac"], operator="in")`    |
+| `not_in` | Value is not in list  | `.when("codec", ["pcm", "wav"], operator="not_in")` |
 
 ```python
 # Show a warning when port is below 1024
@@ -1833,122 +2979,325 @@ Alert(message="Privileged port!", severity="warning").when("port", 1024, operato
 Text("Lossy codec selected").when("codec", ["aac", "mp3"], operator="in"),
 ```
 
-#### Behaviour Notes
+#### Wire Format
 
-- `.when()` returns `self`, so it is chainable.
-- Calling `.when()` multiple times on the same component replaces the previous
-  condition (last call wins).
-- Outside a `Form`, `visible_when` is silently ignored — the component is
-  always visible.
-- When `operator` is `"eq"` (the default), the `operator` key is omitted from
-  the serialised JSON to keep payloads compact.
-- The frontend evaluates conditions reactively: changing a form field
-  immediately shows/hides dependent components.
-
-### KeyValue Usage
-
-```python
-KeyValue(items=[
-    KVItem("Status", "Active", color="green"),
-    KVItem("Binary", "/usr/bin/squeeze2raop"),
-    KVItem("Server", "192.168.1.1:9000"),
-])
+```json
+{
+    "type": "select",
+    "props": { ... },
+    "visible_when": {
+        "field": "debug_enabled",
+        "value": true
+    }
+}
 ```
 
-### Modal Usage
+When `operator` is `"eq"` (the default), the `operator` key is omitted to
+keep payloads compact:
+
+```json
+// operator="ne" — explicitly included
+"visible_when": { "field": "mode", "value": "disabled", "operator": "ne" }
+
+// operator="eq" — omitted (default)
+"visible_when": { "field": "mode", "value": "hardware" }
+```
+
+#### Behaviour Notes
+
+- Outside a `Form`, `visible_when` is silently ignored — the component is
+  always visible.
+- The frontend evaluates conditions reactively: changing a form field
+  immediately shows/hides dependent components (no roundtrip).
+- Unknown operators cause the frontend to show the component (fail-open).
+
+---
+
+### Modal Dialogs
+
+See the [Modal widget reference](#modal) above for constructor details.
+
+#### Usage Patterns
+
+**Pattern 1: Per-row modal (device configuration)**
+
+Generate one modal per table row by building them in a loop:
 
 ```python
-from resonance.ui import Modal, Form, TextInput, Select, SelectOption, KeyValue, KVItem
-
-Modal(
-    title="Device Settings — Living Room",
-    trigger_label="Settings: Living Room",
-    trigger_style="secondary",
-    trigger_icon="settings",
-    size="md",
-    children=[
-        Form(
-            action="update_device",
-            submit_label="Save Device Settings",
+device_modals = []
+for device in devices:
+    device_modals.append(
+        Modal(
+            title=f"Settings — {device.name}",
+            trigger_label=f"Settings: {device.name}",
+            size="lg",
             children=[
-                TextInput(
-                    name="name",
-                    label="Display Name",
-                    value="Living Room",
-                    required=True,
-                ),
-                Select(
-                    name="volume_mode",
-                    label="Volume Mode",
-                    value="2",
-                    options=[
-                        SelectOption(value="2", label="Hardware"),
-                        SelectOption(value="1", label="Software"),
-                        SelectOption(value="0", label="Ignored"),
-                    ],
-                ),
-                KeyValue(items=[
-                    KVItem("MAC Address", "aa:bb:cc:dd:ee:ff"),
-                    KVItem("Enabled", "Yes", color="green"),
+                Form(action="save_device_settings", children=[
+                    TextInput(name="name", label="Name", value=device.name),
+                    # Hidden identifier
+                    TextInput(name="udn", label="", value=device.udn,
+                              disabled=True),
                 ]),
             ],
-        ),
+        )
+    )
+```
+
+**Pattern 2: Global modal (add new item)**
+
+```python
+Modal(
+    title="Add New Source",
+    trigger_label="Add Source",
+    trigger_style="primary",
+    size="md",
+    children=[
+        Form(action="add_source", submit_label="Add", children=[
+            TextInput(name="url", label="Stream URL", required=True),
+            TextInput(name="name", label="Display Name", required=True),
+        ]),
     ],
 )
 ```
 
-The modal renders a button labelled "Settings: Living Room". Clicking it opens
-a dialog overlay containing the form. The form collects `name` and
-`volume_mode` values and submits them to `handle_action("update_device", params)`.
-Clicking the backdrop or pressing Escape closes the modal.
+---
 
-### Action Handler Details
+### Action Handler Protocol
 
-The `handle_action()` function receives:
-- `action` — the string from `Button(action="...")` or `Form(action="...")`
-- `params` — the dict from `Button(params={...})`, the merged row params from
-  `TableAction`, or the collected form input values from a `Form` submission.
-  Defaults to `{}` if none.
-
-It must return a `dict`. Special keys in the return value:
-- `{"message": "..."}` — shown as a success toast notification in the UI
-- `{"error": "..."}` — indicates failure (HTTP 500 if raised as exception)
-- `{"success": True}` — silent success (no toast)
-
-### Page Envelope
-
-The `Page` object wraps the component tree:
+#### Handler Signature
 
 ```python
-Page(
-    title="My Plugin",          # Page heading (required)
-    icon="star",                # Lucide icon name (optional)
-    refresh_interval=10,        # Auto-poll interval in seconds (0 = off)
-    components=[...],           # List of UIComponent widgets
-)
+async def handle_action(action: str, params: dict) -> dict:
 ```
 
-### REST Endpoints
+| Parameter | Type   | Source                                                              |
+| --------- | ------ | ------------------------------------------------------------------- |
+| `action`  | `str`  | From `Button(action="...")`, `Form(action="...")`, or `TableAction` |
+| `params`  | `dict` | Merged from button params, table row params, or form input values   |
 
-These are automatically available for any plugin with `[ui] enabled = true`:
+#### Return Value Protocol
 
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/plugins/ui-registry` | GET | Sidebar entries (all UI-enabled plugins) |
-| `/api/plugins/{plugin_id}/ui` | GET | Full UI JSON schema for one plugin |
-| `/api/plugins/{plugin_id}/actions/{action}` | POST | Dispatch a button action |
+The handler must return a `dict`. Special keys control frontend behaviour:
 
-### Security
+| Return Value            | Effect                                          |
+| ----------------------- | ----------------------------------------------- |
+| `{"message": "Saved!"}` | Success toast notification in the UI            |
+| `{"error": "Failed!"}`  | (In dict) Plugin-level error, still HTTP 200    |
+| `{"success": True}`     | Silent success — no toast, UI refreshes via SSE |
+| Raised `Exception`      | HTTP 500, error toast with exception message    |
 
-- **No plugin JavaScript runs in the browser.** Plugins only provide data.
-- Event handler props (e.g. `onclick`) are rejected during validation.
-- URL props (`href`, `src`, `url`) must use `http:`, `https:`, or `mailto:` schemes.
-  `javascript:` and `data:` URLs are blocked.
-- The frontend never uses `{@html}` on plugin-provided content.
+**Important:** After every action dispatch, the server automatically calls
+`ctx.notify_ui_update()`. This means the frontend will re-fetch the UI
+via SSE — you do not need to call `notify_ui_update()` manually from
+within `handle_action()` (but it's harmless to do so).
+
+#### Handler Pattern
+
+```python
+async def handle_action(action: str, params: dict) -> dict:
+    match action:
+        case "activate":
+            await bridge.start()
+            return {"message": "Bridge activated"}
+
+        case "save_settings":
+            ctx.set_settings(params)
+            return {"message": "Settings saved"}
+
+        case "delete_device":
+            udn = params.get("udn")
+            if not udn:
+                return {"error": "Missing device ID"}
+            await bridge.delete_device(udn)
+            return {"message": f"Device deleted"}
+
+        case "update_device":
+            # From inline table edit or modal form
+            udn = params.get("udn")
+            name = params.get("name")
+            await bridge.rename_device(udn, name)
+            return {"message": f"Device renamed to {name}"}
+
+        case _:
+            return {"error": f"Unknown action: {action}"}
+```
+
+---
+
+### REST Endpoints & SSE
+
+These endpoints are automatically available for any plugin with
+`[ui] enabled = true` in its manifest.
+
+| Endpoint                                    | Method | Content-Type        | Description                              |
+| ------------------------------------------- | ------ | ------------------- | ---------------------------------------- |
+| `/api/plugins/ui-registry`                  | `GET`  | `application/json`  | Sidebar entries (all UI-enabled plugins) |
+| `/api/plugins/{plugin_id}/ui`               | `GET`  | `application/json`  | Full UI JSON schema for one plugin       |
+| `/api/plugins/{plugin_id}/actions/{action}` | `POST` | `application/json`  | Dispatch a button/form action            |
+| `/api/plugins/{plugin_id}/events`           | `GET`  | `text/event-stream` | SSE stream for live UI updates           |
+
+#### UI Registry Response
+
+```json
+[
+    {
+        "id": "raopbridge",
+        "label": "AirPlay",
+        "icon": "cast",
+        "path": "/plugins/raopbridge"
+    }
+]
+```
+
+#### UI Schema Response
+
+See [Wire Format Specification](#wire-format-specification) above.
+
+#### Action Request / Response
+
+**Request:**
+
+```
+POST /api/plugins/raopbridge/actions/activate
+Content-Type: application/json
+
+{"force": true}
+```
+
+**Success response (HTTP 200):**
+
+```json
+{ "message": "Bridge activated" }
+```
+
+**Plugin error (HTTP 200 — error is in the dict, not the status code):**
+
+```json
+{ "error": "Binary not found" }
+```
+
+**Server error (HTTP 500):**
+
+```json
+{ "detail": "Action failed: FileNotFoundError(...)" }
+```
+
+#### SSE Protocol
+
+The `/events` endpoint sends Server-Sent Events. Each event is a JSON line:
+
+```
+data: {"event": "ui_refresh", "revision": 42}
+
+```
+
+- **Keep-alive:** If no update occurs within ~25 seconds, a comment is sent:
+
+    ```
+    : keepalive
+
+    ```
+
+- **Reconnection:** The frontend automatically reconnects with exponential
+  backoff (up to 3 retries), then falls back to polling.
+- **Trigger:** Call `ctx.notify_ui_update()` from your plugin to send an
+  event. This is also called automatically after every action dispatch.
+
+---
+
+### Error Responses
+
+| Scenario                     | HTTP Status | Response Body                                      |
+| ---------------------------- | ----------- | -------------------------------------------------- |
+| Plugin not found             | 404         | `{"detail": "Plugin not found: xyz"}`              |
+| Plugin not started           | 503         | `{"detail": "Plugin not started: xyz"}`            |
+| Plugin has no UI handler     | 404         | `{"detail": "Plugin has no UI handler: xyz"}`      |
+| Plugin has no action handler | 404         | `{"detail": "Plugin has no action handler: xyz"}`  |
+| `get_ui()` raises exception  | 500         | `{"detail": "Plugin UI handler error"}`            |
+| `handle_action()` raises     | 500         | `{"detail": "Action failed: <exception message>"}` |
+| Invalid/missing request body | —           | Body defaults to `{}` (no error)                   |
+| Non-dict return from handler | —           | Silently converted to `{"success": true}`          |
+
+---
+
+### Schema Versioning
+
+The wire format includes a `schema_version` field (currently `"1.0"`).
+
+**Current guarantees:**
+
+- `schema_version` is set from `SCHEMA_VERSION` in `resonance/ui/__init__.py`.
+- The frontend does not currently enforce schema version checks.
+- Backward compatibility is maintained through compact serialization rules:
+  new optional fields are omitted when not set, so older frontends ignore them.
+
+**Forward compatibility (planned):**
+
+- New widget types are handled gracefully: the frontend renders an
+  "Unknown widget" box with `fallback_text` if provided.
+- New props on existing widgets are ignored by older frontends (Svelte
+  ignores unknown props).
+- Breaking changes to existing widget serialization would require a
+  `schema_version` bump and frontend migration.
+
+**Migration policy:**
+
+| Change Type          | Schema Version Impact | Example                                |
+| -------------------- | --------------------- | -------------------------------------- |
+| New widget type      | None (additive)       | Adding `chart` widget                  |
+| New optional prop    | None (additive)       | Adding `help_text` to form inputs      |
+| Rename existing prop | Major bump            | Renaming `label` to `text` on Button   |
+| Remove existing prop | Major bump            | Removing `fallback_text`               |
+| Change prop type     | Major bump            | Changing `value` from string to object |
+
+---
+
+### Security Model
+
+The SDUI system uses **security by construction** — the architecture
+makes entire categories of vulnerabilities impossible:
+
+1. **No plugin JavaScript runs in the browser.** Plugins only provide
+   declarative JSON data. The frontend has a fixed set of Svelte
+   components that render this data.
+
+2. **Event handler props are rejected.** Any prop starting with `on`
+   (e.g. `onclick`, `onerror`) raises `ValueError` during component
+   construction:
+
+    ```python
+    UIComponent(type="text", props={"onclick": "alert(1)"})
+    # → ValueError: Event handler props are not allowed: 'onclick'
+    ```
+
+3. **URL schemes are restricted.** Props named `href`, `src`, or `url`
+   must use `http:`, `https:`, or `mailto:` schemes. `javascript:` and
+   `data:` URLs are blocked:
+
+    ```python
+    UIComponent(type="text", props={"href": "javascript:alert(1)"})
+    # → ValueError: Invalid URL scheme in 'javascript:alert(1)'
+    ```
+
+4. **No `{@html}` on raw plugin strings.** The frontend never uses Svelte's
+   `{@html}` directive on plugin-provided content directly. All text is
+   rendered as text nodes, preventing XSS even if a plugin provides HTML
+   strings. The one exception is the `Markdown` widget, which uses `{@html}`
+   on the **output of the custom `marked` renderer** — not on the raw plugin
+   string. The renderer has raw HTML disabled (`marked` escapes all HTML tags
+   in the source to `&lt;`/`&gt;`), only emits known-safe elements, escapes
+   all attribute values, and validates URLs against an allowlist of safe
+   schemes. See the [Markdown widget reference](#markdown) for details.
+
+5. **CSP headers.** The server sets Content-Security-Policy headers to
+   further restrict script execution.
+
+---
 
 ### Sidebar Icon
 
-The sidebar icon is resolved in this order:
+The sidebar icon for a plugin is resolved in this order:
+
 1. `[ui].sidebar_icon` from `plugin.toml`
 2. `[plugin].icon` from `plugin.toml`
 3. Fallback: `"plug"`
@@ -1956,49 +3305,125 @@ The sidebar icon is resolved in this order:
 Supported icon names are any [Lucide](https://lucide.dev/icons/) icon name
 in kebab-case (e.g. `"cast"`, `"radio"`, `"hard-drive"`, `"refresh-cw"`).
 
+---
+
 ### Reference Implementation
 
 The `raopbridge` community plugin is the first SDUI consumer. Study its
 implementation for a complete real-world example:
 
-- `resonance-community-plugins-main/plugins/raopbridge/plugin.toml` — `[ui]` section
-- `resonance-community-plugins-main/plugins/raopbridge/__init__.py` — `get_ui()` and `handle_action()`
+- [`plugin.toml`](https://github.com/endegelaende/resonance-community-plugins/tree/main/plugins/raopbridge/plugin.toml) — `[ui]` section
+- [`__init__.py`](https://github.com/endegelaende/resonance-community-plugins/tree/main/plugins/raopbridge/__init__.py) — `get_ui()` and `handle_action()`
 
-It renders a tabbed interface with three tabs:
+It renders a tabbed interface with **five tabs**:
 
-- **Status tab:** Bridge status card with `StatusBadge` + `KeyValue`, control
-  buttons (`Activate` / `Deactivate` / `Restart`).
-- **Devices tab:** A device `Table` with badge columns (enabled status) and
-  row-level `TableAction` buttons (delete device with confirmation).
-- **Settings tab:** An editable `Form` with `Select` (binary selection),
-  `TextInput` (interface, server address), and multiple `Toggle` switches
-  (auto-start, auto-save, logging, debug). The form is disabled while the
-  bridge is active. A read-only `Card` shows configuration file info.
+| Tab          | Widgets Used                                                  | Description                              |
+| ------------ | ------------------------------------------------------------- | ---------------------------------------- |
+| **Status**   | `Card`, `StatusBadge`, `KeyValue`, `Button`, `Row`            | Bridge status + control buttons          |
+| **Devices**  | `Table` (badge + editable + actions), `Modal`, `Tabs`, `Form` | Device list + per-device config modal    |
+| **Settings** | `Form`, `Select`, `TextInput`, `Toggle`, `Card`               | Bridge settings (disabled when active)   |
+| **Advanced** | `Card` (collapsible), `KeyValue`                              | Read-only common options from XML config |
+| **About**    | `Markdown`                                                    | Plugin description + external links      |
 
-Actions dispatch to existing bridge management functions (`save_settings`,
-`delete_device`, `activate`, `deactivate`, `restart`).
+Actions dispatch to bridge management functions (`save_settings`,
+`delete_device`, `activate`, `deactivate`, `restart`, `save_device_settings`).
 
-### Architecture Details
+For a guided walkthrough, see
+[`PLUGIN_CASESTUDY.md`](PLUGIN_CASESTUDY.md).
 
-For the original architecture document including security model, schema
-specification, and design rationale, see the archived planning document
-[`dev/SDUI_ARCHITECTURE.md`](dev/SDUI_ARCHITECTURE.md).
+---
+
+## 20) Plugin Settings & Management API
+
+This section documents the built-in management surface introduced with the
+plugin modernization (phases A-E).
+
+### JSON-RPC Commands
+
+#### `pluginsettings`
+
+| Command                                                   | Purpose                                       |
+| --------------------------------------------------------- | --------------------------------------------- |
+| `["pluginsettings", "getdef", "<plugin>"]`                | Returns only setting definitions              |
+| `["pluginsettings", "get", "<plugin>"]`                   | Returns definitions + current (masked) values |
+| `["pluginsettings", "set", "<plugin>", "key:value", ...]` | Validates, persists, and updates values       |
+
+Notes:
+
+- `set` performs type parsing (`int/float/bool/string/select`) before validation.
+- Secret values are masked in responses.
+- If a changed setting has `restart_required = true`, response includes `restart_required: true`.
+
+#### `pluginmanager`
+
+| Command                                             | Purpose                                         |
+| --------------------------------------------------- | ----------------------------------------------- |
+| `["pluginmanager", "list"]`                         | List installed plugins with state/type metadata |
+| `["pluginmanager", "info", "<plugin>"]`             | One plugin + setting definitions                |
+| `["pluginmanager", "enable", "<plugin>"]`           | Persist state as enabled                        |
+| `["pluginmanager", "disable", "<plugin>"]`          | Persist state as disabled                       |
+| `["pluginmanager", "install", "<url>", "<sha256>"]` | Download and install plugin ZIP                 |
+| `["pluginmanager", "uninstall", "<plugin>"]`        | Uninstall community plugin                      |
+| `["pluginmanager", "repository"]`                   | Fetch repository index + compare with installed |
+| `["pluginmanager", "installrepo", "<plugin>"]`      | Install plugin directly from repository         |
+
+### REST Endpoints
+
+| Endpoint                         | Method | Purpose                                            |
+| -------------------------------- | ------ | -------------------------------------------------- |
+| `/api/plugins`                   | `GET`  | List plugins + `restart_required`                  |
+| `/api/plugins/{name}/settings`   | `GET`  | Get definitions + masked values                    |
+| `/api/plugins/{name}/settings`   | `PUT`  | Update settings with validation                    |
+| `/api/plugins/{name}/enable`     | `POST` | Enable plugin                                      |
+| `/api/plugins/{name}/disable`    | `POST` | Disable plugin                                     |
+| `/api/plugins/install`           | `POST` | Install from ZIP URL + SHA256                      |
+| `/api/plugins/{name}/uninstall`  | `POST` | Uninstall community plugin                         |
+| `/api/plugins/repository`        | `GET`  | List repository plugins (`force_refresh` optional) |
+| `/api/plugins/install-from-repo` | `POST` | Install by repository plugin name                  |
+
+### Settings Storage Format
+
+Per plugin, settings are stored at:
+
+```
+data/plugins/<plugin_name>/settings.json
+```
+
+Payload structure:
+
+```json
+{
+    "_version": 1,
+    "_plugin_version": "1.0.0",
+    "my_setting": "value"
+}
+```
+
+### State Storage Format
+
+Plugin enable/disable states are stored globally at:
+
+```
+data/plugin_states.json
+```
+
+Unknown plugins default to `enabled` for backwards compatibility.
 
 ---
 
 ## Further Reading
 
-| Document | Content |
-|---|---|
-| [`PLUGINS.md`](PLUGINS.md) | General overview for all audiences |
-| [`PLUGIN_TUTORIAL.md`](PLUGIN_TUTORIAL.md) | Step-by-step: Build your own plugin |
-| [`PLUGIN_REPOSITORY.md`](PLUGIN_REPOSITORY.md) | Publishing plugins and repository index format |
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Resonance system architecture |
-| [`dev/SDUI_ARCHITECTURE.md`](dev/SDUI_ARCHITECTURE.md) | SDUI architecture deep-dive (archived planning document) |
-| `plugins/radio/` | Reference ContentProvider plugin (radio-browser.info, remote streaming) |
-| `plugins/podcast/` | Reference ContentProvider plugin (RSS feeds, subscriptions, resume) |
-| `community-repo/plugins/raopbridge/` | Reference SDUI consumer (AirPlay bridge with UI page) |
+| Document                                                                                                                | Content                                                                             |
+| ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| [`PLUGINS.md`](PLUGINS.md)                                                                                              | General overview for all audiences                                                  |
+| [`PLUGIN_TUTORIAL.md`](PLUGIN_TUTORIAL.md)                                                                              | Step-by-step: Build your own plugin                                                 |
+| [`PLUGIN_CASESTUDY.md`](PLUGIN_CASESTUDY.md)                                                                            | Case study: raopbridge migration from Svelte to SDUI (before/after, mapping tables) |
+| [Community Plugins Repository](https://github.com/endegelaende/resonance-community-plugins)                             | Publishing plugins and repository index format                                      |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md)                                                                                    | Resonance system architecture                                                       |
+| `plugins/radio/`                                                                                                        | Reference ContentProvider plugin (radio-browser.info, remote streaming)             |
+| `plugins/podcast/`                                                                                                      | Reference ContentProvider plugin (RSS feeds, subscriptions, resume)                 |
+| [raopbridge community plugin](https://github.com/endegelaende/resonance-community-plugins/tree/main/plugins/raopbridge) | Reference SDUI consumer (AirPlay bridge with UI page)                               |
 
 ---
 
-*Last updated: June 2025 (SDUI documentation added in §19)*
+_Last updated: March 2026_

@@ -33,11 +33,11 @@ A Python reimplementation of the Logitech Media Server (LMS/SlimServer).
 
 ### Mediator Overview
 
-| Mediator | UI | Protocol |
-|----------|-----|----------|
-| **Squeezelite** | Speaker | Slimproto + HTTP Audio |
-| **Web Layer** | Browser | HTTP + JSON-RPC |
-| **Mobile Apps** | Smartphone | JSON-RPC + Cometd |
+| Mediator        | UI         | Protocol               |
+| --------------- | ---------- | ---------------------- |
+| **Squeezelite** | Speaker    | Slimproto + HTTP Audio |
+| **Web Layer**   | Browser    | HTTP + JSON-RPC        |
+| **Mobile Apps** | Smartphone | JSON-RPC + Cometd      |
 
 ---
 
@@ -135,10 +135,10 @@ resonance-server/
 
 ## 📡 Protocols & Ports
 
-| Port | Protocol | Purpose |
-|------|----------|---------|
-| **3483** | Slimproto (TCP) | Binary player control |
-| **9000** | HTTP | Streaming + JSON-RPC + Web UI |
+| Port     | Protocol         | Purpose                       |
+| -------- | ---------------- | ----------------------------- |
+| **3483** | Slimproto (TCP)  | Binary player control         |
+| **9000** | HTTP             | Streaming + JSON-RPC + Web UI |
 | **9090** | Telnet CLI (TCP) | LMS CLI commands (text-based) |
 
 ### Slimproto (Port 3483)
@@ -146,6 +146,7 @@ resonance-server/
 Binary TCP protocol between server and player.
 
 **Message format:**
+
 ```
 ┌──────────────┬──────────────┬─────────────────┐
 │ Command      │ Length       │ Payload         │
@@ -155,32 +156,32 @@ Binary TCP protocol between server and player.
 
 **Key messages:**
 
-| Tag | Direction | Description |
-|-----|-----------|-------------|
-| `HELO` | Client→Server | Handshake, device info |
-| `STAT` | Client→Server | Heartbeat, status |
+| Tag    | Direction     | Description                       |
+| ------ | ------------- | --------------------------------- |
+| `HELO` | Client→Server | Handshake, device info            |
+| `STAT` | Client→Server | Heartbeat, status                 |
 | `strm` | Server→Client | Stream control (start/pause/stop) |
-| `audg` | Server→Client | Volume |
+| `audg` | Server→Client | Volume                            |
 
 **STM event codes (in STAT):**
 
-| Code | Meaning | Action |
-|------|---------|--------|
-| `STMs` | Track started | → PLAYING |
-| `STMp` | Paused | → PAUSED |
-| `STMr` | Resumed | → PLAYING |
-| `STMf` | Flushed | → **No state change!** |
-| `STMu` | Underrun | → STOPPED + track finished |
+| Code   | Meaning       | Action                     |
+| ------ | ------------- | -------------------------- |
+| `STMs` | Track started | → PLAYING                  |
+| `STMp` | Paused        | → PAUSED                   |
+| `STMr` | Resumed       | → PLAYING                  |
+| `STMf` | Flushed       | → **No state change!**     |
+| `STMu` | Underrun      | → STOPPED + track finished |
 
 ### HTTP (Port 9000)
 
-| Endpoint | Purpose |
-|----------|---------|
-| `POST /jsonrpc.js` | JSON-RPC API (LMS-compatible) |
-| `GET /stream.mp3` | Audio streaming |
-| `POST /cometd` | Real-time updates (long-polling) |
-| `GET /api/*` | REST API |
-| `GET /api/artwork/*` | Cover art |
+| Endpoint             | Purpose                          |
+| -------------------- | -------------------------------- |
+| `POST /jsonrpc.js`   | JSON-RPC API (LMS-compatible)    |
+| `GET /stream.mp3`    | Audio streaming                  |
+| `POST /cometd`       | Real-time updates (long-polling) |
+| `GET /api/*`         | REST API                         |
+| `GET /api/artwork/*` | Cover art                        |
 
 ---
 
@@ -225,12 +226,12 @@ the server acts as a transparent proxy:
 
 **Supported scenarios:**
 
-| Source | Example | Proxy needed? |
-|--------|---------|---------------|
-| Internet Radio | Shoutcast/Icecast streams | Yes (HTTPS, ICY metadata) |
-| Podcasts | RSS feed → episode URL | Yes (HTTPS) |
-| Streaming services | API → stream URL | Yes (HTTPS + auth) |
-| Local files | `/music/song.mp3` | No (direct/transcode) |
+| Source             | Example                   | Proxy needed?             |
+| ------------------ | ------------------------- | ------------------------- |
+| Internet Radio     | Shoutcast/Icecast streams | Yes (HTTPS, ICY metadata) |
+| Podcasts           | RSS feed → episode URL    | Yes (HTTPS)               |
+| Streaming services | API → stream URL          | Yes (HTTPS + auth)        |
+| Local files        | `/music/song.mp3`         | No (direct/transcode)     |
 
 ### Transcoding
 
@@ -243,11 +244,11 @@ the server acts as a transparent proxy:
 
 **Decision logic:** `streaming/policy.py`
 
-| Format | Action |
-|--------|--------|
-| MP3, FLAC, OGG, WAV | Direct streaming |
-| M4A, M4B, AAC | Transcode via faad→mp3 (rule-dependent, possibly flac) |
-| Remote URL (HTTP/HTTPS) | Proxy streaming via httpx |
+| Format                  | Action                                                 |
+| ----------------------- | ------------------------------------------------------ |
+| MP3, FLAC, OGG, WAV     | Direct streaming                                       |
+| M4A, M4B, AAC           | Transcode via faad→mp3 (rule-dependent, possibly flac) |
+| Remote URL (HTTP/HTTPS) | Proxy streaming via httpx                              |
 
 ### Seek Coordination
 
@@ -286,13 +287,13 @@ Resonance uses a data-driven approach instead: `player/capabilities.py`.
 
 LMS uses a logarithmic dual-ramp curve. Parameters differ by device:
 
-| Device | Range | Step Point | Step Fraction | Description |
-|--------|-------|------------|---------------|-------------|
-| Squeezebox2/3 | -50 dB | -1 | 1.0 | Single ramp |
-| Transporter | -50 dB | -1 | 1.0 | Inherits from SB2 |
-| Receiver | -50 dB | -1 | 1.0 | Inherits from SB2 |
-| **Boom** | -74 dB | 25 | 0.5 | Dual ramp (built-in speaker) |
-| **SqueezePlay** | -74 dB | 25 | 0.5 | Radio/Touch/Controller, same as Boom |
+| Device          | Range  | Step Point | Step Fraction | Description                          |
+| --------------- | ------ | ---------- | ------------- | ------------------------------------ |
+| Squeezebox2/3   | -50 dB | -1         | 1.0           | Single ramp                          |
+| Transporter     | -50 dB | -1         | 1.0           | Inherits from SB2                    |
+| Receiver        | -50 dB | -1         | 1.0           | Inherits from SB2                    |
+| **Boom**        | -74 dB | 25         | 0.5           | Dual ramp (built-in speaker)         |
+| **SqueezePlay** | -74 dB | 25         | 0.5           | Radio/Touch/Controller, same as Boom |
 
 The Boom/SqueezePlay curve shifts 50% volume to the 25% position,
 giving finer control at low volumes (quiet at night vs. loud during the day).
@@ -301,14 +302,14 @@ giving finer control at low volumes (quiet at night vs. loud during the day).
 
 Each device declares which features it supports:
 
-| Flag | Boom | SB2/SB3 | Transporter | SqueezePlay |
-|------|------|---------|-------------|-------------|
-| `has_line_in` | Yes | No | No | No |
-| `has_digital_in` | No | No | Yes | No |
-| `has_balance` | No | Yes | Yes | Yes |
-| `has_bass/treble` | Yes (±23) | No | No | No |
-| `has_stereo_xl` | Yes (0-3) | No | No | No |
-| `can_power_off` | No | Yes | Yes | Yes |
+| Flag              | Boom      | SB2/SB3 | Transporter | SqueezePlay |
+| ----------------- | --------- | ------- | ----------- | ----------- |
+| `has_line_in`     | Yes       | No      | No          | No          |
+| `has_digital_in`  | No        | No      | Yes         | No          |
+| `has_balance`     | No        | Yes     | Yes         | Yes         |
+| `has_bass/treble` | Yes (±23) | No      | No          | No          |
+| `has_stereo_xl`   | Yes (0-3) | No      | No          | No          |
+| `can_power_off`   | No        | Yes     | Yes         | Yes         |
 
 ### Usage
 
@@ -358,12 +359,9 @@ Browser/App Request
 
 ```json
 {
-  "id": 1,
-  "method": "slim.request",
-  "params": [
-    "aa:bb:cc:dd:ee:ff",
-    ["playlist", "play", "/path/to/song.mp3"]
-  ]
+    "id": 1,
+    "method": "slim.request",
+    "params": ["aa:bb:cc:dd:ee:ff", ["playlist", "play", "/path/to/song.mp3"]]
 }
 ```
 
@@ -425,8 +423,8 @@ on `/`.
 ### Dev / Build / Prod Mounting
 
 - **Dev:** `scripts/dev.ps1` starts
-  - Backend (FastAPI) on **:9000**
-  - Vite dev server on **:5173** (with proxy to JSON-RPC/HTTP API)
+    - Backend (FastAPI) on **:9000**
+    - Vite dev server on **:5173** (with proxy to JSON-RPC/HTTP API)
 - **Build:** `cd web-ui && npm run build` produces the static build output in `web-ui/build/`.
 - **Prod:** The backend mounts `web-ui/build/` as `StaticFiles(..., html=True)` on `/`
   (SPA fallback to `index.html`).
@@ -468,18 +466,18 @@ and the frontend renders it generically via a recursive component renderer.
 
 ## 🔧 Technology Stack
 
-| Component | Technology |
-|-----------|------------|
-| **Runtime** | Python 3.11+ (asyncio) |
-| **Web Framework** | FastAPI |
-| **Web UI** | Svelte 5 SPA (`web-ui/`) + Tailwind v4 |
-| **Plugin UI** | Server-Driven UI (SDUI) — declarative Python → JSON → Svelte rendering |
-| **Database** | SQLite + aiosqlite |
-| **Audio Metadata** | mutagen |
-| **Transcoding** | faad, flac, lame, sox |
-| **HTTP Client** | httpx (remote URL proxy) |
-| **Security** | CSP headers middleware, X-Frame-Options, X-Content-Type-Options |
-| **Testing** | pytest (2853 tests) |
+| Component          | Technology                                                             |
+| ------------------ | ---------------------------------------------------------------------- |
+| **Runtime**        | Python 3.11+ (asyncio)                                                 |
+| **Web Framework**  | FastAPI                                                                |
+| **Web UI**         | Svelte 5 SPA (`web-ui/`) + Tailwind v4                                 |
+| **Plugin UI**      | Server-Driven UI (SDUI) — declarative Python → JSON → Svelte rendering |
+| **Database**       | SQLite + aiosqlite                                                     |
+| **Audio Metadata** | mutagen                                                                |
+| **Transcoding**    | faad, flac, lame, sox                                                  |
+| **HTTP Client**    | httpx (remote URL proxy)                                               |
+| **Security**       | CSP headers middleware, X-Frame-Options, X-Content-Type-Options        |
+| **Testing**        | pytest (2853 tests)                                                    |
 
 ---
 
@@ -488,10 +486,10 @@ and the frontend renders it generically via a recursive component renderer.
 → [PLUGINS.md](./PLUGINS.md) — Plugin system overview (incl. Content Providers, SDUI)
 → [PLUGIN_API.md](./PLUGIN_API.md) — Plugin API reference (incl. §19 SDUI, ContentProvider ABC)
 → [PLUGIN_TUTORIAL.md](./PLUGIN_TUTORIAL.md) — Step-by-step plugin tutorial
-→ [PLUGIN_REPOSITORY.md](./PLUGIN_REPOSITORY.md) — Community plugin publishing guide
 → [CHANGELOG.md](./CHANGELOG.md) — Change log
-→ [HARDWARE_TESTING.md](./HARDWARE_TESTING.md) — Hardware testing runbook (bitmap displays, `RESONANCE_DISPLAY=1`)
+→ [PLUGIN_CASESTUDY.md](./PLUGIN_CASESTUDY.md) — Plugin case study: raopbridge deep dive
+→ [Community Plugins](https://github.com/endegelaende/resonance-community-plugins) — Community plugin repository and publishing guide
 
 ---
 
-*Last updated: June 2025 (SDUI architecture section added)*
+_Last updated: March 2026_

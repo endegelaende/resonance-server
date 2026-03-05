@@ -1,26 +1,68 @@
 # Plugin Tutorial — Build Your Own Plugin from Scratch
 
-This tutorial walks you step by step through developing your own
-Resonance plugin. By the end you will have a working plugin with
-a command, menu entry, events, persistence, and tests.
+## Welcome!
 
-Prerequisites:
-- Python 3.11+ and basic `asyncio` knowledge
-- Resonance server running locally (`python -m resonance` or `scripts/dev.ps1`)
-- API reference if needed: → [`PLUGIN_API.md`](PLUGIN_API.md)
-- General overview: → [`PLUGINS.md`](PLUGINS.md)
+You can extend Resonance with plugins — and we mean _really_ extend it.
+Plugins can add new audio sources, build full-featured management UIs,
+control external hardware, or simply track what you are listening to.
+All in Python, all with a clean API, and all without touching the
+server core.
+
+Here are some things plugins already do today:
+
+- **Internet Radio** — browse and search thousands of stations
+  (`plugins/radio/`)
+- **Podcasts** — subscribe, browse episodes, resume playback
+  (`plugins/podcast/`)
+- **Favorites** — hierarchical folders, LMS-compatible
+  (`plugins/favorites/`)
+- **AirPlay Bridge** — turn AirPlay speakers into Squeezebox players,
+  with a full tabbed UI, device management, and live status updates
+  ([`raopbridge`](https://github.com/endegelaende/resonance-community-plugins/tree/main/plugins/raopbridge)
+  — contributed by community member [Pinoatrome](https://github.com/pinoatrome))
+
+The raopbridge plugin is a great example of what a community
+contribution looks like. Pinoatrome ported an entire LMS plugin to
+Python, and his backend code still powers the plugin today. If you
+want to see a complex, real-world plugin in detail, read
+[Build a Real Plugin — The raopbridge Story](PLUGIN_CASESTUDY.md)
+after finishing this tutorial.
+
+**Your plugin idea is welcome too.** Whether it is a small utility or
+an ambitious integration — the plugin system is designed to support it.
+Contributions to Resonance are valued and credited. Every plugin that
+ships today started with someone thinking "I wonder if I could…"
+
+This tutorial will take you from zero to a fully working plugin in
+about 30 minutes. Let's go.
+
+---
+
+## What You Need
+
+- **Python 3.11+** and basic `asyncio` knowledge
+- **Resonance server** running locally (`python -m resonance` or
+  `scripts/dev.ps1`)
+- A text editor
+
+You can always look things up in the
+[API Reference](PLUGIN_API.md) or the
+[Plugin System Overview](PLUGINS.md), but this tutorial is
+self-contained — you will not need them to follow along.
 
 ---
 
 ## What We Are Building: "Now Playing Info"
 
-A plugin that:
+We will build a plugin called **nowplaying** that:
 
-1. Keeps track of which songs are played (event subscription)
-2. Exposes the statistics via JSON-RPC (command)
-3. Shows up in the Jive menu (menu node)
-4. Persists data across server restarts (persistence)
-5. Is fully tested (pytest)
+1. **Listens** to what is playing (event subscription)
+2. **Counts** tracks and keeps a history (business logic)
+3. **Answers questions** via JSON-RPC ("how many tracks played?")
+4. **Shows up** on Squeezebox hardware menus (Jive menu entry)
+5. **Remembers** data across server restarts (persistence)
+6. **Has a web UI page** in the browser (SDUI — optional, shown at the end)
+7. **Is fully tested** (58 pytest tests)
 
 The final file structure looks like this:
 
@@ -58,14 +100,17 @@ min_resonance_version = "0.1.0"
 ```
 
 Rules for the manifest:
+
 - `name` **must** match the directory name
 - `name` and `version` are required fields
 - Everything else is optional
 
 > **Tip:** Start the server now. The log should show:
+>
 > ```
 > INFO  Discovered plugin: nowplaying v0.1.0 (plugins/nowplaying)
 > ```
+>
 > It will fail to load because `__init__.py` does not exist yet —
 > that is expected behavior.
 
@@ -130,7 +175,7 @@ curl -X POST http://localhost:9000/jsonrpc.js \
 Expected response:
 
 ```json
-{"id": 1, "result": {"message": "Now Playing plugin is running!"}}
+{ "id": 1, "result": { "message": "Now Playing plugin is running!" } }
 ```
 
 ---
@@ -234,7 +279,7 @@ async def cmd_stats(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
 ### What Is New?
 
 - **`ctx.subscribe("player.track_started", ...)`** subscribes to the event
-  *with auto-cleanup*. When the plugin is stopped the handler is
+  _with auto-cleanup_. When the plugin is stopped the handler is
   automatically unsubscribed. No manual cleanup needed.
 
 - **`_on_track_started(event)`** is an async event handler. The `event`
@@ -252,7 +297,7 @@ async def cmd_stats(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
 Play a track and then query:
 
 ```json
-{"method": "slim.request", "params": ["-", ["nowplaying.stats"]]}
+{ "method": "slim.request", "params": ["-", ["nowplaying.stats"]] }
 ```
 
 Response:
@@ -263,9 +308,21 @@ Response:
         "total_played": 3,
         "recent_count": 3,
         "recent": [
-            {"player_id": "aa:bb:cc:dd:ee:ff", "timestamp": "2026-02-14T18:30:00Z", "play_number": 1},
-            {"player_id": "aa:bb:cc:dd:ee:ff", "timestamp": "2026-02-14T18:33:12Z", "play_number": 2},
-            {"player_id": "aa:bb:cc:dd:ee:ff", "timestamp": "2026-02-14T18:36:45Z", "play_number": 3}
+            {
+                "player_id": "aa:bb:cc:dd:ee:ff",
+                "timestamp": "2026-02-14T18:30:00Z",
+                "play_number": 1
+            },
+            {
+                "player_id": "aa:bb:cc:dd:ee:ff",
+                "timestamp": "2026-02-14T18:33:12Z",
+                "play_number": 2
+            },
+            {
+                "player_id": "aa:bb:cc:dd:ee:ff",
+                "timestamp": "2026-02-14T18:36:45Z",
+                "play_number": 3
+            }
         ]
     }
 }
@@ -276,6 +333,13 @@ Response:
 ## Step 4: Jive Menu Entry
 
 Now let's make the plugin visible on Squeezebox Touch/Radio/Boom.
+
+> **No Squeezebox hardware?** This step still works — the code runs fine
+> and the menu data is served correctly, you just won't see it on a
+> physical device. The command handler pattern you learn here is the
+> same one used everywhere else in the server. If you prefer, you can
+> skip ahead to [Step 5: Persistence](#step-5-persistence--saving-data)
+> and come back later.
 
 Add the following to `setup()` after the command registration:
 
@@ -486,7 +550,7 @@ class PlayHistory:
         self.save()
 ```
 
-### Update __init__.py
+### Update **init**.py
 
 Now use the store in the plugin. Here is the **complete, final version**
 of `plugins/nowplaying/__init__.py`:
@@ -670,6 +734,18 @@ restart_required = true
 type = "bool"
 label = "Show timestamps in recent list"
 default = true
+
+[settings.display_format]
+type = "string"
+label = "Display format for recent tracks"
+default = "compact"
+
+[settings.max_title_length]
+type = "int"
+label = "Maximum title length (detailed mode)"
+default = 40
+min = 10
+max = 200
 ```
 
 ### 2) Read settings in your plugin code
@@ -697,14 +773,72 @@ if _show_timestamps and entry.get("timestamp"):
 ### 3) Update settings via API
 
 - REST:
-  - `GET /api/plugins/nowplaying/settings`
-  - `PUT /api/plugins/nowplaying/settings` with JSON body, e.g. `{ "max_entries": 500 }`
+    - `GET /api/plugins/nowplaying/settings`
+    - `PUT /api/plugins/nowplaying/settings` with JSON body, e.g. `{ "max_entries": 500 }`
 - JSON-RPC:
-  - `["pluginsettings", "get", "nowplaying"]`
-  - `["pluginsettings", "set", "nowplaying", "max_entries:500"]`
+    - `["pluginsettings", "get", "nowplaying"]`
+    - `["pluginsettings", "set", "nowplaying", "max_entries:500"]`
 
 Settings are validated against the schema and persisted in
 `data/plugins/nowplaying/settings.json`. Secret settings are masked in responses.
+
+### Try It Out
+
+Start the server and query the settings:
+
+```bash
+curl http://localhost:9000/api/plugins/nowplaying/settings
+```
+
+Expected response:
+
+```json
+{
+    "plugin_id": "nowplaying",
+    "settings": {
+        "max_entries": 200,
+        "show_timestamps": true
+    },
+    "definitions": [
+        {
+            "key": "max_entries",
+            "type": "int",
+            "label": "Maximum history entries",
+            "default": 200,
+            "min": 20,
+            "max": 2000,
+            "restart_required": true
+        },
+        {
+            "key": "show_timestamps",
+            "type": "bool",
+            "label": "Show timestamps in recent list",
+            "default": true
+        }
+    ]
+}
+```
+
+Now change a setting:
+
+```bash
+curl -X PUT http://localhost:9000/api/plugins/nowplaying/settings \
+  -H "Content-Type: application/json" \
+  -d '{"show_timestamps": false}'
+```
+
+Query again — `show_timestamps` is now `false`. The value is persisted in
+`data/plugins/nowplaying/settings.json`, so it survives server restarts.
+
+> **What about validation?** Try setting `max_entries` to `5` (below the
+> minimum of 20). The server rejects it with a `400` error and an
+> explanation. Schema validation comes for free from the `plugin.toml`
+> definition — no manual checking needed in your Python code.
+
+> **Note:** We do not add separate tests for settings in Step 7 because
+> settings validation and persistence are handled by the server core,
+> not by our plugin code. Your plugin just calls `ctx.get_setting()` —
+> the framework does the rest.
 
 ---
 
@@ -1141,15 +1275,15 @@ tests/test_nowplaying_plugin.py::TestPlayHistory::test_record_multiple PASSED
 
 ### What the Tests Cover
 
-| Area | Tests |
-|---|---|
-| PlayHistory Store | CRUD, trimming, persistence, corrupt JSON, ordering, tmp cleanup |
-| `cmd_stats` handler | Empty, with data, not initialized, many entries |
-| `cmd_recent` handler | Empty, with data, menu/CLI mode, limit, timestamp, dict params, style |
-| Event handler | Single, multiple, store=None, missing player_id, persistence |
-| Lifecycle | setup/teardown, command/menu/event registration, existing data, ensure_data_dir |
-| Parse helper | String params, dict params, mixed, edge cases, offset |
-| Integration | Record→Query, persistence workflow, empty→filled, full lifecycle |
+| Area                 | Tests                                                                           |
+| -------------------- | ------------------------------------------------------------------------------- |
+| PlayHistory Store    | CRUD, trimming, persistence, corrupt JSON, ordering, tmp cleanup                |
+| `cmd_stats` handler  | Empty, with data, not initialized, many entries                                 |
+| `cmd_recent` handler | Empty, with data, menu/CLI mode, limit, timestamp, dict params, style           |
+| Event handler        | Single, multiple, store=None, missing player_id, persistence                    |
+| Lifecycle            | setup/teardown, command/menu/event registration, existing data, ensure_data_dir |
+| Parse helper         | String params, dict params, mixed, edge cases, offset                           |
+| Integration          | Record→Query, persistence workflow, empty→filled, full lifecycle                |
 
 ---
 
@@ -1169,14 +1303,14 @@ tests/
 └── test_nowplaying_plugin.py   ~810 lines     58 tests
 ```
 
-| Feature | How |
-|---|---|
-| ✅ Count tracks | Event subscription on `player.track_started` |
-| ✅ Query statistics | Command `nowplaying.stats` |
-| ✅ Show recent tracks | Command `nowplaying.recent` (CLI + Jive) |
-| ✅ Visible on device | Menu node "Play Stats" in the home menu |
-| ✅ Persist data | JSON store with atomic write |
-| ✅ Tested | 58 tests: store + commands + events + lifecycle + integration |
+| Feature               | How                                                           |
+| --------------------- | ------------------------------------------------------------- |
+| ✅ Count tracks       | Event subscription on `player.track_started`                  |
+| ✅ Query statistics   | Command `nowplaying.stats`                                    |
+| ✅ Show recent tracks | Command `nowplaying.recent` (CLI + Jive)                      |
+| ✅ Visible on device  | Menu node "Play Stats" in the home menu                       |
+| ✅ Persist data       | JSON store with atomic write                                  |
+| ✅ Tested             | 58 tests: store + commands + events + lifecycle + integration |
 
 ---
 
@@ -1247,8 +1381,14 @@ class MilestoneEvent(BaseEvent):
 async def _on_track_started(event):
     # ... existing logic ...
     if _store.total % 100 == 0:
-        await _event_bus.publish(MilestoneEvent(total=_store.total))
+        await _ctx.event_bus.publish(MilestoneEvent(total=_store.total))
 ```
+
+Here `_ctx` is the `PluginContext` reference saved in `setup()` (see
+the pattern from [Idea 6, Part B](#part-b-settings-form-with-tabs)).
+The `event_bus` attribute gives you direct access to the server's event
+bus for publishing — subscribing should still go through `ctx.subscribe()`
+for automatic cleanup.
 
 Other plugins could then subscribe to `"nowplaying.milestone"`.
 
@@ -1280,7 +1420,13 @@ This is useful for monitoring or debug plugins.
 
 Your plugin can have its own page in the web UI sidebar — no JavaScript
 required. You describe the UI as a Python data structure and the frontend
-renders it automatically.
+renders it automatically. This is one of the most powerful features of
+the plugin system, so we will cover it in two parts:
+
+1. **A read-only status page** — display data, buttons, tables
+2. **A settings form** — text inputs, dropdowns, toggles, conditional fields
+
+#### Part A: Status Page
 
 **1. Add `[ui]` to `plugin.toml`:**
 
@@ -1291,14 +1437,22 @@ sidebar_label = "Now Playing Stats"
 sidebar_icon = "activity"
 ```
 
+This tells the server your plugin has a UI page. The `sidebar_label` is
+what appears in the web UI navigation, and `sidebar_icon` is a
+[Lucide icon](https://lucide.dev/) name.
+
 **2. Write a `get_ui()` function:**
+
+The server calls `get_ui(ctx)` with the plugin's `PluginContext` — the
+same `ctx` you receive in `setup()`. This means you can call
+`ctx.get_setting()`, access `ctx.data_dir`, etc.
 
 ```python
 from resonance.ui import (
     Page, Card, KeyValue, KVItem, StatusBadge, Button, Row, Table, TableColumn,
 )
 
-async def get_ui(ctx):
+async def get_ui(ctx: PluginContext):
     total = _store.total if _store else 0
     recent = _store.entries[:5] if _store else []
 
@@ -1337,7 +1491,25 @@ async def get_ui(ctx):
     )
 ```
 
+Here is what each widget does:
+
+| Widget        | What It Renders                                                                  |
+| ------------- | -------------------------------------------------------------------------------- |
+| `Page`        | Top-level container. `title` is shown as the page heading.                       |
+| `Card`        | A bordered box with an optional title — groups related content together.         |
+| `StatusBadge` | A small colored pill (green/red/yellow/blue/gray) — good for status at a glance. |
+| `KeyValue`    | A list of label→value pairs, nicely aligned.                                     |
+| `KVItem`      | One row in a `KeyValue` list. Optional `color` for the value.                    |
+| `Row`         | Horizontal layout — places children side by side.                                |
+| `Button`      | Triggers an action on click. `confirm=True` shows a "Are you sure?" dialog.      |
+| `Table`       | A data table with column headers and rows.                                       |
+| `TableColumn` | Defines one column: `key` matches a field in the row dicts.                      |
+
 **3. Write a `handle_action()` function:**
+
+Actions are triggered when the user clicks a `Button` or submits a `Form`.
+The `action` string matches what you set on the widget, and `params`
+contains any data (empty for buttons, form values for forms).
 
 ```python
 async def handle_action(action: str, params: dict) -> dict:
@@ -1346,6 +1518,9 @@ async def handle_action(action: str, params: dict) -> dict:
         return {"message": "History cleared"}
     return {"error": f"Unknown action: {action}"}
 ```
+
+Return `{"message": "..."}` for a success toast, or `{"error": "..."}`
+for an error toast. The frontend shows these automatically.
 
 **4. Register both in `setup()`:**
 
@@ -1356,18 +1531,264 @@ async def setup(ctx):
     ctx.register_action_handler(handle_action)
 ```
 
-Now "Now Playing Stats" appears in the sidebar. Clicking it shows your
-statistics card, recent tracks table, and a "Clear History" button — all
-rendered from JSON, no Svelte code needed.
+#### Try It Out
+
+Start the server and open `http://localhost:9000` in your browser.
+"Now Playing Stats" should appear in the sidebar. Click it — you see
+your statistics card, recent tracks table, and a "Clear History" button.
+Play a few tracks, then refresh the page — the data updates.
+
+You can also fetch the UI as raw JSON to see what the frontend receives:
+
+```bash
+curl http://localhost:9000/api/plugins/nowplaying/ui
+```
+
+The response is a JSON tree of `{"type": "...", "props": {...}, "children": [...]}`
+objects — the frontend maps each `type` to a Svelte component and renders
+it recursively.
+
+#### Part B: Settings Form with Tabs
+
+Now let's add a second tab with a settings form. This shows the real
+power of SDUI — interactive forms with validation, conditional fields,
+and help text, all defined in Python:
+
+```python
+from resonance.ui import (
+    Page, Tabs, Tab, Card, KeyValue, KVItem, StatusBadge, Button, Row,
+    Table, TableColumn, Form, TextInput, NumberInput, Select, SelectOption,
+    Toggle, Alert,
+)
+
+async def get_ui(ctx: PluginContext):
+    total = _store.total if _store else 0
+    recent = _store.entries[:5] if _store else []
+
+    # ── Tab 1: Status (same as before) ────────────────────────
+    status_tab = Tab(label="Status", icon="activity", children=[
+        Card(title="Statistics", children=[
+            StatusBadge(
+                label=f"{total} tracks played",
+                color="green" if total > 0 else "gray",
+            ),
+            KeyValue(items=[
+                KVItem("Total Played", str(total)),
+                KVItem("Recent Count", str(len(recent))),
+            ]),
+        ]),
+        Row(children=[
+            Button("Clear History", action="clear", style="danger", confirm=True),
+        ]),
+    ])
+
+    if recent:
+        status_tab.children.append(Table(
+            title="Recent Tracks",
+            columns=[
+                TableColumn(key="player_id", label="Player"),
+                TableColumn(key="timestamp", label="Time"),
+                TableColumn(key="play_number", label="#"),
+            ],
+            rows=recent,
+        ))
+
+    # ── Tab 2: Settings Form ──────────────────────────────────
+    max_entries = int(ctx.get_setting("max_entries"))
+    show_timestamps = ctx.get_setting("show_timestamps")
+    display_format = ctx.get_setting("display_format")
+
+    settings_tab = Tab(label="Settings", icon="settings", children=[
+        Form(action="save_settings", submit_label="Save Settings", children=[
+            NumberInput(
+                name="max_entries",
+                label="Maximum History Entries",
+                value=max_entries,
+                min=20,
+                max=2000,
+                step=10,
+                help_text="How many track plays to keep in the history file.",
+            ),
+            Toggle(
+                name="show_timestamps",
+                label="Show Timestamps",
+                value=bool(show_timestamps),
+                help_text="Display the time each track was played.",
+            ),
+            Select(
+                name="display_format",
+                label="Display Format",
+                value=display_format,
+                options=[
+                    SelectOption(value="compact", label="Compact (player + number)"),
+                    SelectOption(value="detailed", label="Detailed (player + title + time)"),
+                    SelectOption(value="minimal", label="Minimal (number only)"),
+                ],
+                help_text="How recent tracks are shown in the Jive menu.",
+            ),
+            # This field only appears when "detailed" format is selected:
+            NumberInput(
+                name="max_title_length",
+                label="Max Title Length",
+                value=40,
+                min=10,
+                max=200,
+                help_text="Truncate long titles to this many characters.",
+            ).when("display_format", "detailed"),
+
+            Alert(
+                message="Changing the maximum entries will take effect on the next server restart.",
+                severity="info",
+            ),
+        ]),
+    ])
+
+    return Page(
+        title="Now Playing Stats",
+        icon="activity",
+        refresh_interval=10,
+        components=[
+            Tabs(tabs=[status_tab, settings_tab]),
+        ],
+    )
+```
+
+There is a lot going on here. Let's break it down:
+
+| Concept                               | What It Does                                                                                                                                                                |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Tabs` + `Tab`                        | Creates a tab bar — clicking a tab switches content. Purely client-side, no server roundtrip.                                                                               |
+| `Form(action="save_settings")`        | Wraps input fields. On submit, collects all field values into a dict and sends them to `handle_action("save_settings", {...})`.                                             |
+| `NumberInput`                         | A number field with min/max/step validation. The frontend shows a range hint automatically.                                                                                 |
+| `Toggle`                              | A boolean on/off switch.                                                                                                                                                    |
+| `Select` + `SelectOption`             | A dropdown. `value` sets the default, `options` defines the choices.                                                                                                        |
+| `help_text`                           | A gray hint shown below the field — disappears when a validation error is shown instead.                                                                                    |
+| `.when("display_format", "detailed")` | **Conditional visibility.** This field only appears when the "Display Format" dropdown is set to "detailed". The frontend evaluates this live — no server roundtrip needed. |
+| `Alert`                               | An info/warning/error/success message box.                                                                                                                                  |
+
+Now update `handle_action()` to process the form data:
+
+```python
+async def handle_action(action: str, params: dict) -> dict:
+    if action == "clear" and _store:
+        _store.clear()
+        return {"message": "History cleared"}
+
+    if action == "save_settings":
+        # params contains: {"max_entries": 100, "show_timestamps": True,
+        #                    "display_format": "detailed", "max_title_length": 40}
+        _ctx.set_settings(params)
+        return {"message": "Settings saved"}
+
+    return {"error": f"Unknown action: {action}"}
+```
+
+When the user clicks "Save Settings", the frontend collects the current
+value of every input field inside the `Form`, puts them in a dict, and
+sends them to your `handle_action()`. The field `name` prop becomes the
+dict key, and the current value becomes the dict value. You then persist
+them with `ctx.set_settings(params)` — the batch method validates all
+values against the `plugin.toml` definitions and persists them
+atomically. It returns the list of changed keys (which you can ignore
+here). Note that `set_settings()` is a regular (synchronous) method,
+not `async`, so call it **without** `await`.
+
+> **Tip:** If you only need to update a single setting, use
+> `ctx.set_setting(key, value)` instead. Both methods validate against
+> the schema defined in `plugin.toml`.
+
+> **Important:** You need to store the `ctx` reference in a module-level
+> variable so `handle_action()` can access it. Add `_ctx` alongside
+> `_store` and assign it in `setup()`:
+>
+> ```python
+> _store: Any | None = None
+> _ctx: Any | None = None   # PluginContext — set in setup()
+>
+> async def setup(ctx: PluginContext) -> None:
+>     global _store, _ctx
+>     _ctx = ctx
+>     # ... rest of setup ...
+> ```
+>
+> This is the same pattern the raopbridge plugin uses.
+
+#### Try It Out
+
+1. Start the server and open the web UI
+2. Click "Now Playing Stats" in the sidebar
+3. You see two tabs: **Status** and **Settings**
+4. Click the **Settings** tab
+5. Change "Display Format" to "Detailed" — watch the "Max Title Length"
+   field appear (that is `visible_when` in action)
+6. Change "Maximum History Entries" to `500` and click "Save Settings"
+7. A green toast says "Settings saved"
+8. Refresh the page — the value is still `500` (persisted)
+
+#### What You Just Learned
+
+You now know how to build a complete plugin UI page:
+
+| Skill                    | What You Used                                                      |
+| ------------------------ | ------------------------------------------------------------------ |
+| Display read-only data   | `StatusBadge`, `KeyValue`, `Table`                                 |
+| Group content            | `Card`, `Row`, `Tabs`                                              |
+| Trigger server actions   | `Button` with `action` + `handle_action()`                         |
+| Build input forms        | `Form` + `TextInput` / `NumberInput` / `Select` / `Toggle`         |
+| Show contextual help     | `help_text` on form widgets                                        |
+| Conditional fields       | `.when(field, value)` — live in the browser                        |
+| Process form submissions | `handle_action(action, params)` — params is a dict of field values |
+| Persist settings         | `ctx.set_setting(key, value)` inside the action handler            |
+| Show feedback            | Return `{"message": "..."}` for success toast                      |
+| Auto-refresh             | `Page(refresh_interval=10)` — re-fetches every 10s                 |
+
+There are 20 widget types in total — including `Markdown` (renders
+full GitHub-Flavored Markdown), `Modal` (dialog overlay with focus trap),
+`Progress`, `Alert`, `Table` (with inline editing via `variant="editable"`
+columns), and more.
 
 For the full SDUI widget reference, see
 [`PLUGIN_API.md` §19](PLUGIN_API.md#19-server-driven-ui-sdui).
+
+For a complete real-world example — including a detailed before/after
+comparison of migrating a hardcoded Svelte plugin to SDUI — see
+[`PLUGIN_CASESTUDY.md`](PLUGIN_CASESTUDY.md).
+
+---
+
+## What Next? Build Your Own!
+
+Congratulations — you have built a real plugin. You know how to register
+commands, subscribe to events, persist data, show menus on hardware,
+render a UI page in the browser, and write tests. That covers everything
+you need to start building your own plugin.
+
+**Need inspiration?** Here are some ideas the community has discussed:
+
+- **RandomPlay / Don't Stop The Music** — auto-queue tracks when the
+  playlist runs out
+- **Equalizer / DSP UI** — per-player audio settings
+- **Listening Statistics** — weekly/monthly play reports
+- **Home Automation Bridge** — expose player state to Home Assistant
+- **Lyrics Display** — fetch and show lyrics for the current track
+- **Additional Streaming Services** — build a ContentProvider for your
+  favourite source
+
+If you build something, consider sharing it in the
+[community plugins repo](https://github.com/endegelaende/resonance-community-plugins).
+Your plugin gets its own entry in the Plugin Manager, installable by
+anyone with one click. Contributions are always welcome and credited.
+
+For a deep dive into a full-featured community plugin, read
+[Build a Real Plugin — The raopbridge Story](PLUGIN_CASESTUDY.md).
+It walks through every SDUI widget, action handler, and architectural
+pattern using a real production plugin.
 
 ---
 
 ## Checklist: Starting Your Own Plugin
 
-When you want to build your own plugin (not the tutorial plugin):
+When you are ready to build your own plugin (not the tutorial plugin):
 
 - [ ] `plugins/<name>/plugin.toml` with `name` and `version`
 - [ ] `plugins/<name>/__init__.py` with `async def setup(ctx)`
@@ -1387,17 +1808,20 @@ When you want to build your own plugin (not the tutorial plugin):
 
 ## Further Reading
 
-| Document | Content |
-|---|---|
-| [`PLUGINS.md`](PLUGINS.md) | General overview for all audiences |
-| [`PLUGIN_API.md`](PLUGIN_API.md) | Complete API reference (including §19 SDUI) |
-| [`dev/SDUI_ARCHITECTURE.md`](dev/SDUI_ARCHITECTURE.md) | SDUI architecture deep-dive (archived planning document) |
-| `plugins/example/` | Minimal template |
-| `plugins/favorites/` | Complete reference plugin (commands, menus, persistence) |
-| `plugins/radio/` | Reference ContentProvider plugin (radio-browser.info, remote streaming) |
-| `plugins/podcast/` | Reference ContentProvider plugin (RSS feeds, subscriptions, resume) |
-| `community-repo/plugins/raopbridge/` | Reference SDUI consumer (AirPlay bridge with UI page) |
+| Document                                                                                                                  | What You Will Find                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| [`PLUGIN_API.md`](PLUGIN_API.md)                                                                                          | Complete API reference — every method, every widget, every option (including SDUI) |
+| [`PLUGIN_CASESTUDY.md`](PLUGIN_CASESTUDY.md)                                                                              | Deep dive: build a full plugin with tabs, tables, modals, forms — real-world code  |
+| [`PLUGINS.md`](PLUGINS.md)                                                                                                | General overview for all audiences                                                 |
+| [Community Plugins Repository](https://github.com/endegelaende/resonance-community-plugins)                               | Publish your plugin here — CI, releases, Plugin Manager integration                |
+| `plugins/example/`                                                                                                        | Minimal "Hello World" template — start here for a quick skeleton                   |
+| `plugins/favorites/`                                                                                                      | Full reference: commands, menus, persistence, LMS compatibility                    |
+| `plugins/radio/`                                                                                                          | ContentProvider example: radio-browser.info, remote streaming, proxy               |
+| `plugins/podcast/`                                                                                                        | ContentProvider example: RSS feeds, subscriptions, resume, artwork                 |
+| [`raopbridge` community plugin](https://github.com/endegelaende/resonance-community-plugins/tree/main/plugins/raopbridge) | Complete SDUI reference: 5 tabs, device table, modals, forms, SSE live updates     |
 
 ---
 
-*Last updated: June 2025 (SDUI tutorial idea and references added)*
+_Happy building! If you get stuck, open an issue — the community is here to help._
+
+_Last updated: March 2026_

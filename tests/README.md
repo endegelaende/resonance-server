@@ -1,32 +1,45 @@
 # Tests
 
-pytest-Suite für Resonance. Stand: 541 Tests (2 skipped).
+pytest-Suite für Resonance. Stand: 2853 Tests (2 skipped).
 
 ---
 
 ## Übersicht
 
-| Datei | Tests | Bereich |
-|---|---|---|
-| `test_web_api.py` | 84 | FastAPI, JSON-RPC, REST Endpoints, Tag-Gating |
-| `test_slimproto.py` | 76 | Slimproto Server, HELO-Parsing, Message-Dispatch, State-Machine |
-| `test_commands.py` | 62 | Slimproto-Command-Builder (strm, audg, aude, setd) |
-| `test_streaming.py` | 49 | Streaming-Endpoint, Range Requests, Content-Type |
-| `test_cometd.py` | 43 | Cometd/Bayeux Protokoll (iPeng, Squeezer Kompatibilität) |
-| `test_playlist.py` | 40 | Playlist-Operationen, Navigation, Repeat, Shuffle |
-| `test_core_library.py` | 36 | LibraryDb, Scanner, MusicLibrary Facade |
-| `test_transcoder.py` | 34 | Transcoding-Regeln, Policy, Command-Building |
-| `test_discovery.py` | 31 | UDP Discovery Protokoll |
-| `test_seek_coordinator.py` | 23 | SeekCoordinator, Latest-Wins, Generationen |
-| `test_crossfade.py` | 20 | Crossfade/Gapless Prefetch Engine |
-| `test_role_filters.py` | 12 | Contributor/Role-Filtering in DB |
-| `test_cli.py` | 7 | Telnet CLI (Port 9090) Parsing |
-| `test_jsonrpc_helpers.py` | 7 | JSON-RPC Helper-Utilities |
-| `test_alarm_runtime.py` | 6 | Alarm-Scheduler (Due, Fire, One-Shot, Dedup) |
-| `test_seeking_offsets.py` | 4 | Byte-Offset-Berechnung für MP3-Seeking |
-| `test_playlist_prefetch_fast_path.py` | 3 | Prefetch-aware Playlist +1 Navigation |
-| `test_displaystatus.py` | 2 | Displaystatus showbriefly Popup-Guard |
-| `test_restart_stream_flags.py` | 2 | noRestartDecoder Flag-Handling |
+| Datei                                 | Tests | Bereich                                                          |
+| ------------------------------------- | ----- | ---------------------------------------------------------------- |
+| `test_plugin_ui.py`                   | 184   | SDUI-Widgets, Operatoren, Collapsible, Inline-Edit, SSE, Modal   |
+| `test_raopbridge_ui.py`               | 166   | raopbridge UI-Generierung, Actions, Device-Management, UX Polish |
+| `test_security.py`                    | 98    | CSP Headers, Security Middleware                                 |
+| `test_web_api.py`                     | 84    | FastAPI, JSON-RPC, REST Endpoints, Tag-Gating                    |
+| `test_slimproto.py`                   | 76    | Slimproto Server, HELO-Parsing, Message-Dispatch, State-Machine  |
+| `test_commands.py`                    | 62    | Slimproto-Command-Builder (strm, audg, aude, setd)               |
+| `test_streaming.py`                   | 49    | Streaming-Endpoint, Range Requests, Content-Type                 |
+| `test_nowplaying_plugin.py`           | 58    | NowPlaying Plugin: Store, Commands, Events, Lifecycle            |
+| `test_cometd.py`                      | 43    | Cometd/Bayeux Protokoll (iPeng, Squeezer Kompatibilität)         |
+| `test_playlist.py`                    | 40    | Playlist-Operationen, Navigation, Repeat, Shuffle                |
+| `test_core_library.py`                | 36    | LibraryDb, Scanner, MusicLibrary Facade                          |
+| `test_transcoder.py`                  | 34    | Transcoding-Regeln, Policy, Command-Building                     |
+| `test_discovery.py`                   | 31    | UDP Discovery Protokoll                                          |
+| `test_seek_coordinator.py`            | 23    | SeekCoordinator, Latest-Wins, Generationen                       |
+| `test_crossfade.py`                   | 20    | Crossfade/Gapless Prefetch Engine                                |
+| `test_role_filters.py`                | 12    | Contributor/Role-Filtering in DB                                 |
+| `test_plugin_settings.py`             | —     | Plugin-Settings Validierung, Persistenz                          |
+| `test_plugin_states.py`               | —     | Plugin Enable/Disable States                                     |
+| `test_plugin_installer.py`            | —     | ZIP-Installer, SHA256-Check                                      |
+| `test_plugin_repository.py`           | —     | Repository-Client, Index-Fetch                                   |
+| `test_plugin_handler.py`              | —     | Plugin JSON-RPC Command Handler                                  |
+| `test_plugin_api.py`                  | —     | Plugin REST-API Endpoints                                        |
+| `test_radio_plugin.py`                | —     | Radio Plugin (radio-browser.info)                                |
+| `test_podcast_plugin.py`              | —     | Podcast Plugin (RSS, PodcastIndex)                               |
+| `test_favorites_plugin.py`            | —     | Favorites Plugin (LMS-kompatibel)                                |
+| `test_cli.py`                         | 7     | Telnet CLI (Port 9090) Parsing                                   |
+| `test_jsonrpc_helpers.py`             | 7     | JSON-RPC Helper-Utilities                                        |
+| `test_alarm_runtime.py`               | 6     | Alarm-Scheduler (Due, Fire, One-Shot, Dedup)                     |
+| `test_seeking_offsets.py`             | 4     | Byte-Offset-Berechnung für MP3-Seeking                           |
+| `test_playlist_prefetch_fast_path.py` | 3     | Prefetch-aware Playlist +1 Navigation                            |
+| `test_displaystatus.py`               | 2     | Displaystatus showbriefly Popup-Guard                            |
+| `test_restart_stream_flags.py`        | 2     | noRestartDecoder Flag-Handling                                   |
 
 ---
 
@@ -51,13 +64,14 @@ Alle Befehle aus dem Repo-Root.
 .venv\Scripts\python.exe -m pytest tests/test_displaystatus.py -q
 ```
 
-Teststufen und wann welche Tests zu fahren sind → [`docs/OPERATIONS.md`](../docs/OPERATIONS.md)
+Teststufen und wann welche Tests zu fahren sind → [`CLAUDE.md`](../CLAUDE.md)
 
 ---
 
 ## Kategorien
 
 ### Protokoll & Netzwerk
+
 Tests für die drei Kommunikationskanäle (Slimproto, HTTP, CLI):
 
 - `test_slimproto.py` — Binäres TCP-Protokoll, HELO, STAT, State-Machine
@@ -67,10 +81,13 @@ Tests für die drei Kommunikationskanäle (Slimproto, HTTP, CLI):
 - `test_cometd.py` — Cometd/Bayeux Long-Polling für LMS-Apps
 
 ### Web-API & JSON-RPC
+
 - `test_web_api.py` — Größte Testdatei. FastAPI-Endpoints, JSON-RPC Commands, REST API, Tag-Gating, Year-Filtering
 - `test_jsonrpc_helpers.py` — Parameter-Parsing, Player-Item-Building
+- `test_security.py` — CSP Security Headers, Middleware
 
 ### Audio & Streaming
+
 - `test_streaming.py` — Streaming-Route, Range Requests, Content-Type Headers
 - `test_transcoder.py` — legacy.conf Regeln, Format-Policy, Command-Building
 - `test_crossfade.py` — Prefetch-Engine, STMd/STMu-Handling, Repeat-Modi
@@ -79,14 +96,34 @@ Tests für die drei Kommunikationskanäle (Slimproto, HTTP, CLI):
 - `test_restart_stream_flags.py` — noRestartDecoder Flag
 
 ### Bibliothek & Datenbank
+
 - `test_core_library.py` — SQLite Schema, CRUD, Scanner, MusicLibrary Facade
 - `test_role_filters.py` — Contributor-Rollen, Genre-Filtering
 - `test_playlist.py` — Queue-Operationen, Navigation, Shuffle, Repeat
 - `test_playlist_prefetch_fast_path.py` — Prefetch bei Playlist +1
 
 ### Player-Features
+
 - `test_alarm_runtime.py` — Wecker-Scheduler
 - `test_displaystatus.py` — Popup-Regression Guard (Radio/Touch)
+
+### Plugin-System & SDUI
+
+- `test_plugin_ui.py` — SDUI-Framework: alle Widget-Typen, visible_when, Collapsible, Inline-Edit, SSE, Modal
+- `test_raopbridge_ui.py` — raopbridge Plugin UI, Actions, Device-Management
+- `test_plugin_settings.py` — Deklarative Settings, Validierung, Persistenz
+- `test_plugin_states.py` — Plugin Enable/Disable State-Management
+- `test_plugin_installer.py` — ZIP-Installer/Uninstaller, SHA256-Check
+- `test_plugin_repository.py` — Repository-Client, Index-Fetch, Cache
+- `test_plugin_handler.py` — Plugin JSON-RPC Command Handler
+- `test_plugin_api.py` — Plugin REST-API Endpoints
+
+### Plugin-Funktions-Tests
+
+- `test_nowplaying_plugin.py` — NowPlaying Tutorial Plugin (Store, Commands, Events, Lifecycle)
+- `test_radio_plugin.py` — Radio Plugin (radio-browser.info, Content Provider)
+- `test_podcast_plugin.py` — Podcast Plugin (RSS, PodcastIndex, Subscriptions)
+- `test_favorites_plugin.py` — Favorites Plugin (LMS-kompatibel, Hierarchie)
 
 ---
 
