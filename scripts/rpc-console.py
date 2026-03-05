@@ -7,9 +7,9 @@ Goals:
 - show exact JSON sent and JSON received for each RPC
 
 Examples:
-  python scripts/rpc_test_console.py cli --base-url http://127.0.0.1:9000
-  python scripts/rpc_test_console.py gui --base-url http://127.0.0.1:9000
-  python scripts/rpc_test_console.py scenario-handoff --album-id 3 --seconds 35 --require-transitions 2
+  python scripts/rpc-console.py cli --base-url http://127.0.0.1:9000
+  python scripts/rpc-console.py gui --base-url http://127.0.0.1:9000
+  python scripts/rpc-console.py scenario-handoff --album-id 3 --seconds 35 --require-transitions 2
 """
 
 from __future__ import annotations

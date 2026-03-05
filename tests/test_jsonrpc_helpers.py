@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from resonance.web.jsonrpc_helpers import build_player_item, is_audio_player
+from resonance.web.jsonrpc_helpers import (
+    build_player_item,
+    is_audio_player,
+    parse_start_count,
+    parse_tagged_params,
+)
 
 
 class _DeviceType:
@@ -115,3 +120,111 @@ def test_build_player_item_keeps_real_name() -> None:
     item = build_player_item(player)
 
     assert item["name"] == "Wohnzimmer"
+
+
+# =============================================================================
+# parse_tagged_params
+# =============================================================================
+
+
+class TestParseTaggedParams:
+    """Tests for parse_tagged_params (including dict support for Cometd)."""
+
+    def test_empty_list(self) -> None:
+        assert parse_tagged_params([]) == {}
+
+    def test_colon_separated_strings(self) -> None:
+        result = parse_tagged_params(["menu:1", "item_id:5"])
+        assert result == {"menu": "1", "item_id": "5"}
+
+    def test_colon_in_value_preserved(self) -> None:
+        result = parse_tagged_params(["url:http://example.com:8080/stream"])
+        assert result == {"url": "http://example.com:8080/stream"}
+
+    def test_dict_elements_from_cometd(self) -> None:
+        result = parse_tagged_params([{"menu": "1", "item_id": "5"}])
+        assert result == {"menu": "1", "item_id": "5"}
+
+    def test_dict_skips_none_values(self) -> None:
+        result = parse_tagged_params([{"menu": "1", "empty": None}])
+        assert result == {"menu": "1"}
+
+    def test_dict_values_converted_to_str(self) -> None:
+        result = parse_tagged_params([{"count": 42, "flag": True}])
+        assert result == {"count": "42", "flag": "True"}
+
+    def test_mixed_strings_and_dicts(self) -> None:
+        result = parse_tagged_params(["menu:1", {"item_id": "5"}, "search:jazz"])
+        assert result == {"menu": "1", "item_id": "5", "search": "jazz"}
+
+    def test_non_string_non_dict_ignored(self) -> None:
+        result = parse_tagged_params([42, 3.14, True, "menu:1"])
+        assert result == {"menu": "1"}
+
+    def test_string_without_colon_ignored(self) -> None:
+        result = parse_tagged_params(["novalue", "menu:1"])
+        assert result == {"menu": "1"}
+
+    def test_later_values_overwrite_earlier(self) -> None:
+        result = parse_tagged_params(["key:first", {"key": "second"}])
+        assert result == {"key": "second"}
+
+
+# =============================================================================
+# parse_start_count
+# =============================================================================
+
+
+class TestParseStartCount:
+    """Tests for parse_start_count (plugin sub-command pagination)."""
+
+    def test_defaults_when_no_positional_args(self) -> None:
+        start, count = parse_start_count(["favorites", "items"])
+        assert start == 0
+        assert count == 200
+
+    def test_parses_start_and_count(self) -> None:
+        start, count = parse_start_count(["favorites", "items", 10, 50])
+        assert start == 10
+        assert count == 50
+
+    def test_string_numbers_parsed(self) -> None:
+        start, count = parse_start_count(["favorites", "items", "20", "100"])
+        assert start == 20
+        assert count == 100
+
+    def test_custom_sub_offset(self) -> None:
+        start, count = parse_start_count(["podcast", "search", "jazz", 0, 25], sub_offset=3)
+        assert start == 0
+        assert count == 25
+
+    def test_negative_start_clamped_to_zero(self) -> None:
+        start, count = parse_start_count(["cmd", "sub", -5, 50])
+        assert start == 0
+
+    def test_negative_count_clamped_to_zero(self) -> None:
+        start, count = parse_start_count(["cmd", "sub", 0, -10])
+        assert count == 0
+
+    def test_count_clamped_to_max(self) -> None:
+        start, count = parse_start_count(["cmd", "sub", 0, 999999])
+        assert count == 10_000
+
+    def test_start_clamped_to_max(self) -> None:
+        start, count = parse_start_count(["cmd", "sub", 9999999, 10])
+        assert start == 1_000_000
+
+    def test_invalid_values_use_defaults(self) -> None:
+        start, count = parse_start_count(["cmd", "sub", "abc", "xyz"])
+        assert start == 0
+        assert count == 200
+
+    def test_only_start_provided(self) -> None:
+        start, count = parse_start_count(["cmd", "sub", 5])
+        assert start == 5
+        assert count == 200
+
+    def test_tagged_params_after_pagination_ignored(self) -> None:
+        start, count = parse_start_count(["radio", "items", 0, 100, "menu:1", "category:pop"])
+        assert start == 0
+        assert count == 100

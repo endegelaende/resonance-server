@@ -32,6 +32,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from resonance.web.jsonrpc_helpers import parse_start_count, parse_tagged_params
+
 if TYPE_CHECKING:
     from resonance.core.events import Event
     from resonance.plugin import PluginContext
@@ -55,42 +57,17 @@ _event_bus: Any | None = None  # EventBus reference for publishing changes
 def _parse_tagged(command: list[Any], start: int = 1) -> dict[str, str]:
     """Parse ``key:value`` tagged params from *command* starting at *start*.
 
-    Also handles ``dict`` elements that some clients (Cometd) send as
-    inline objects rather than colon-separated strings.
+    Delegates to :func:`resonance.web.jsonrpc_helpers.parse_tagged_params`.
     """
-    result: dict[str, str] = {}
-    for arg in command[start:]:
-        if isinstance(arg, dict):
-            for k, v in arg.items():
-                if v is not None:
-                    result[str(k)] = str(v)
-        elif isinstance(arg, str) and ":" in arg:
-            key, value = arg.split(":", 1)
-            result[key] = value
-    return result
+    return parse_tagged_params(command[start:])
 
 
 def _parse_start_count(command: list[Any], sub_offset: int = 2) -> tuple[int, int]:
     """Extract ``(start, count)`` from positional args after the sub-command.
 
-    For ``["favorites", "items", 0, 100]`` with *sub_offset=2* returns ``(0, 100)``.
+    Delegates to :func:`resonance.web.jsonrpc_helpers.parse_start_count`.
     """
-    start = 0
-    count = 200
-
-    if len(command) > sub_offset:
-        try:
-            start = max(0, int(command[sub_offset]))
-        except (ValueError, TypeError):
-            pass
-
-    if len(command) > sub_offset + 1:
-        try:
-            count = max(0, min(int(command[sub_offset + 1]), 10_000))
-        except (ValueError, TypeError):
-            pass
-
-    return start, count
+    return parse_start_count(command, sub_offset)
 
 
 # ---------------------------------------------------------------------------

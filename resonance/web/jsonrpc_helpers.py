@@ -103,6 +103,9 @@ def parse_tagged_params(params: list[Any]) -> dict[str, str]:
     LMS uses "tag:value" format for filters and options.
     Examples: "tags:als", "year:2020", "genre_id:5", "artist_id:10"
 
+    Some clients (Cometd) send ``dict`` objects instead of colon-separated
+    strings.  Both formats are supported transparently.
+
     Args:
         params: Command parameters list
 
@@ -112,6 +115,13 @@ def parse_tagged_params(params: list[Any]) -> dict[str, str]:
     result: dict[str, str] = {}
 
     for param in params:
+        # Handle dict elements sent by Cometd clients
+        if isinstance(param, dict):
+            for k, v in param.items():
+                if v is not None:
+                    result[str(k)] = str(v)
+            continue
+
         if not isinstance(param, str):
             continue
         if ":" not in param:
@@ -124,6 +134,56 @@ def parse_tagged_params(params: list[Any]) -> dict[str, str]:
             result[tag] = value
 
     return result
+
+
+def parse_start_count(
+    command: list[Any], sub_offset: int = 2
+) -> tuple[int, int]:
+    """Extract ``(start, count)`` from positional args after a sub-command.
+
+    Plugin commands typically look like ``["plugin", "items", 0, 100, …]``
+    where the pagination integers follow the sub-command at *sub_offset*.
+
+    Values are clamped to sane ranges (same limits as
+    :func:`parse_start_items`):
+
+    - *start* is clamped to ``[0, 1_000_000]``
+    - *count* is clamped to ``[0, 10_000]``
+
+    Args:
+        command: Full command array (e.g. ``["favorites", "items", 0, 100]``).
+        sub_offset: Index of the first pagination integer (default ``2``).
+
+    Returns:
+        Tuple of ``(start, count)``.  Defaults to ``(0, 200)`` when the
+        positional args are missing or unparseable.
+    """
+    start = 0
+    count = 200
+
+    if len(command) > sub_offset:
+        try:
+            start = int(command[sub_offset])
+        except (ValueError, TypeError):
+            pass
+
+    if len(command) > sub_offset + 1:
+        try:
+            count = int(command[sub_offset + 1])
+        except (ValueError, TypeError):
+            pass
+
+    # Clamp to safe ranges (same constants as parse_start_items)
+    if start < 0:
+        start = 0
+    elif start > _MAX_QUERY_START:
+        start = _MAX_QUERY_START
+    if count < 0:
+        count = 0
+    elif count > _MAX_QUERY_ITEMS:
+        count = _MAX_QUERY_ITEMS
+
+    return start, count
 
 
 def parse_tags_string(tags_str: str) -> set[str]:

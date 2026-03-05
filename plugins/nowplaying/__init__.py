@@ -16,6 +16,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from resonance.web.jsonrpc_helpers import parse_tagged_params
+
 if TYPE_CHECKING:
     from resonance.core.events import Event
     from resonance.plugin import PluginContext
@@ -162,18 +164,8 @@ async def cmd_recent(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
 
 
 def _parse_tagged(command: list[Any], start: int = 1) -> dict[str, str]:
-    """Parse ``key:value`` tagged params and dict elements from *command*.
+    """Parse ``key:value`` tagged params from *command* starting at *start*.
 
-    Handles both LMS-style colon-separated strings and dict objects
-    that some clients (Cometd) send as inline params.
+    Delegates to :func:`resonance.web.jsonrpc_helpers.parse_tagged_params`.
     """
-    result: dict[str, str] = {}
-    for arg in command[start:]:
-        if isinstance(arg, dict):
-            for k, v in arg.items():
-                if v is not None:
-                    result[str(k)] = str(v)
-        elif isinstance(arg, str) and ":" in arg:
-            key, value = arg.split(":", 1)
-            result[key] = value
-    return result
+    return parse_tagged_params(command[start:])

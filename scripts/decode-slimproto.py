@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Parse Slimproto traffic from tshark TSV output.
+"""Decode Slimproto traffic from tshark TSV output.
 
 Usage:
     1. Export with tshark:
        tshark -r <capture.pcapng> -Y "tcp.port == 3483 && tcp.len > 0" \
               -T fields -e frame.number -e frame.time_relative -e ip.src -e tcp.payload \
-              > docs/slim_raw_capture.txt
+              > slim_capture.txt
     2. Run:
-       python docs/parse_slim.py docs/slim_raw_capture.txt
+       python scripts/decode-slimproto.py slim_capture.txt
 """
 
 import struct

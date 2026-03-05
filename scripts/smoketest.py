@@ -12,9 +12,9 @@ Checks during polling:
 - playlist index increments across track changes (optional strict mode)
 
 Examples (Windows / micromamba env):
-  python scripts/status_handoff_smoke.py --album-id 3 --seconds 90
-  python scripts/status_handoff_smoke.py --autoplay-first-album --strict-index-increment
-  python scripts/status_handoff_smoke.py --player-id 00:04:20:26:84:ae --seconds 45
+  python scripts/smoketest.py --album-id 3 --seconds 90
+  python scripts/smoketest.py --autoplay-first-album --strict-index-increment
+  python scripts/smoketest.py --player-id 00:04:20:26:84:ae --seconds 45
 """
 
 from __future__ import annotations
@@ -377,4 +377,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
