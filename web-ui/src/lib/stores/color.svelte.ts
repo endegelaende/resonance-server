@@ -28,14 +28,14 @@ export interface ColorPalette {
   darkMuted: string;
 }
 
-// Default palette (Catppuccin Mauve-based) when no artwork
+// Default palette — warm amber/copper when no artwork
 const DEFAULT_PALETTE: ColorPalette = {
-  vibrant: "#cba6f7", // Mauve
-  lightVibrant: "#f5c2e7", // Pink
-  darkVibrant: "#89b4fa", // Blue
-  muted: "#6c7086", // Overlay0
-  lightMuted: "#9399b2", // Overlay2
-  darkMuted: "#45475a", // Surface1
+  vibrant: "#e09f5a", // Warm amber
+  lightVibrant: "#f0c27a", // Light gold
+  darkVibrant: "#c47832", // Deep copper
+  muted: "#7a6e62", // Warm gray
+  lightMuted: "#9e9185", // Light warm gray
+  darkMuted: "#4a4039", // Dark warm brown
 };
 
 // =============================================================================

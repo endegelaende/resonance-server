@@ -14,37 +14,6 @@
   } from "lucide-svelte";
   import { onMount } from "svelte";
 
-  // Navigation items configuration
-  const mainNavItems = [
-    {
-      id: "artists",
-      label: "Library",
-      icon: Library,
-      view: "artists" as View,
-    },
-    {
-      id: "search",
-      label: "Search",
-      icon: Search,
-      view: "search" as View,
-    },
-  ] as const;
-
-  const secondaryNavItems = [
-    {
-      id: "plugins",
-      label: "Plugins",
-      icon: Puzzle,
-      view: "plugins" as View,
-    },
-    {
-      id: "settings",
-      label: "Settings",
-      icon: Settings,
-      view: "settings" as View,
-    },
-  ] as const;
-
   // Dynamic plugin UI entries
   let pluginNavItems = $state<PluginUIRegistryEntry[]>([]);
 
@@ -62,7 +31,6 @@
 
   function handleNavigate(view: View) {
     uiStore.navigateTo(view);
-    // Auto-close on mobile
     if (typeof window !== "undefined" && window.innerWidth < 1024) {
       uiStore.setSidebarOpen(false);
     }
@@ -74,6 +42,10 @@
       uiStore.setSidebarOpen(false);
     }
   }
+
+  function isActive(view: string): boolean {
+    return uiStore.currentView === view;
+  }
 </script>
 
 <!-- Mobile Backdrop -->
@@ -81,7 +53,7 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 lg:hidden transition-opacity duration-300"
+    class="fixed inset-0 bg-black/50 z-40 lg:hidden transition-opacity duration-300"
     onclick={() => uiStore.setSidebarOpen(false)}
   ></div>
 {/if}
@@ -89,33 +61,29 @@
 <aside
   class="
 	fixed lg:static inset-y-0 left-0 z-50
-	w-64 lg:w-full bg-mantle lg:border-r-0 border-r border-border flex flex-col h-full
+	w-64 lg:w-full bg-mantle flex flex-col h-full
 	transition-transform duration-300 ease-in-out shadow-2xl lg:shadow-none
 	{uiStore.isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
 "
 >
-  <!-- Logo Area -->
-  <div
-    class="h-[73px] px-6 flex items-center justify-between border-b border-border shrink-0"
-  >
-    <div class="flex items-center">
-      <div
-        class="w-14 h-14 rounded-lg overflow-hidden flex items-center justify-center"
-      >
+  <!-- Logo -->
+  <div class="h-[73px] px-5 flex items-center justify-between shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-lg overflow-hidden flex items-center justify-center">
         <svg
           xmlns="http://www.w3.org/2000/svg"
           viewBox="0 0 200 200"
-          class="w-14 h-14"
+          class="w-10 h-10"
           aria-label="Resonance logo"
           role="img"
         >
           <defs>
             <linearGradient id="sidebarLogoWarm" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stop-color="#f59e0b" />
-              <stop offset="100%" stop-color="#ef4444" />
+              <stop offset="0%" stop-color="#f0c27a" />
+              <stop offset="100%" stop-color="#e09f5a" />
             </linearGradient>
           </defs>
-          <circle cx="100" cy="100" r="92" fill="#1a120e" />
+          <circle cx="100" cy="100" r="92" fill="#1a1614" />
           <text
             x="80"
             y="130"
@@ -133,7 +101,7 @@
             stroke="url(#sidebarLogoWarm)"
             stroke-width="4"
             stroke-linecap="round"
-            opacity="0.6"
+            opacity="0.5"
           />
           <path
             d="M140,52 Q165,100 140,148"
@@ -141,113 +109,84 @@
             stroke="url(#sidebarLogoWarm)"
             stroke-width="3"
             stroke-linecap="round"
-            opacity="0.35"
+            opacity="0.25"
           />
         </svg>
       </div>
+      <span class="text-text font-semibold text-sm tracking-wide">Resonance</span>
     </div>
-    <!-- Mobile Close Button -->
+
+    <!-- Mobile Close -->
     <button
       class="lg:hidden p-2 -mr-2 text-overlay-1 hover:text-text rounded-lg hover:bg-surface-0 transition-colors"
       onclick={() => uiStore.setSidebarOpen(false)}
       aria-label="Close sidebar"
     >
-      <X size={20} />
+      <X size={18} />
     </button>
   </div>
 
-  <!-- Main Navigation -->
-  <nav class="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-    <div
-      class="px-3 py-2 text-xs font-semibold text-overlay-0 uppercase tracking-wider mb-2"
-    >
-      Menu
-    </div>
+  <!-- Navigation -->
+  <nav class="flex-1 px-3 py-3 overflow-y-auto space-y-0.5">
 
-    {#each mainNavItems as item}
-      <button
-        class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 group
-				{uiStore.currentView === item.view
-          ? 'bg-surface-0 text-accent dynamic-accent font-medium'
-          : 'text-overlay-1 hover:text-text hover:bg-surface-0'}"
-        onclick={() => handleNavigate(item.view)}
-      >
-        <item.icon
-          size={20}
-          class="transition-colors {uiStore.currentView === item.view
-            ? 'text-accent dynamic-accent'
-            : 'group-hover:text-text'}"
-        />
-        <span>{item.label}</span>
-      </button>
-    {/each}
-
-    <!-- Divider -->
-    <div class="my-4 border-t border-surface-1 mx-3 opacity-50"></div>
-
-    <!-- Quick Filters / Collections -->
-    <div
-      class="px-3 py-2 text-xs font-semibold text-overlay-0 uppercase tracking-wider mb-2"
-    >
-      Collections
-    </div>
-
+    <!-- Library & Search -->
     <button
-      class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 group
-			{uiStore.currentView === 'artists' && !uiStore.selectedArtist
-        ? 'bg-surface-0 text-accent dynamic-accent font-medium'
-        : 'text-overlay-1 hover:text-text hover:bg-surface-0'}"
+      class="sidebar-item {isActive('artists') && !uiStore.selectedArtist ? 'active' : ''}"
       onclick={() => handleNavigate("artists")}
     >
-      <Users size={20} class="transition-colors group-hover:text-text" />
+      <Library size={18} />
+      <span>Library</span>
+    </button>
+
+    <button
+      class="sidebar-item {isActive('search') ? 'active' : ''}"
+      onclick={() => handleNavigate("search")}
+    >
+      <Search size={18} />
+      <span>Search</span>
+    </button>
+
+    <!-- Subtle divider -->
+    <div class="h-px bg-border/40 mx-2 my-3"></div>
+
+    <!-- Collections -->
+    <button
+      class="sidebar-item {isActive('artists') && !uiStore.selectedArtist ? '' : isActive('artists') || uiStore.selectedArtist ? 'active' : ''}"
+      onclick={() => handleNavigate("artists")}
+    >
+      <Users size={18} />
       <span>Artists</span>
     </button>
 
     <button
-      class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 group
-			{uiStore.currentView === 'albums' && !uiStore.selectedAlbum
-        ? 'bg-surface-0 text-accent dynamic-accent font-medium'
-        : 'text-overlay-1 hover:text-text hover:bg-surface-0'}"
+      class="sidebar-item {isActive('albums') && !uiStore.selectedAlbum ? 'active' : ''}"
       onclick={() => handleNavigate("albums")}
     >
-      <Disc3 size={20} class="transition-colors group-hover:text-text" />
+      <Disc3 size={18} />
       <span>Albums</span>
     </button>
 
     <button
-      class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 group
-			{uiStore.currentView === 'playlists'
-        ? 'bg-surface-0 text-accent dynamic-accent font-medium'
-        : 'text-overlay-1 hover:text-text hover:bg-surface-0'}"
+      class="sidebar-item {isActive('playlists') ? 'active' : ''}"
       onclick={() => handleNavigate("playlists")}
     >
-      <ListMusic size={20} class="transition-colors group-hover:text-text" />
+      <ListMusic size={18} />
       <span>Playlists</span>
     </button>
 
-    <!-- Dynamic Plugin Pages -->
+    <!-- Plugin Pages -->
     {#if pluginNavItems.length > 0}
-      <div class="my-4 border-t border-surface-1 mx-3 opacity-50"></div>
-      <div
-        class="px-3 py-2 text-xs font-semibold text-overlay-0 uppercase tracking-wider mb-2"
-      >
-        Plugin Pages
-      </div>
+      <div class="h-px bg-border/40 mx-2 my-3"></div>
 
       {#each pluginNavItems as item}
         <button
-          class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 group
-          {uiStore.currentView === `plugin:${item.id}`
-            ? 'bg-surface-0 text-accent dynamic-accent font-medium'
-            : 'text-overlay-1 hover:text-text hover:bg-surface-0'}"
+          class="sidebar-item {uiStore.currentView === `plugin:${item.id}` ? 'active' : ''}"
           onclick={() => handleNavigatePlugin(item.id)}
         >
           <DynamicIcon
             name={item.icon}
-            size={20}
-            class="transition-colors {uiStore.currentView === `plugin:${item.id}`
-              ? 'text-accent dynamic-accent'
-              : 'group-hover:text-text'}"
+            size={18}
+            class="transition-colors"
           />
           <span>{item.label}</span>
         </button>
@@ -255,24 +194,60 @@
     {/if}
   </nav>
 
-  <!-- Footer / Settings -->
-  <div class="p-3 border-t border-border mt-auto shrink-0">
-    {#each secondaryNavItems as item}
-      <button
-        class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 group
-				{uiStore.currentView === item.view
-          ? 'bg-surface-0 text-accent dynamic-accent font-medium'
-          : 'text-overlay-1 hover:text-text hover:bg-surface-0'}"
-        onclick={() => handleNavigate(item.view)}
-      >
-        <item.icon
-          size={20}
-          class="transition-colors {uiStore.currentView === item.view
-            ? 'text-accent dynamic-accent'
-            : 'group-hover:text-text'}"
-        />
-        <span>{item.label}</span>
-      </button>
-    {/each}
+  <!-- Footer -->
+  <div class="px-3 py-3 shrink-0 space-y-0.5">
+    <div class="h-px bg-border/40 mx-2 mb-2"></div>
+
+    <button
+      class="sidebar-item {isActive('plugins') ? 'active' : ''}"
+      onclick={() => handleNavigate("plugins")}
+    >
+      <Puzzle size={18} />
+      <span>Plugins</span>
+    </button>
+
+    <button
+      class="sidebar-item {isActive('settings') ? 'active' : ''}"
+      onclick={() => handleNavigate("settings")}
+    >
+      <Settings size={18} />
+      <span>Settings</span>
+    </button>
   </div>
 </aside>
+
+<style>
+  .sidebar-item {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.5rem;
+    font-size: 0.8125rem;
+    font-weight: 450;
+    color: var(--color-overlay-1);
+    transition: all 150ms ease;
+    text-align: left;
+    cursor: pointer;
+    border: none;
+    background: none;
+    letter-spacing: 0.01em;
+  }
+
+  .sidebar-item:hover {
+    color: var(--color-text);
+    background-color: var(--color-surface-0);
+  }
+
+  .sidebar-item.active {
+    color: var(--color-text);
+    background-color: var(--color-surface-0);
+    font-weight: 500;
+  }
+
+  .sidebar-item.active :global(svg) {
+    color: var(--dynamic-accent, var(--color-accent));
+    transition: color var(--color-transition);
+  }
+</style>

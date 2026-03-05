@@ -6,50 +6,50 @@
  * ============================================================================ */
 :root {
     /* Dynamic accent colors - overwritten by colorStore.setFromImage() */
-    --dynamic-accent: #cba6f7;
-    --dynamic-accent-light: #f5c2e7;
-    --dynamic-accent-dark: #89b4fa;
-    --dynamic-muted: #6c7086;
-    --dynamic-muted-light: #9399b2;
-    --dynamic-muted-dark: #45475a;
+    --dynamic-accent: #e09f5a;
+    --dynamic-accent-light: #f0c27a;
+    --dynamic-accent-dark: #c47832;
+    --dynamic-muted: #7a6e62;
+    --dynamic-muted-light: #9e9185;
+    --dynamic-muted-dark: #4a4039;
 
     /* RGB values for use with alpha (e.g., rgba(var(--dynamic-accent-rgb), 0.5)) */
-    --dynamic-accent-rgb: 203, 166, 247;
-    --dynamic-accent-light-rgb: 245, 194, 231;
-    --dynamic-accent-dark-rgb: 137, 180, 250;
+    --dynamic-accent-rgb: 224, 159, 90;
+    --dynamic-accent-light-rgb: 240, 194, 122;
+    --dynamic-accent-dark-rgb: 196, 120, 50;
 
     /* Transition timing for color changes */
     --color-transition: 500ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Custom theme using CSS variables - Catppuccin Mocha inspired */
+/* Custom theme — warm, vinyl-lounge inspired dark palette */
 @theme {
-    /* Base colors */
-    --color-base: #1e1e2e;
-    --color-mantle: #181825;
-    --color-crust: #11111b;
-    --color-surface-0: #313244;
-    --color-surface-1: #45475a;
-    --color-surface-2: #585b70;
-    --color-overlay-0: #6c7086;
-    --color-overlay-1: #7f849c;
-    --color-overlay-2: #9399b2;
-    --color-text: #cdd6f4;
-    --color-subtext-0: #a6adc8;
-    --color-subtext-1: #bac2de;
+    /* Base colors — warm charcoal/espresso tones */
+    --color-base: #1c1917;
+    --color-mantle: #171412;
+    --color-crust: #110f0d;
+    --color-surface-0: #292524;
+    --color-surface-1: #3b3633;
+    --color-surface-2: #4d4642;
+    --color-overlay-0: #6b6260;
+    --color-overlay-1: #857b78;
+    --color-overlay-2: #9e9490;
+    --color-text: #ede0d4;
+    --color-subtext-0: #c4b5a8;
+    --color-subtext-1: #d5c8bb;
 
-    /* Accent colors */
-    --color-accent: #cba6f7;
-    --color-accent-hover: #b4befe;
-    --color-success: #a6e3a1;
-    --color-warning: #f9e2af;
-    --color-error: #f38ba8;
+    /* Accent colors — warm amber/copper */
+    --color-accent: #e09f5a;
+    --color-accent-hover: #f0c27a;
+    --color-success: #8fbe7a;
+    --color-warning: #e8c468;
+    --color-error: #d97070;
 
     /* Semantic colors */
     --color-primary: var(--color-accent);
     --color-primary-hover: var(--color-accent-hover);
     --color-muted: var(--color-overlay-0);
-    --color-border: var(--color-surface-1);
+    --color-border: #332e2b;
 
     /* Typography */
     --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
@@ -80,6 +80,11 @@
     color: var(--color-crust);
 }
 
+/* Subtle warm noise texture on base surfaces */
+body {
+    background-color: var(--color-base);
+}
+
 /* Focus styles */
 :focus-visible {
     outline: 2px solid var(--color-accent);
@@ -88,9 +93,9 @@
 
 /* Custom utilities */
 @utility glass {
-    background: rgba(30, 30, 46, 0.8);
+    background: rgba(28, 25, 23, 0.82);
     backdrop-filter: blur(12px);
-    border: 1px solid var(--color-border);
+    border: 1px solid rgba(62, 55, 50, 0.6);
 }
 
 @utility text-gradient {
@@ -213,10 +218,10 @@ select {
 .quality-badge-lossless {
     background: linear-gradient(
         135deg,
-        rgba(203, 166, 247, 0.2) 0%,
-        rgba(180, 190, 254, 0.2) 100%
+        rgba(224, 159, 90, 0.15) 0%,
+        rgba(240, 194, 122, 0.1) 100%
     );
-    border: 1px solid rgba(203, 166, 247, 0.4);
+    border: 1px solid rgba(224, 159, 90, 0.35);
     color: var(--color-accent);
 }
 

@@ -529,35 +529,35 @@
   <!-- Main Content Area -->
   <div class="flex-1 flex flex-col min-w-0 bg-base">
     <!-- Header -->
-    <header class="glass border-b border-border px-6 py-4">
-      <div class="flex items-center justify-between gap-4">
-        <!-- Sidebar Toggle (Mobile/Tablet) & Status -->
-        <div class="flex items-center gap-3">
-          <button
-            class="lg:hidden p-2 -ml-2 rounded-lg hover:bg-surface-0 text-overlay-1 hover:text-text transition-colors"
-            onclick={() => uiStore.toggleSidebar()}
-          >
-            <Menu size={24} />
-          </button>
+    <header class="border-b border-border/60 px-5 py-3 bg-base">
+      <div class="flex items-center gap-4">
+        <!-- Sidebar Toggle (Mobile) -->
+        <button
+          class="lg:hidden p-2 -ml-2 rounded-lg hover:bg-surface-0 text-overlay-1 hover:text-text transition-colors"
+          onclick={() => uiStore.toggleSidebar()}
+        >
+          <Menu size={20} />
+        </button>
 
-          <div class="flex items-center gap-2 text-xs text-overlay-1">
-            {#if playerStore.isConnected}
-              <Wifi size={14} class="text-success" />
-              <span class="hidden sm:inline">Connected</span>
-            {:else}
-              <WifiOff size={14} class="text-error" />
-              <span class="hidden sm:inline">Disconnected</span>
-            {/if}
-          </div>
+        <!-- Connection dot (minimal) -->
+        <div class="hidden lg:block" title={playerStore.isConnected ? 'Connected' : 'Disconnected'}>
+          {#if playerStore.isConnected}
+            <div class="w-2 h-2 rounded-full bg-success/70"></div>
+          {:else}
+            <div class="w-2 h-2 rounded-full bg-error/70 animate-pulse"></div>
+          {/if}
         </div>
 
         <!-- Search -->
-        <div class="flex-1 max-w-xl">
+        <div class="flex-1 max-w-lg">
           <SearchBar onSearch={handleSearch} onClear={handleClearSearch} />
         </div>
 
+        <!-- Spacer -->
+        <div class="flex-1"></div>
+
         <!-- Player Selector -->
-        <div class="w-48 sm:w-64">
+        <div class="w-44 sm:w-56">
           <PlayerSelector />
         </div>
       </div>
@@ -570,7 +570,7 @@
         <!-- Library Header (Breadcrumbs & Actions) -->
         {#if uiStore.currentView !== "settings" && uiStore.currentView !== "playlists" && uiStore.currentView !== "radio" && uiStore.currentView !== "plugins" && !uiStore.currentView.startsWith("plugin:")}
           <div
-            class="flex items-center justify-between px-6 py-4 border-b border-border bg-base/50 backdrop-blur-sm z-10"
+            class="flex items-center justify-between px-5 py-3 border-b border-border/40 z-10"
           >
             <div class="flex items-center gap-4 overflow-hidden">
               {#if uiStore.selectedArtist || uiStore.selectedAlbum}
@@ -633,27 +633,24 @@
           {#if uiStore.currentView === "artists"}
             <!-- Artists Grid -->
             <div
-              class="p-6 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-4"
+              class="p-5 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-2"
             >
               {#each artists as artist}
                 <button
-                  class="group flex flex-col items-center gap-3 p-4 rounded-xl hover:bg-surface-0 transition-colors"
+                  class="group flex flex-col items-center gap-2 p-3 rounded-lg hover:bg-surface-0/50 transition-colors"
                   onclick={() => uiStore.viewArtist(artist)}
                 >
                   <div
-                    class="w-24 h-24 sm:w-32 sm:h-32 rounded-full bg-surface-1 flex items-center justify-center group-hover:bg-surface-2 transition-colors relative overflow-hidden"
+                    class="w-20 h-20 sm:w-28 sm:h-28 rounded-full bg-surface-0/60 flex items-center justify-center group-hover:bg-surface-0 transition-colors"
                   >
                     <Users
-                      size={48}
-                      class="text-overlay-0 group-hover:text-accent transition-colors relative z-10"
+                      size={36}
+                      class="text-overlay-0/50 group-hover:text-overlay-1 transition-colors"
                     />
-                    <div
-                      class="absolute inset-0 bg-gradient-to-tr from-surface-1 to-surface-0 opacity-0 group-hover:opacity-100 transition-opacity"
-                    ></div>
                   </div>
                   <div class="text-center min-w-0 w-full">
-                    <p class="text-text font-medium truncate">{artist.name}</p>
-                    <p class="text-sm text-overlay-1">
+                    <p class="text-sm text-text font-medium truncate">{artist.name}</p>
+                    <p class="text-xs text-overlay-0">
                       {artist.albumCount} albums
                     </p>
                   </div>
@@ -687,22 +684,22 @@
 
             {#if artists.length === 0 && !isLoadingLibrary}
               <div
-                class="flex flex-col items-center justify-center h-full text-overlay-1 p-8"
+                class="flex flex-col items-center justify-center h-full text-overlay-0 p-8"
               >
                 <div
-                  class="w-20 h-20 rounded-full bg-surface-0 flex items-center justify-center mb-6"
+                  class="w-16 h-16 rounded-full bg-surface-0/50 flex items-center justify-center mb-5"
                 >
-                  <Library size={40} class="opacity-50" />
+                  <Library size={28} class="opacity-30" />
                 </div>
-                <h3 class="text-xl font-medium text-text mb-2">
+                <h3 class="text-base font-medium text-text mb-2">
                   Your library is empty
                 </h3>
-                <p class="text-sm mb-6 text-center max-w-sm">
-                  Add a music folder to start scanning your collection. Supports
-                  local folders with FLAC, MP3, and more.
+                <p class="text-sm mb-6 text-center max-w-sm text-overlay-0">
+                  Add a music folder to start scanning your collection.
                 </p>
                 <button
-                  class="px-4 py-2 bg-accent text-mantle font-medium rounded-lg hover:bg-accent-hover transition-colors"
+                  class="px-4 py-2 text-sm font-medium rounded-lg transition-colors"
+                  style="background-color: var(--dynamic-accent, var(--color-accent)); color: var(--color-crust);"
                   onclick={handleOpenAddFolder}
                 >
                   Add Music Folder
@@ -712,16 +709,17 @@
           {:else if uiStore.currentView === "albums"}
             <!-- Albums Grid -->
             <div
-              class="p-6 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6"
+              class="p-5 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-5"
             >
               {#each albums as album}
                 <div class="group relative">
                   <button
-                    class="flex flex-col gap-3 p-3 -m-3 rounded-xl hover:bg-surface-0 transition-colors text-left w-full"
+                    class="flex flex-col gap-2 rounded-lg hover:bg-surface-0/40 transition-all text-left w-full p-2"
                     onclick={() => uiStore.viewAlbum(album)}
                   >
                     <div
-                      class="aspect-square rounded-lg bg-surface-1 flex items-center justify-center group-hover:bg-surface-2 transition-colors overflow-hidden shadow-lg group-hover:shadow-xl group-hover:scale-102 duration-300 relative"
+                      class="aspect-square rounded-md bg-surface-0/50 flex items-center justify-center overflow-hidden
+                             shadow-md group-hover:shadow-lg transition-all duration-300 relative"
                     >
                       {#if album.coverArt}
                         <img
@@ -729,36 +727,28 @@
                           alt={album.name}
                           class="w-full h-full object-cover"
                         />
-                        <div
-                          class="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors"
-                        ></div>
                       {:else}
                         <Disc3
-                          size={48}
-                          class="text-overlay-0 group-hover:text-accent transition-colors"
+                          size={36}
+                          class="text-overlay-0/40 group-hover:text-overlay-0 transition-colors"
                         />
                       {/if}
                     </div>
-                    <div class="min-w-0 px-1">
-                      <p class="text-text font-medium truncate">{album.name}</p>
-                      <p class="text-sm text-overlay-1 truncate">
-                        {album.artist}
+                    <div class="min-w-0 px-0.5">
+                      <p class="text-sm text-text font-medium truncate leading-snug">{album.name}</p>
+                      <p class="text-xs text-overlay-0 truncate mt-0.5">
+                        {album.artist}{#if album.year} · {album.year}{/if}
                       </p>
-                      {#if album.year}
-                        <p class="text-xs text-overlay-0 mt-0.5">
-                          {album.year}
-                        </p>
-                      {/if}
                     </div>
                   </button>
-                  <!-- Delete button (shown on hover) -->
+                  <!-- Delete button -->
                   <button
-                    class="absolute top-1 right-1 p-1.5 rounded-full bg-error/80 text-white opacity-0 group-hover:opacity-100 hover:bg-error transition-all shadow-lg"
+                    class="absolute top-3 right-3 p-1 rounded-full bg-error/70 text-white opacity-0 group-hover:opacity-100 hover:bg-error transition-all"
                     onclick={(e) => handleDeleteAlbumClick(album, e)}
                     aria-label="Delete album"
                     title="Delete album from library"
                   >
-                    <Trash2 size={14} />
+                    <Trash2 size={12} />
                   </button>
                 </div>
               {/each}
@@ -828,27 +818,27 @@
                 <!-- Search: Artists -->
                 {#if searchArtists.length > 0}
                   <section>
-                    <h3 class="text-sm font-semibold text-overlay-1 uppercase tracking-wider mb-4">
+                    <h3 class="text-xs font-medium text-overlay-0 uppercase tracking-wider mb-3">
                       Artists
-                      <span class="text-overlay-0 font-normal normal-case tracking-normal ml-1">
+                      <span class="font-normal normal-case tracking-normal ml-1 text-overlay-0/60">
                         ({searchArtists.length})
                       </span>
                     </h3>
-                    <div class="flex gap-4 overflow-x-auto pb-2">
+                    <div class="flex gap-3 overflow-x-auto pb-2">
                       {#each searchArtists as artist}
                         <button
-                          class="group flex flex-col items-center gap-2 p-3 rounded-xl hover:bg-surface-0 transition-colors shrink-0 w-28"
+                          class="group flex flex-col items-center gap-1.5 p-2 rounded-lg hover:bg-surface-0/50 transition-colors shrink-0 w-24"
                           onclick={() => uiStore.viewArtist(artist)}
                         >
                           <div
-                            class="w-20 h-20 rounded-full bg-surface-1 flex items-center justify-center group-hover:bg-surface-2 transition-colors"
+                            class="w-16 h-16 rounded-full bg-surface-0/50 flex items-center justify-center group-hover:bg-surface-0 transition-colors"
                           >
                             <Users
-                              size={32}
-                              class="text-overlay-0 group-hover:text-accent transition-colors"
+                              size={24}
+                              class="text-overlay-0/40 group-hover:text-overlay-1 transition-colors"
                             />
                           </div>
-                          <p class="text-sm text-text font-medium truncate w-full text-center">
+                          <p class="text-xs text-text font-medium truncate w-full text-center">
                             {artist.name}
                           </p>
                         </button>
@@ -860,20 +850,20 @@
                 <!-- Search: Albums -->
                 {#if searchAlbums.length > 0}
                   <section>
-                    <h3 class="text-sm font-semibold text-overlay-1 uppercase tracking-wider mb-4">
+                    <h3 class="text-xs font-medium text-overlay-0 uppercase tracking-wider mb-3">
                       Albums
-                      <span class="text-overlay-0 font-normal normal-case tracking-normal ml-1">
+                      <span class="font-normal normal-case tracking-normal ml-1 text-overlay-0/60">
                         ({searchAlbums.length})
                       </span>
                     </h3>
-                    <div class="flex gap-4 overflow-x-auto pb-2">
+                    <div class="flex gap-3 overflow-x-auto pb-2">
                       {#each searchAlbums as album}
                         <button
-                          class="group flex flex-col gap-2 p-2 rounded-xl hover:bg-surface-0 transition-colors shrink-0 w-36 text-left"
+                          class="group flex flex-col gap-1.5 p-2 rounded-lg hover:bg-surface-0/40 transition-colors shrink-0 w-32 text-left"
                           onclick={() => uiStore.viewAlbum(album)}
                         >
                           <div
-                            class="aspect-square rounded-lg bg-surface-1 flex items-center justify-center group-hover:bg-surface-2 transition-colors overflow-hidden shadow-md w-full"
+                            class="aspect-square rounded-md bg-surface-0/50 flex items-center justify-center overflow-hidden shadow-sm w-full"
                           >
                             {#if album.coverArt}
                               <img
@@ -883,16 +873,16 @@
                               />
                             {:else}
                               <Disc3
-                                size={32}
-                                class="text-overlay-0 group-hover:text-accent transition-colors"
+                                size={24}
+                                class="text-overlay-0/40 group-hover:text-overlay-0 transition-colors"
                               />
                             {/if}
                           </div>
                           <div class="min-w-0 w-full">
-                            <p class="text-sm text-text font-medium truncate">
+                            <p class="text-xs text-text font-medium truncate">
                               {album.name}
                             </p>
-                            <p class="text-xs text-overlay-1 truncate">
+                            <p class="text-[10px] text-overlay-0 truncate">
                               {album.artist}
                             </p>
                           </div>
@@ -905,9 +895,9 @@
                 <!-- Search: Tracks -->
                 {#if searchTracks.length > 0}
                   <section>
-                    <h3 class="text-sm font-semibold text-overlay-1 uppercase tracking-wider mb-4">
+                    <h3 class="text-xs font-medium text-overlay-0 uppercase tracking-wider mb-3">
                       Tracks
-                      <span class="text-overlay-0 font-normal normal-case tracking-normal ml-1">
+                      <span class="font-normal normal-case tracking-normal ml-1 text-overlay-0/60">
                         ({searchTracks.length})
                       </span>
                     </h3>
@@ -947,20 +937,20 @@
 
         <!-- Now Playing Resize Handle (Desktop) -->
         <div
-          class="hidden lg:flex h-3 shrink-0 items-center justify-center cursor-row-resize group"
+          class="hidden lg:flex h-2 shrink-0 items-center justify-center cursor-row-resize group"
           role="separator"
           aria-orientation="horizontal"
           aria-label="Resize now playing panel"
           onmousedown={handleNowPlayingResizeStart}
         >
           <div
-            class="h-[2px] w-full rounded-full bg-overlay-0/60 group-hover:bg-accent transition-colors"
+            class="h-px w-full bg-border/30 group-hover:bg-accent/50 transition-colors"
           ></div>
         </div>
 
         <!-- Now Playing Bar (Bottom) -->
         <div
-          class="border-t border-border p-4 bg-mantle/50 backdrop-blur-md z-20 shrink-0 overflow-hidden lg:h-[var(--now-playing-height)] lg:min-h-[var(--now-playing-height)]"
+          class="border-t border-border/40 z-20 shrink-0 overflow-hidden lg:h-[var(--now-playing-height)] lg:min-h-[var(--now-playing-height)]"
           style="--now-playing-height: {nowPlayingHeight}px;"
         >
           <NowPlaying />
@@ -985,7 +975,7 @@
       <!-- Queue Sidebar -->
       {#if !queueCollapsed}
         <aside
-          class="border-l border-border bg-mantle hidden 2xl:flex flex-col shrink-0"
+          class="border-l border-border/40 bg-mantle hidden 2xl:flex flex-col shrink-0"
           style="width: {queueWidth}px; min-width: {queueWidth}px;"
         >
           <Queue />
@@ -1012,9 +1002,9 @@
 
     <!-- Modal -->
     <div
-      class="relative bg-mantle border border-border rounded-xl shadow-2xl p-6 max-w-md w-full mx-4"
+      class="relative bg-mantle border border-border/50 rounded-xl shadow-2xl p-6 max-w-md w-full mx-4"
     >
-      <h2 class="text-xl font-semibold text-text mb-2">Delete Album?</h2>
+      <h2 class="text-lg font-semibold text-text mb-2">Delete Album?</h2>
       <p class="text-overlay-1 mb-4">
         Are you sure you want to delete <strong class="text-text"
           >"{albumToDelete.name}"</strong

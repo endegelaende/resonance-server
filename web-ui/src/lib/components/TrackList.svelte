@@ -221,73 +221,72 @@
   <div class="flex flex-col">
     <!-- Album Action Bar -->
     <div
-      class="flex items-center justify-between px-6 py-4 border-b border-border bg-surface-0/30"
+      class="flex items-center justify-between px-5 py-3 border-b border-border/40"
     >
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
         <!-- Play Album Button (Primary) -->
         <button
-          class="flex items-center gap-2 px-5 py-2.5 rounded-full bg-accent text-crust font-medium
-						   hover:bg-accent-hover hover:scale-105 active:scale-95 transition-all shadow-lg
-						   disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+          class="flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium
+                 active:scale-95 transition-all shadow-md
+                 disabled:opacity-50 disabled:cursor-not-allowed"
+          style="background-color: var(--dynamic-accent, var(--color-accent)); color: var(--color-crust);"
           onclick={handlePlayAlbum}
           disabled={isPlayInFlight}
           aria-label="Play album"
         >
-          <Play size={20} fill="currentColor" />
+          <Play size={16} fill="currentColor" />
           <span>Play</span>
         </button>
 
         <!-- Shuffle Button -->
         <button
-          class="flex items-center gap-2 px-4 py-2.5 rounded-full bg-surface-1 text-text
-						   hover:bg-surface-2 hover:scale-105 active:scale-95 transition-all
-						   disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+          class="flex items-center gap-1.5 px-3 py-2 rounded-full text-sm text-overlay-1 hover:text-text
+                 hover:bg-surface-0 active:scale-95 transition-all
+                 disabled:opacity-50 disabled:cursor-not-allowed"
           onclick={handleShuffleAlbum}
           disabled={isPlayInFlight}
           aria-label="Shuffle album"
         >
-          <Shuffle size={18} />
+          <Shuffle size={15} />
           <span>Shuffle</span>
         </button>
 
         <!-- Add All to Queue Button -->
         <button
-          class="flex items-center gap-2 px-4 py-2.5 rounded-full bg-surface-1 text-text
-						   hover:bg-surface-2 hover:scale-105 active:scale-95 transition-all
-						   disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+          class="flex items-center gap-1.5 px-3 py-2 rounded-full text-sm text-overlay-1 hover:text-text
+                 hover:bg-surface-0 active:scale-95 transition-all
+                 disabled:opacity-50 disabled:cursor-not-allowed"
           onclick={handleAddAllToQueue}
           disabled={isPlayInFlight}
           aria-label="Add all to queue"
         >
-          <ListPlus size={18} />
-          <span>Add to Queue</span>
+          <ListPlus size={15} />
+          <span>Queue All</span>
         </button>
       </div>
 
       <!-- Album Stats -->
-      <div class="text-sm text-overlay-1">
-        <span>{tracks.length} {tracks.length === 1 ? "track" : "tracks"}</span>
-        <span class="mx-2">•</span>
-        <span>{getTotalDuration()}</span>
+      <div class="text-xs text-overlay-0 font-mono tabular-nums">
+        {tracks.length} {tracks.length === 1 ? "track" : "tracks"} · {getTotalDuration()}
       </div>
     </div>
 
     <!-- Header -->
     <div
-      class="grid grid-cols-[auto_1fr_auto] gap-4 px-4 py-2 text-xs text-overlay-1 uppercase tracking-wider border-b border-border"
+      class="grid grid-cols-[auto_1fr_auto] gap-4 px-4 py-1.5 text-[10px] text-overlay-0 uppercase tracking-wider border-b border-border/30"
     >
-      <span class="w-8">#</span>
+      <span class="w-6">#</span>
       <span>Title</span>
-      <span class="flex items-center gap-1">
-        <Clock size={14} />
+      <span class="flex items-center">
+        <Clock size={11} />
       </span>
     </div>
 
     <!-- Track list -->
     {#each tracks as track, index}
       <div
-        class="group grid grid-cols-[auto_1fr_auto] gap-4 px-4 py-3 hover:bg-surface-0 transition-colors text-left items-center cursor-pointer
-					   {track.id === highlightId ? 'bg-surface-0' : ''}"
+        class="group grid grid-cols-[auto_1fr_auto] gap-4 px-4 py-2 hover:bg-surface-0/50 transition-colors text-left items-center cursor-pointer
+               {track.id === highlightId ? 'bg-surface-0/40' : ''}"
         style={isPlayInFlight
           ? "pointer-events: none; opacity: 0.7;"
           : undefined}
@@ -297,49 +296,52 @@
         tabindex="0"
       >
         <!-- Track number / Play icon -->
-        <div class="w-8 flex items-center justify-center">
-          <span class="text-overlay-1 text-sm group-hover:hidden">
+        <div class="w-6 flex items-center justify-center">
+          <span class="text-overlay-0 text-xs font-mono tabular-nums group-hover:hidden">
             {track.trackNumber || index + 1}
           </span>
           <Play
-            size={16}
-            class="text-accent hidden group-hover:block"
+            size={13}
+            class="hidden group-hover:block"
+            style="color: var(--dynamic-accent, var(--color-accent));"
             fill="currentColor"
           />
         </div>
 
         <!-- Track info -->
-        <div class="min-w-0 flex flex-col gap-0.5">
+        <div class="min-w-0 flex flex-col">
           <span
-            class="text-text truncate {track.id === highlightId
-              ? 'text-accent'
+            class="text-sm text-text truncate {track.id === highlightId
+              ? 'dynamic-accent'
               : ''}"
           >
             {track.title}
           </span>
-          <div class="flex items-center gap-1 text-sm text-overlay-1 truncate">
-            {#if showArtist}
-              <span class="truncate">{track.artist}</span>
-            {/if}
-            {#if showArtist && showAlbum}
-              <span>•</span>
-            {/if}
-            {#if showAlbum}
-              <span class="truncate">{track.album}</span>
-            {/if}
-          </div>
+          {#if showArtist || showAlbum}
+            <div class="flex items-center gap-1 text-xs text-overlay-0 truncate">
+              {#if showArtist}
+                <span class="truncate">{track.artist}</span>
+              {/if}
+              {#if showArtist && showAlbum}
+                <span>·</span>
+              {/if}
+              {#if showAlbum}
+                <span class="truncate">{track.album}</span>
+              {/if}
+            </div>
+          {/if}
         </div>
 
         <!-- Duration & Actions -->
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-1.5">
           <button
-            class="p-1.5 rounded-full hover:bg-surface-1 text-overlay-1 hover:text-accent opacity-0 group-hover:opacity-100 transition-all"
+            class="p-1 rounded text-overlay-0 hover:text-accent opacity-0 group-hover:opacity-100 transition-all"
             onclick={(e) => handleAdd(track, e)}
             aria-label="Add to queue"
           >
-            <Plus size={16} />
+            <Plus size={14} />
           </button>
-          <span class="text-sm text-overlay-1 w-12 text-right">
+          <span class="text-xs text-overlay-0 w-10 text-right font-mono tabular-nums">
             {formatDuration(track.duration)}
           </span>
         </div>

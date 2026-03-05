@@ -67,9 +67,9 @@
 	<!-- Search Icon -->
 	<div class="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none">
 		{#if isSearching}
-			<Loader2 size={18} class="text-overlay-1 animate-spin" />
+			<Loader2 size={16} class="text-overlay-0 animate-spin" />
 		{:else}
-			<Search size={18} class="text-overlay-1 group-focus-within:text-accent transition-colors" />
+			<Search size={16} class="text-overlay-0 group-focus-within:text-overlay-1 transition-colors" />
 		{/if}
 	</div>
 
@@ -81,9 +81,9 @@
 		oninput={handleInput}
 		onkeydown={handleKeydown}
 		{placeholder}
-		class="w-full pl-10 pr-10 py-2.5 bg-surface-0 border border-border rounded-lg
-			   text-text placeholder:text-overlay-0
-			   focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent
+		class="w-full pl-9 pr-9 py-2 bg-surface-0/50 border border-border/40 rounded-lg
+			   text-sm text-text placeholder:text-overlay-0
+			   focus:outline-none focus:bg-surface-0 focus:border-border
 			   transition-all"
 		aria-label="Search"
 	/>
@@ -91,18 +91,18 @@
 	<!-- Clear Button -->
 	{#if query.length > 0}
 		<button
-			class="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-full
-				   text-overlay-1 hover:text-text hover:bg-surface-1
+			class="absolute right-3 top-1/2 -translate-y-1/2 p-0.5 rounded-full
+				   text-overlay-0 hover:text-text
 				   transition-colors"
 			onclick={handleClear}
 			aria-label="Clear search"
 		>
-			<X size={16} />
+			<X size={14} />
 		</button>
 	{:else}
 		<!-- Keyboard shortcut hint -->
 		<div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
-			<kbd class="px-1.5 py-0.5 text-xs text-overlay-0 bg-surface-1 rounded border border-border">
+			<kbd class="px-1.5 py-0.5 text-[10px] text-overlay-0/60 bg-surface-0/60 rounded">
 				⌘K
 			</kbd>
 		</div>
