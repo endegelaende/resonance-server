@@ -1,0 +1,103 @@
+# =============================================================================
+# .dockerignore — Keep the Docker build context lean
+# =============================================================================
+
+# --- Version Control ---
+.git
+.gitignore
+
+# --- Python artifacts ---
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+*.manifest
+*.spec
+.Python
+
+# --- Virtual environments ---
+.venv/
+venv/
+ENV/
+env/
+
+# --- micromamba / conda ---
+.build/
+
+# --- Testing ---
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+tests/
+
+# --- Linting / Type-checking ---
+.ruff_cache/
+.mypy_cache/
+pyrightconfig.json
+
+# --- IDE / Editor ---
+.idea/
+.vscode/
+.zed/
+*.swp
+*.swo
+*~
+
+# --- SQLite (local dev databases) ---
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
+# --- Cache / Logs ---
+cache/
+*.log
+logs/
+
+# --- Node.js (handled in Stage 1; avoid duplicating in context) ---
+web-ui/node_modules/
+web-ui/.svelte-kit/
+web-ui/build/
+web-ui/.env
+web-ui/.env.*
+
+# --- OS files ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# --- Local data / dev artifacts ---
+data/
+resonance.toml
+audiotest/
+artifacts/
+docs/dev/
+community-repo/
+
+# --- Docker (don't recurse into itself) ---
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# --- AI / repo metadata ---
+CLAUDE.md
+.claude/
+
+# --- Misc ---
+*.bak
+*.tmp
+*.temp
+.env
+.env.local
+nul
+.pre-commit-config.yaml
+.git_/
+assets/logos/logo-gallery*.html
+THIRD_PARTY_NOTICES.md
+LICENSE

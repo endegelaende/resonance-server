@@ -39,6 +39,7 @@
 ## Table of Contents
 
 - [Quick Start](#quick-start)
+- [Docker](#docker)
 - [Architecture](#architecture)
 - [Features](#features)
 - [Installation Details](#installation-details)
@@ -93,6 +94,72 @@ Options:
   --cli-port PORT   Telnet CLI port (default: 9090, 0 to disable)
   --version         Show version
 ```
+
+</details>
+
+---
+
+## Docker
+
+Resonance ships with a multi-stage `Dockerfile` and a `docker-compose.yml` for easy deployment.
+The image includes all audio transcoding tools (faad, flac, lame, sox, ffmpeg) and the
+pre-built Svelte Web-UI — no extra setup required.
+
+> **Note:** The Compose file uses `network_mode: host` so that Squeezebox UDP discovery
+> broadcasts on port 3483 reach the container. Docker bridge mode does not forward LAN
+> broadcasts, which prevents players from finding the server automatically.
+
+**Quick start with Docker Compose:**
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/endegelaende/resonance-server.git
+cd resonance-server
+
+# 2. Configure your environment
+cp .env.example .env
+# Edit .env — at minimum set MUSIC_DIR to your music library path
+
+# 3. Build and start
+docker compose up -d
+
+# 4. Open the Web UI
+#    http://localhost:9000
+
+# 5. View logs
+docker compose logs -f resonance
+```
+
+**Standalone Docker run (host network):**
+
+```bash
+docker build -t resonance-server .
+
+docker run -d \
+  --name resonance-server \
+  --network host \
+  --restart unless-stopped \
+  -v /path/to/music:/music:ro \
+  -v resonance-data:/app/data \
+  -v resonance-cache:/app/cache \
+  resonance-server
+```
+
+> If you have been running Resonance natively before, mount your existing
+> `cache/server_uuid` into the container (`-v ./cache/server_uuid:/app/cache/server_uuid:ro`)
+> so the server keeps the same identity. Squeezebox Radio blacklists UUIDs of servers
+> it previously failed to connect to, so a consistent UUID is essential.
+
+<details>
+<summary><strong>Environment variables</strong></summary>
+
+| Variable            | Default   | Description                                                                                     |
+| ------------------- | --------- | ----------------------------------------------------------------------------------------------- |
+| `MUSIC_DIR`         | `./music` | Host path to your music library (mounted read-only)                                             |
+| `LOG_LEVEL`         | `INFO`    | Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL                                                |
+| `RESONANCE_DISPLAY` | `0`       | Enable bitmap display rendering for SB2/3/Classic/Boom (set to `1` after hardware verification) |
+
+See `.env.example` for the full reference.
 
 </details>
 
@@ -475,6 +542,10 @@ resonance-server/
 │   ├── PLUGIN_API.md             #   Plugin API reference (incl. SDUI §19)
 │   ├── PLUGIN_TUTORIAL.md        #   Plugin tutorial (step by step)
 │   └── PLUGIN_CASESTUDY.md      #   Case study: raopbridge plugin deep dive
+├── Dockerfile                    # Multi-stage Docker build
+├── docker-compose.yml            # Reference deployment config
+├── .dockerignore                 # Docker build context exclusions
+├── .env.example                  # Environment variable reference
 ├── pyproject.toml                # Python project config
 └── LICENSE                       # GPL-2.0
 ```

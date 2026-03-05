@@ -1,0 +1,98 @@
+# =============================================================================
+# Resonance Music Server — Docker Compose
+# =============================================================================
+#
+# Usage:
+#   1. Copy .env.example to .env and adjust paths:
+#        cp .env.example .env
+#
+#   2. Start the server:
+#        docker compose up -d
+#
+#   3. Open the Web UI:
+#        http://localhost:9000
+#
+#   4. View logs:
+#        docker compose logs -f resonance
+#
+#   5. Stop:
+#        docker compose down
+#
+# =============================================================================
+
+services:
+    resonance:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        container_name: resonance-server
+        restart: unless-stopped
+
+        # --- Network -------------------------------------------------------------
+        # Host network mode is required for Squeezebox UDP discovery broadcasts
+        # on port 3483. Docker bridge mode does not forward LAN broadcasts into
+        # the container, so players cannot find the server.
+        # With host networking, no port mapping is needed — the container binds
+        # directly to the host's network interfaces.
+        network_mode: host
+
+        # --- Volumes -------------------------------------------------------------
+        volumes:
+            # Music library — mount your music folder(s) read-only
+            - ${MUSIC_DIR:-./music}:/music:ro
+
+            # Persistent data (playlists, alarms, player prefs, plugin data, saved playlists)
+            - resonance-data:/app/data
+
+            # Cache (SQLite database, artwork cache, server UUID)
+            - resonance-cache:/app/cache
+
+            # Mount host server_uuid so Docker uses the same identity as native runs.
+            # The Squeezebox Radio blacklists UUIDs of servers it failed to connect to,
+            # so a consistent UUID across native/Docker is essential.
+            - ./cache/server_uuid:/app/cache/server_uuid:ro
+
+            # Optional: mount a custom config file
+            # - ./resonance.toml:/app/resonance.toml:ro
+
+        # --- Environment ---------------------------------------------------------
+        environment:
+            # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+            - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+            # Enable bitmap display rendering for SB2/SB3/Classic/Boom
+            # Set to 1 after hardware verification
+            - RESONANCE_DISPLAY=${RESONANCE_DISPLAY:-0}
+
+            # Python optimizations
+            - PYTHONDONTWRITEBYTECODE=1
+            - PYTHONUNBUFFERED=1
+
+        # --- Resource Limits (optional) ------------------------------------------
+        # Adjust based on library size and number of concurrent players
+        # deploy:
+        #   resources:
+        #     limits:
+        #       memory: 1G
+        #     reservations:
+        #       memory: 256M
+
+        # --- Health Check --------------------------------------------------------
+        healthcheck:
+            test:
+                [
+                    "CMD",
+                    "python",
+                    "-c",
+                    "import urllib.request; urllib.request.urlopen('http://localhost:9000/api/status')",
+                ]
+            interval: 30s
+            timeout: 5s
+            start_period: 15s
+            retries: 3
+
+volumes:
+    resonance-data:
+        driver: local
+    resonance-cache:
+        driver: local
