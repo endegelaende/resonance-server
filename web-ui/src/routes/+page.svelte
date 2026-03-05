@@ -920,7 +920,9 @@
           {:else if uiStore.currentView === "plugins"}
             <PluginsView />
           {:else if uiStore.activePluginId}
-            <PluginPageView pluginId={uiStore.activePluginId} />
+            {#key uiStore.activePluginId}
+              <PluginPageView pluginId={uiStore.activePluginId} />
+            {/key}
           {:else if uiStore.currentView === "settings"}
             <SettingsPanel />
           {/if}
