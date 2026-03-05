@@ -10,7 +10,6 @@
     Disc3,
     Users,
     X,
-    Radio,
     Puzzle,
   } from "lucide-svelte";
   import { onMount } from "svelte";
@@ -224,32 +223,6 @@
     >
       <ListMusic size={20} class="transition-colors group-hover:text-text" />
       <span>Playlists</span>
-    </button>
-
-    <!-- Divider -->
-    <div class="my-4 border-t border-surface-1 mx-3 opacity-50"></div>
-
-    <!-- Media Sources -->
-    <div
-      class="px-3 py-2 text-xs font-semibold text-overlay-0 uppercase tracking-wider mb-2"
-    >
-      Sources
-    </div>
-
-    <button
-      class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 group
-			{uiStore.currentView === 'radio'
-        ? 'bg-surface-0 text-accent dynamic-accent font-medium'
-        : 'text-overlay-1 hover:text-text hover:bg-surface-0'}"
-      onclick={() => handleNavigate("radio")}
-    >
-      <Radio
-        size={20}
-        class="transition-colors {uiStore.currentView === 'radio'
-          ? 'text-accent dynamic-accent'
-          : 'group-hover:text-text'}"
-      />
-      <span>Radio</span>
     </button>
 
     <!-- Dynamic Plugin Pages -->
