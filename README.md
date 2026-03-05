@@ -471,10 +471,10 @@ resonance-server/
 ├── docs/                         # Documentation
 │   ├── ARCHITECTURE.md           #   System architecture
 │   ├── CHANGELOG.md              #   Change log
-
 │   ├── PLUGINS.md                #   Plugin system overview
 │   ├── PLUGIN_API.md             #   Plugin API reference (incl. SDUI §19)
-│   └── PLUGIN_TUTORIAL.md        #   Plugin tutorial (step by step)
+│   ├── PLUGIN_TUTORIAL.md        #   Plugin tutorial (step by step)
+│   └── PLUGIN_CASESTUDY.md      #   Case study: raopbridge plugin deep dive
 ├── pyproject.toml                # Python project config
 └── LICENSE                       # GPL-2.0
 ```
