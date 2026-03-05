@@ -42,6 +42,9 @@ class _LoadedPlugin:
     module: ModuleType
     context: PluginContext | None = None
     started: bool = False
+    error: str | None = None
+    """Non-None when ``setup()`` raised an exception.  Stored so the
+    API / Web-UI can show *why* a plugin failed to start."""
 
 
 class PluginStateManager:
@@ -103,6 +106,9 @@ class PluginStateManager:
 class PluginManager:
     """Manages plugin discovery, loading, startup, and shutdown."""
 
+    _load_errors: dict[str, str]
+    """Plugin names that failed to import, with their error messages."""
+
     def __init__(
         self,
         plugins_dir: Path | None = None,
@@ -128,6 +134,7 @@ class PluginManager:
         self.state_manager = PluginStateManager(state_file=state_file)
 
         self._restart_required = False
+        self._load_errors: dict[str, str] = {}
 
     @property
     def restart_required(self) -> bool:
@@ -210,6 +217,7 @@ class PluginManager:
                 loaded_count += 1
                 logger.info("Loaded plugin: %s v%s", manifest.name, manifest.version)
             except Exception as exc:
+                self._load_errors[manifest.name] = f"Failed to load: {exc}"
                 logger.error("Failed to load plugin '%s': %s", manifest.name, exc)
 
         logger.info("Loaded %d / %d plugin(s)", loaded_count, len(self.manifests))
@@ -260,10 +268,13 @@ class PluginManager:
                 setup_fn = getattr(loaded.module, "setup")
                 await setup_fn(ctx)
                 loaded.started = True
+                loaded.error = None
                 started += 1
                 logger.info("Started plugin: %s v%s — %s", name, loaded.manifest.version, ctx)
             except Exception as exc:
+                error_msg = f"Failed to start: {exc}"
                 logger.error("Failed to start plugin '%s': %s", name, exc)
+                loaded.error = error_msg
                 try:
                     await ctx._cleanup()
                 except Exception as cleanup_exc:
@@ -343,6 +354,10 @@ class PluginManager:
             manifest = manifests_by_name[name]
             loaded = self.plugins.get(name)
             started = bool(loaded and loaded.started)
+            error = (
+                loaded.error if loaded
+                else self._load_errors.get(name)
+            )
             result.append(
                 {
                     "name": manifest.name,
@@ -353,6 +368,7 @@ class PluginManager:
                     "icon": manifest.icon,
                     "state": self.state_manager.get_state(manifest.name),
                     "started": started,
+                    "error": error,
                     "type": manifest.plugin_type,
                     "has_settings": bool(manifest.settings_defs),
                     "can_uninstall": manifest.plugin_type == "community",

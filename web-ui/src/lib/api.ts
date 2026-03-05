@@ -260,6 +260,7 @@ export interface PluginInfo {
   icon: string;
   state: "enabled" | "disabled";
   started: boolean;
+  error: string | null;
   type: "core" | "community";
   has_settings: boolean;
   can_uninstall: boolean;
@@ -1862,9 +1863,7 @@ class ResonanceAPI {
   }
 
   async getPluginUI(pluginId: string): Promise<PluginUIPage> {
-    const response = await fetch(
-      `${this.baseUrl}/api/plugins/${pluginId}/ui`,
-    );
+    const response = await fetch(`${this.baseUrl}/api/plugins/${pluginId}/ui`);
     if (!response.ok)
       throw new Error(`Failed to load plugin UI: ${response.statusText}`);
     return response.json();
@@ -1883,8 +1882,7 @@ class ResonanceAPI {
         body: JSON.stringify(params),
       },
     );
-    if (!response.ok)
-      throw new Error(`Action failed: ${response.statusText}`);
+    if (!response.ok) throw new Error(`Action failed: ${response.statusText}`);
     return response.json();
   }
 }
