@@ -369,16 +369,26 @@ class KeyValue(UIComponent):
 
 
 class Table(UIComponent):
-    """Data table with optional action columns.
+    """Data table with optional action columns and row-click support.
 
-    When a column has ``variant="editable"`` the frontend renders an inline
-    text input instead of plain text.  On blur or Enter the frontend dispatches
-    *edit_action* with ``{<row_key>: <row[row_key]>, <col.key>: <new_value>}``.
+    **Row click:** When *edit_action* is set, clicking anywhere on a row
+    (except action buttons or editable cells) dispatches *edit_action*
+    with ``{"row": {<full row data>}}``.  This is the primary mechanism
+    for "click a row to do something" (e.g. play a station, drill into
+    a category).
+
+    **Inline edit:** When a column has ``variant="editable"`` the frontend
+    renders an inline text input instead of plain text.  On blur or Enter
+    the frontend dispatches *edit_action* with
+    ``{<row_key>: <row[row_key]>, <col.key>: <new_value>}``.
+
+    **Action buttons:** Columns with ``variant="actions"`` render per-row
+    action buttons defined in the row data (see :class:`TableAction`).
 
     *row_key* identifies which column value uniquely identifies a row
     (default ``"udn"``).  *edit_action* is the plugin action name to call
-    when an inline edit is committed.  Both are only serialised when
-    *edit_action* is set.
+    when a row is clicked or an inline edit is committed.  Both are only
+    serialised when *edit_action* is set.
     """
 
     def __init__(

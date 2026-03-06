@@ -39,6 +39,9 @@
   // Temporary edit value while typing
   let editValue = $state("");
 
+  // Track row-click loading state to prevent double-clicks
+  let rowClickLoading = $state<number | null>(null);
+
   function cellId(rowIndex: number, colKey: string): string {
     return `${rowIndex}-${colKey}`;
   }
@@ -104,6 +107,53 @@
       toastStore.error(`Action failed: ${e.message}`);
     }
   }
+
+  /**
+   * Handle row click — dispatches edit_action with the full row data.
+   * Only fires when edit_action is set and the click target is not an
+   * action button, editable cell, or interactive element.
+   */
+  async function handleRowClick(e: MouseEvent, rowIndex: number) {
+    if (!edit_action) return;
+
+    // Don't handle if click originated from an interactive element
+    const target = e.target as HTMLElement;
+    if (target.closest("button, input, a, [role='button']")) return;
+
+    // Prevent double-clicks
+    if (rowClickLoading !== null) return;
+
+    const row = rows[rowIndex];
+    if (!row) return;
+
+    // Check if row has any column with variant "actions" or "editable" that was clicked
+    // If so, let those handlers deal with it instead
+    const clickedTd = target.closest("td");
+    if (clickedTd) {
+      const colIndex = Array.from(clickedTd.parentElement?.children ?? []).indexOf(clickedTd);
+      if (colIndex >= 0 && colIndex < columns.length) {
+        const col = columns[colIndex];
+        if (col.variant === "actions" || col.variant === "editable") return;
+      }
+    }
+
+    rowClickLoading = rowIndex;
+    try {
+      const result = await pluginActions.dispatch(pluginId, edit_action, { row });
+      if (result?.message) toastStore.success(result.message);
+      if (result?.error) toastStore.error(result.error);
+    } catch (e: any) {
+      toastStore.error(`Action failed: ${e.message}`);
+    } finally {
+      rowClickLoading = null;
+    }
+  }
+
+  // Check if any column has variant "editable"
+  const hasEditableColumns = $derived(columns.some((c) => c.variant === "editable"));
+
+  // Row is clickable if edit_action is set (for row-click dispatch)
+  const isRowClickable = $derived(!!edit_action);
 </script>
 
 {#if title}
@@ -127,7 +177,14 @@
     </thead>
     <tbody>
       {#each rows as row, i}
-        <tr class="border-b border-border last:border-0 hover:bg-surface-0/50 transition-colors">
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <tr
+          class="border-b border-border last:border-0 hover:bg-surface-0/50 transition-colors
+            {isRowClickable ? 'cursor-pointer' : ''}
+            {rowClickLoading === i ? 'opacity-60' : ''}"
+          onclick={(e) => handleRowClick(e, i)}
+        >
           {#each columns as col}
             <td class="px-4 py-3">
               {#if col.variant === "badge"}
