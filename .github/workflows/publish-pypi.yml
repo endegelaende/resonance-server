@@ -61,7 +61,7 @@ jobs:
                   python-version: "3.12"
 
             - name: Install build tools
-              run: pip install --upgrade pip build
+              run: pip install --upgrade pip build hatchling
 
             - name: Validate version matches tag
               run: |
@@ -78,7 +78,9 @@ jobs:
                   echo "Version OK: $PKG_VERSION"
 
             - name: Build sdist and wheel
-              run: python -m build
+              run: |
+                  python -m build --wheel --no-isolation
+                  python -m build --sdist --no-isolation
 
             - name: List dist contents
               run: ls -lh dist/
