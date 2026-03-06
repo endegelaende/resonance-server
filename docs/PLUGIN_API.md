@@ -2212,7 +2212,7 @@ Markdown(content: str)
 **Supported syntax:** Headings, bold, italic, strikethrough, links,
 images, inline code, fenced code blocks (with language label),
 blockquotes, ordered and unordered lists, tables, horizontal rules, and
-line breaks. All elements are styled to match the Catppuccin theme.
+line breaks. All elements are styled to match the application theme.
 
 **Renders as:** Themed HTML produced by a custom `marked` renderer.
 Each Markdown element maps to a specific set of Tailwind classes (e.g.

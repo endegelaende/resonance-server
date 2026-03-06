@@ -81,7 +81,7 @@ API requests to the backend on port 9000.
 ```text
 web-ui/
 ├── src/
-│   ├── app.css                           # Tailwind imports + Catppuccin theme + utilities
+│   ├── app.css                           # Tailwind imports + warm vinyl-lounge theme + utilities
 │   ├── app.html                          # HTML shell
 │   ├── routes/
 │   │   ├── +layout.ts                    # SPA prerender config
@@ -246,7 +246,7 @@ Extracts color palettes from album artwork using node-vibrant:
 - **Quality checks:** `isTooDark()`, `isTooLight()`, `ensureVibrant()` adjustments
 - **CSS variables:** Sets `--dynamic-accent`, `--dynamic-accent-rgb`, etc. on `:root`
 - **Caching:** URL → palette cache avoids re-extraction
-- **Default palette:** Catppuccin Mauve when no artwork
+- **Default palette:** Warm amber (`#e09f5a`) when no artwork
 
 ### `toastStore` — Notifications
 
@@ -354,25 +354,27 @@ SDUI is **secure by construction**:
 
 ## Theming
 
-### Catppuccin Mocha Color System
+### Warm Vinyl-Lounge Color System
 
-The theme is defined in `src/app.css` using Tailwind v4's `@theme` directive:
+The theme is defined in `src/app.css` using Tailwind v4's `@theme` directive.
+A warm, dark palette inspired by vinyl lounges and espresso bars:
 
 | Token           | Hex       | Usage                          |
 | --------------- | --------- | ------------------------------ |
-| `base`          | `#1e1e2e` | Main background                |
-| `mantle`        | `#181825` | Sidebar, secondary backgrounds |
-| `crust`         | `#11111b` | Deepest background             |
-| `surface-0`     | `#313244` | Cards, elevated surfaces       |
-| `surface-1`     | `#45475a` | Borders, dividers              |
-| `surface-2`     | `#585b70` | Hover states                   |
-| `overlay-0/1/2` | `#6c–#93` | Muted text, placeholders       |
-| `text`          | `#cdd6f4` | Primary text                   |
-| `subtext-0/1`   | `#a6–#ba` | Secondary text, labels         |
-| `accent`        | `#cba6f7` | Primary accent (Mauve)         |
-| `success`       | `#a6e3a1` | Success states (Green)         |
-| `warning`       | `#f9e2af` | Warning states (Yellow)        |
-| `error`         | `#f38ba8` | Error states (Red)             |
+| `base`          | `#1c1917` | Main background                |
+| `mantle`        | `#171412` | Sidebar, secondary backgrounds |
+| `crust`         | `#110f0d` | Deepest background             |
+| `surface-0`     | `#292524` | Cards, elevated surfaces       |
+| `surface-1`     | `#3b3633` | Borders, dividers              |
+| `surface-2`     | `#4d4642` | Hover states                   |
+| `overlay-0/1/2` | `#6b–#9e` | Muted text, placeholders       |
+| `text`          | `#ede0d4` | Primary text                   |
+| `subtext-0/1`   | `#c4–#d5` | Secondary text, labels         |
+| `accent`        | `#e09f5a` | Primary accent (Warm Amber)    |
+| `success`       | `#8fbe7a` | Success states (Green)         |
+| `warning`       | `#e8c468` | Warning states (Yellow)        |
+| `error`         | `#d97070` | Error states (Red)             |
+| `border`        | `#332e2b` | Border color                   |
 
 ### Dynamic Colors
 

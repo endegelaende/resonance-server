@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
   <defs>
     <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#22d3ee"/>
-      <stop offset="100%" stop-color="#60a5fa"/>
+      <stop offset="0%" stop-color="#f0c27a"/>
+      <stop offset="100%" stop-color="#e09f5a"/>
     </linearGradient>
     <radialGradient id="shine" cx="30%" cy="30%" r="50%">
       <stop offset="0%" stop-color="#ffffff" stop-opacity="0.15"/>
@@ -10,8 +10,8 @@
     </radialGradient>
   </defs>
 
-  <!-- Vinyl record body (lighter for contrast) -->
-  <circle cx="24" cy="24" r="22" fill="#3b3b4f"/>
+  <!-- Vinyl record body -->
+  <circle cx="24" cy="24" r="22" fill="#292524"/>
 
   <!-- Shine overlay -->
   <circle cx="24" cy="24" r="22" fill="url(#shine)"/>
@@ -22,10 +22,10 @@
   <circle cx="24" cy="24" r="10" fill="none" stroke="url(#accentGrad)" stroke-width="1" opacity="0.25"/>
 
   <!-- Label area -->
-  <circle cx="24" cy="24" r="7" fill="#2a2a3c" stroke="url(#accentGrad)" stroke-width="1.5"/>
+  <circle cx="24" cy="24" r="7" fill="#171412" stroke="url(#accentGrad)" stroke-width="1.5"/>
 
   <!-- Center spindle -->
-  <circle cx="24" cy="24" r="2" fill="#1e1e2e" stroke="url(#accentGrad)" stroke-width="1.2"/>
+  <circle cx="24" cy="24" r="2" fill="#1c1917" stroke="url(#accentGrad)" stroke-width="1.2"/>
 
   <!-- Outer ring accent -->
   <circle cx="24" cy="24" r="22" fill="none" stroke="url(#accentGrad)" stroke-width="1" opacity="0.5"/>

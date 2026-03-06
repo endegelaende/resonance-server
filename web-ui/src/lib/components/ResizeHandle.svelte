@@ -204,7 +204,7 @@
 
   .resize-handle:hover .handle-line,
   .resize-handle.dragging .handle-line {
-    background-color: var(--color-accent, #cba6f7);
+    background-color: var(--color-accent, #e09f5a);
     width: 4px;
     opacity: 1;
   }
@@ -214,7 +214,7 @@
     background: linear-gradient(
       90deg,
       transparent 0%,
-      rgba(203, 166, 247, 0.1) 50%,
+      rgba(224, 159, 90, 0.1) 50%,
       transparent 100%
     );
   }
@@ -224,9 +224,9 @@
   }
 
   .resize-handle:focus-visible .handle-line {
-    background-color: var(--color-accent, #cba6f7);
+    background-color: var(--color-accent, #e09f5a);
     width: 3px;
-    box-shadow: 0 0 0 2px var(--color-accent, #cba6f7);
+    box-shadow: 0 0 0 2px var(--color-accent, #e09f5a);
   }
 
   .handle-line {
@@ -243,7 +243,7 @@
   }
 
   .resize-handle.dragging .handle-line {
-    background-color: var(--color-accent, #cba6f7);
+    background-color: var(--color-accent, #e09f5a);
     opacity: 1;
   }
 
