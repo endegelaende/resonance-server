@@ -1,0 +1,39 @@
+# Core plugins (bundled with the server)
+recursive-include plugins *.py *.toml *.md *.txt
+
+# Static assets (LMS-compatible images etc.)
+recursive-include static *
+
+# Pre-built Svelte web-ui (must run `cd web-ui && npm ci && npm run build` first)
+recursive-include web-ui/build *
+
+# Package metadata
+include LICENSE
+include README.md
+include THIRD_PARTY_NOTICES.md
+include pyproject.toml
+
+# Exclude development / local-only files
+exclude CLAUDE.md
+exclude radio.json
+exclude resonance.toml
+exclude pyrightconfig.json
+exclude .pre-commit-config.yaml
+exclude .dockerignore
+exclude docker-compose.yml
+exclude Dockerfile
+
+prune .claude
+prune .zed
+prune .pytest_cache
+prune MagicMock
+prune data
+prune docs/dev
+prune third_party/bin
+prune third_party/squeezelite
+prune web-ui/node_modules
+prune web-ui/.svelte-kit
+prune web-ui/src
+prune tests
+prune scripts
+prune assets

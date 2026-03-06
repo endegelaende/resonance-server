@@ -97,3 +97,9 @@ CLAUDE.md
 
 # === Design Scratch Files ===
 assets/logos/logo-gallery*.html
+
+# === Runtime Data Files ===
+radio.json
+
+# === Python Build Artifacts ===
+dist/

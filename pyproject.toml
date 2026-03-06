@@ -1,5 +1,5 @@
 [project]
-name = "resonance"
+name = "resonance-server"
 version = "0.1.0"
 description = "A modern Python implementation of the Logitech Media Server (Squeezebox Server)"
 readme = "README.md"
@@ -50,7 +50,7 @@ dev = [
 ]
 
 all = [
-    "resonance[blurhash,dev]",
+    "resonance-server[blurhash,dev]",
 ]
 
 [project.scripts]
@@ -68,6 +68,33 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["resonance"]
+
+# Bundle core plugins, static assets, and web-ui build into the wheel.
+# They end up under resonance/_bundled/ so _paths.py can find them
+# regardless of whether we're running from source or from pip install.
+[tool.hatch.build.targets.wheel.force-include]
+"plugins" = "resonance/_bundled/plugins"
+"static" = "resonance/_bundled/static"
+"web-ui/build" = "resonance/_bundled/web-ui/build"
+
+# Exclude third-party binaries (platform-specific, not for PyPI)
+# and development/local-only files from the sdist.
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "third_party/bin/",
+    "third_party/squeezelite/",
+    "data/",
+    "MagicMock/",
+    ".pytest_cache/",
+    ".zed/",
+    ".claude/",
+    "CLAUDE.md",
+    "web-ui/node_modules/",
+    "web-ui/.svelte-kit/",
+    "docs/dev/",
+    "radio.json",
+    "resonance.toml",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

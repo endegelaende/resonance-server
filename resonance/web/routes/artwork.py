@@ -629,7 +629,9 @@ async def _get_imageproxy_client() -> httpx.AsyncClient:
 
 
 # Resolve the static/html directory once.
-_STATIC_HTML_DIR = Path(__file__).resolve().parent.parent.parent.parent / "static" / "html"
+from resonance._paths import static_html_dir as _get_static_html_dir
+
+_STATIC_HTML_DIR = _get_static_html_dir()
 
 # Radio placeholder image — loaded lazily on first fallback.
 _RADIO_PLACEHOLDER_PATH = _STATIC_HTML_DIR / "images" / "radio.png"

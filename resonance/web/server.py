@@ -19,7 +19,6 @@ import logging
 import socket
 from contextlib import suppress
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import uvicorn
@@ -27,6 +26,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from resonance._paths import static_html_dir, webui_build_dir
 from resonance.config.settings import get_settings, settings_loaded
 from resonance.web.cometd import CometdManager
 from resonance.web.jsonrpc import JsonRpcHandler
@@ -286,13 +286,13 @@ class WebServer:
 
         # Serve LMS-compatible static assets (/html/images/radio.png etc.)
         # Must come before the catch-all Svelte mount.
-        _static_html = Path(__file__).resolve().parent.parent.parent / "static" / "html"
+        _static_html = static_html_dir()
         if _static_html.is_dir():
             self.app.mount("/html", StaticFiles(directory=str(_static_html)), name="lms_html")
             logger.info("LMS-compatible /html/ static assets mounted from %s", _static_html)
 
         # Serve Svelte static build at / (must be last — catch-all)
-        _ui_build = Path(__file__).resolve().parent.parent.parent / "web-ui" / "build"
+        _ui_build = webui_build_dir()
         if _ui_build.is_dir() and any(_ui_build.iterdir()):
             self.app.mount("/", StaticFiles(directory=str(_ui_build), html=True), name="webui")
             logger.info("Svelte UI mounted from %s", _ui_build)

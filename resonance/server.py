@@ -139,8 +139,9 @@ class ResonanceServer:
         self.cors_origins = cors_origins
 
         # Plugin manager + installer + repository client
+        from resonance._paths import core_plugins_dir
         self.plugin_manager = PluginManager(
-            core_plugins_dir=Path("plugins"),
+            core_plugins_dir=core_plugins_dir(),
             community_plugins_dir=Path("data/installed_plugins"),
         )
         self.plugin_installer = PluginInstaller(install_dir=Path("data/installed_plugins"))

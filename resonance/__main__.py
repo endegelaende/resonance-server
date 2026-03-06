@@ -15,6 +15,7 @@ import getpass
 import logging
 import sys
 
+from resonance import __version__
 from resonance.config.settings import (
     ServerSettings,
     init_settings,
@@ -109,7 +110,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 0.1.0",
+        version=f"%(prog)s {__version__}",
     )
 
     parser.add_argument(
