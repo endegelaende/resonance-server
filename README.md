@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+  <a href="https://pypi.org/project/resonance-server/"><img src="https://img.shields.io/pypi/v/resonance-server.svg?logo=pypi&logoColor=white" alt="PyPI" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--2.0-blue.svg" alt="License: GPL-2.0" /></a>
   <img src="https://img.shields.io/badge/python-3.11%2B-3776ab.svg?logo=python&logoColor=white" alt="Python 3.11+" />
   <img src="https://img.shields.io/badge/svelte-5-ff3e00.svg?logo=svelte&logoColor=white" alt="Svelte 5" />
@@ -39,6 +40,7 @@
 ## Table of Contents
 
 - [Quick Start](#quick-start)
+- [From Source](#from-source)
 - [Docker](#docker)
 - [Architecture](#architecture)
 - [Features](#features)
@@ -56,27 +58,16 @@
 
 ## Quick Start
 
-**Linux / macOS:**
-
 ```bash
-git clone https://github.com/endegelaende/resonance-server.git
-cd resonance-server
-python3 -m venv .venv
-.venv/bin/python -m pip install mutagen aiosqlite fastapi uvicorn httpx
-.venv/bin/python -m resonance
+pip install resonance-server
+resonance
 ```
 
-**Windows (PowerShell or cmd.exe):**
+That's it. The server starts on ports **3483** (Slimproto), **9000** (HTTP/API), and **9090** (CLI).
+The package includes the Web UI and all core plugins — no extra build steps needed.
 
-```powershell
-git clone https://github.com/endegelaende/resonance-server.git
-cd resonance-server
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install mutagen aiosqlite fastapi uvicorn httpx
-.venv\Scripts\python.exe -m resonance
-```
+Open **http://localhost:9000** in your browser to access the Web UI.
 
-The server starts on ports **3483** (Slimproto), **9000** (HTTP/API), and **9090** (CLI).
 Players on the same subnet may discover the server automatically via UDP broadcast.
 If not, point your player to the server IP manually (e.g. `squeezelite -s <server-ip>`).
 
@@ -96,6 +87,35 @@ Options:
 ```
 
 </details>
+
+---
+
+## From Source
+
+If you prefer to run from a git checkout (e.g. for development):
+
+**Linux / macOS:**
+
+```bash
+git clone https://github.com/endegelaende/resonance-server.git
+cd resonance-server
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m resonance
+```
+
+**Windows (PowerShell or cmd.exe):**
+
+```powershell
+git clone https://github.com/endegelaende/resonance-server.git
+cd resonance-server
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -e .
+.venv\Scripts\python.exe -m resonance
+```
+
+> **Note:** When running from source, build the Web UI separately:
+> `cd web-ui && npm install && npm run build` — see [Web UI](#web-ui) for details.
 
 ---
 
@@ -246,11 +266,14 @@ Resonance speaks the same protocols as LMS. The server gives commands, players e
 
 ## Installation Details
 
-The [Quick Start](#quick-start) above covers cloning and installing.
-Below are additional details for reference.
+The recommended way to install Resonance is via [PyPI](https://pypi.org/project/resonance-server/):
 
-**Alternative — Download ZIP** instead of `git clone`:
-Go to https://github.com/endegelaende/resonance-server → green **Code** button → **Download ZIP**.
+```bash
+pip install resonance-server
+```
+
+This installs the server with all required dependencies, bundled core plugins, and the
+pre-built Web UI. No Node.js, no build steps — just install and run.
 
 > **Tip:** If `python3` is not found or too old, install Python 3.11+ via your package manager:
 >
@@ -259,6 +282,8 @@ Go to https://github.com/endegelaende/resonance-server → green **Code** button
 > - macOS: `brew install python@3`
 
 ### Python Dependencies
+
+All dependencies are installed automatically via `pip install resonance-server`:
 
 | Package     | Purpose                                              |
 | ----------- | ---------------------------------------------------- |
@@ -271,7 +296,7 @@ Go to https://github.com/endegelaende/resonance-server → green **Code** button
 ### Optional Dependencies
 
 ```bash
-pip install blurhash-python pillow   # BlurHash cover art placeholders
+pip install resonance-server[blurhash]   # BlurHash cover art placeholders (Pillow + blurhash-python)
 ```
 
 ---
