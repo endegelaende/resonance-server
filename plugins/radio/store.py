@@ -90,11 +90,10 @@ class RecentStation:
     """Comma-separated genre tags."""
 
     station_id: str = ""
-    """Provider-specific station identifier (UUID for radio-browser,
-    guide_id for TuneIn)."""
+    """Provider-specific station identifier (UUID for radio-browser)."""
 
     provider: str = ""
-    """Which provider this station came from ('radio-browser' or 'tunein')."""
+    """Which provider this station came from (e.g. 'radio-browser')."""
 
     last_played: str = ""
     """ISO 8601 timestamp of the last time this station was played."""

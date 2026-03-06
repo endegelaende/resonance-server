@@ -1,16 +1,16 @@
 """
 Radio Plugin for Resonance.
 
-Internet Radio via **radio-browser.info** and **TuneIn** — dual-provider
-support with a SDUI dashboard, recently played stations, configurable
-settings, and full Jive menu integration.
+Internet Radio via **radio-browser.info** — free, open-source community
+database with ~40,000+ stations. SDUI dashboard with real browsing,
+recently played stations, configurable settings, and full Jive menu
+integration.
 
 Architecture
 ~~~~~~~~~~~~
 
 * **RadioBrowserClient** (``radiobrowser.py``) wraps the radio-browser.info API.
-* **TuneInClient** (``tunein.py``) wraps the TuneIn/RadioTime OPML API.
-* **RadioProvider** / **TuneInProvider** implement
+* **RadioProvider** implements
   :class:`~resonance.content_provider.ContentProvider` for the server's
   generic content infrastructure.
 * **RadioStore** (``store.py``) persists recently played stations.
@@ -23,8 +23,10 @@ Architecture
 * SDUI page provides a Web-UI dashboard with tabs:
 
   - **Recent** — recently played stations (click to replay)
-  - **Browse** — quick-access category cards
-  - **Settings** — provider choice, default country, cache TTL
+  - **Browse** — live browsing of categories, countries, genres, languages,
+    popular & trending stations with drill-down navigation
+  - **Settings** — default country, cache TTL
+  - **About** — plugin information
 
 Menu entry
 ~~~~~~~~~~
@@ -42,21 +44,11 @@ Browse structure (radio-browser.info)
   - **By Genre / Tag** → tag list → stations
   - **By Language** → language list → stations
 
-Browse structure (TuneIn)
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-  - **Local Radio** — GeoIP-based local stations
-  - **Music** / **News** / **Sports** / **Talk** — TuneIn categories
-  - **By Location** / **By Language** — hierarchical browsing
-  - **Podcasts** — TuneIn podcast directory (overlaps with podcast plugin)
-
-Data sources
-~~~~~~~~~~~~
+Data source
+~~~~~~~~~~~
 
 * https://www.radio-browser.info — open community project, free API,
   pre-resolved stream URLs.  No API key required.
-* https://opml.radiotime.com — TuneIn/RadioTime OPML API, same as LMS
-  uses with Partner ID 16.
 """
 
 from __future__ import annotations
@@ -78,13 +70,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _radio_browser: Any | None = None  # RadioBrowserClient instance
-_tunein_client: Any | None = None  # TuneInClient instance
 _provider: Any | None = None  # RadioProvider (radio-browser) instance
-_tunein_provider: Any | None = None  # TuneInProvider instance
 _event_bus: Any | None = None  # EventBus reference
 _store: Any | None = None  # RadioStore instance
 _ctx: Any | None = None  # PluginContext reference
 _http_client: Any | None = None  # httpx.AsyncClient for JSON-RPC self-calls
+
+# Browse state — tracks what the user is currently browsing in the SDUI.
+# When a browse action is triggered, _browse_path is set and the UI re-renders
+# with data fetched from radio-browser.info.
+_browse_path: str = ""  # e.g. "", "popular", "country", "country:DE", "tag", "tag:jazz"
+_browse_data: list[dict[str, Any]] | None = None  # Cached browse results for current path
+_browse_title: str = ""  # Human-readable title for current browse view
 
 
 # ---------------------------------------------------------------------------
@@ -101,11 +98,6 @@ def _setting(key: str, default: Any = "") -> Any:
         return val if val is not None else default
     except Exception:
         return default
-
-
-def _preferred_provider() -> str:
-    """Return the configured preferred provider."""
-    return str(_setting("preferred_provider", "radio-browser"))
 
 
 # ---------------------------------------------------------------------------
@@ -145,8 +137,6 @@ class RadioProvider:
         - ``"language:german"`` → stations in German
         """
         from resonance.content_provider import BrowseItem
-
-        from .radiobrowser import format_station_subtitle
 
         if not path:
             # Top-level categories
@@ -259,7 +249,7 @@ class RadioProvider:
         """Resolve a station UUID to stream info.
 
         radio-browser.info already provides ``url_resolved`` — no additional
-        resolution step needed (unlike TuneIn).
+        resolution step needed.
         """
         from resonance.content_provider import StreamInfo
 
@@ -295,167 +285,6 @@ class RadioProvider:
 
 
 # ---------------------------------------------------------------------------
-# ContentProvider implementation — TuneIn
-# ---------------------------------------------------------------------------
-
-
-class TuneInProvider:
-    """ContentProvider that wraps the TuneIn/RadioTime OPML API.
-
-    Registered under ``"tunein"`` via ``PluginContext.register_content_provider()``.
-    Uses the same Partner ID (16) as LMS.
-    """
-
-    def __init__(self, client: Any) -> None:
-        self._client = client
-
-    @property
-    def name(self) -> str:
-        return "TuneIn Radio"
-
-    @property
-    def icon(self) -> str | None:
-        return None
-
-    async def browse(self, path: str = "") -> list[Any]:
-        """Browse TuneIn categories and stations.
-
-        *path* encoding:
-        - ``""`` → TuneIn root menu (Local, Music, News, Sports, ...)
-        - ``"<tunein_url>"`` → any TuneIn Browse.ashx URL
-        """
-        from resonance.content_provider import BrowseItem
-
-        from .tunein import flatten_items, is_tune_url
-
-        if not path:
-            items = await self._client.fetch_root()
-        else:
-            items = await self._client.browse(path)
-
-        items = flatten_items(items)
-        result: list[BrowseItem] = []
-
-        for item in items:
-            if item.type == "audio":
-                result.append(BrowseItem(
-                    id=item.guide_id or item.url,
-                    title=item.text,
-                    type="audio",
-                    url=item.url,
-                    icon=item.image or None,
-                    subtitle=item.subtext or None,
-                    extra={
-                        k: v for k, v in {
-                            "guide_id": item.guide_id,
-                            "bitrate": item.bitrate,
-                            "formats": item.formats,
-                            "reliability": item.reliability,
-                            "playing": item.playing,
-                        }.items() if v
-                    },
-                ))
-            elif item.type == "link" and item.url:
-                result.append(BrowseItem(
-                    id=item.guide_id or item.url,
-                    title=item.text,
-                    type="folder",
-                    url=item.url,
-                    icon=item.image or None,
-                    subtitle=item.subtext or None,
-                ))
-            elif item.type == "search":
-                result.append(BrowseItem(
-                    id="tunein-search",
-                    title=item.text or "Search",
-                    type="search",
-                    url=item.url,
-                ))
-
-        return result
-
-    async def search(self, query: str) -> list[Any]:
-        """Search TuneIn for stations/shows."""
-        from resonance.content_provider import BrowseItem
-
-        from .tunein import flatten_items
-
-        items = await self._client.search(query)
-        items = flatten_items(items)
-
-        result: list[BrowseItem] = []
-        for item in items:
-            if item.type == "audio":
-                result.append(BrowseItem(
-                    id=item.guide_id or item.url,
-                    title=item.text,
-                    type="audio",
-                    url=item.url,
-                    icon=item.image or None,
-                    subtitle=item.subtext or None,
-                    extra={
-                        k: v for k, v in {
-                            "guide_id": item.guide_id,
-                            "bitrate": item.bitrate,
-                            "formats": item.formats,
-                        }.items() if v
-                    },
-                ))
-            elif item.type == "link" and item.url:
-                result.append(BrowseItem(
-                    id=item.guide_id or item.url,
-                    title=item.text,
-                    type="folder",
-                    url=item.url,
-                    icon=item.image or None,
-                    subtitle=item.subtext or None,
-                ))
-
-        return result
-
-    async def get_stream_info(self, item_id: str) -> Any | None:
-        """Resolve a TuneIn station to stream info.
-
-        Unlike radio-browser, TuneIn requires a ``Tune.ashx`` call to
-        resolve the final stream URL (which may be behind M3U/PLS playlists).
-        """
-        from resonance.content_provider import StreamInfo
-
-        from .tunein import content_type_for_media, extract_station_id
-
-        # item_id may be a guide_id (s12345) or a Tune.ashx URL.
-        station_id = extract_station_id(item_id) if "radiotime.com" in item_id else item_id
-
-        if not station_id:
-            logger.warning("TuneIn: cannot extract station ID from %s", item_id)
-            return None
-
-        stream = await self._client.tune(station_id)
-        if stream is None:
-            logger.warning("TuneIn: failed to resolve stream for %s", station_id)
-            return None
-
-        content_type = content_type_for_media(stream.media_type)
-
-        return StreamInfo(
-            url=stream.url,
-            content_type=content_type,
-            bitrate=stream.bitrate,
-            is_live=True,
-        )
-
-    async def on_stream_started(self, item_id: str, player_mac: str) -> None:
-        logger.info(
-            "TuneIn stream started: station=%s player=%s", item_id, player_mac
-        )
-
-    async def on_stream_stopped(self, item_id: str, player_mac: str) -> None:
-        logger.debug(
-            "TuneIn stream stopped: station=%s player=%s", item_id, player_mac
-        )
-
-
-# ---------------------------------------------------------------------------
 # Helpers — parameter parsing
 # ---------------------------------------------------------------------------
 
@@ -477,14 +306,13 @@ def _parse_start_count(command: list[Any]) -> tuple[int, int]:
 
 async def setup(ctx: PluginContext) -> None:
     """Called by PluginManager during server startup."""
-    global _radio_browser, _tunein_client, _provider, _tunein_provider
+    global _radio_browser, _provider
     global _event_bus, _store, _ctx, _http_client
 
     import httpx
 
     from .radiobrowser import RadioBrowserClient
     from .store import RadioStore
-    from .tunein import TuneInClient
 
     _ctx = ctx
     _event_bus = ctx.event_bus
@@ -493,28 +321,19 @@ async def setup(ctx: PluginContext) -> None:
     # ── Read settings ──────────────────────────────────────────
     cache_ttl = int(_setting("cache_ttl", 600))
     max_recent = int(_setting("max_recent_stations", 50))
-    provider_pref = _preferred_provider()
 
     # ── Create store ───────────────────────────────────────────
     data_dir = ctx.ensure_data_dir()
     _store = RadioStore(data_dir, max_recent=max_recent)
     _store.load()
 
-    # ── Create radio-browser client (always, it's free) ────────
+    # ── Create radio-browser client ────────────────────────────
     _radio_browser = RadioBrowserClient(cache_ttl=float(cache_ttl))
     await _radio_browser.start()
     _provider = RadioProvider(_radio_browser)
 
-    # ── Register radio-browser content provider ────────────────
+    # ── Register content provider ──────────────────────────────
     ctx.register_content_provider("radio", _provider)
-
-    # ── Create TuneIn client (always available, even if not preferred) ──
-    _tunein_client = TuneInClient(cache_ttl=float(cache_ttl))
-    await _tunein_client.start()
-    _tunein_provider = TuneInProvider(_tunein_client)
-
-    # Register TuneIn as a separate content provider.
-    ctx.register_content_provider("tunein", _tunein_provider)
 
     # ── Commands ───────────────────────────────────────────────
     ctx.register_command("radio", cmd_radio)
@@ -544,15 +363,14 @@ async def setup(ctx: PluginContext) -> None:
     ctx.register_action_handler(handle_action)
 
     logger.info(
-        "Radio plugin v2.2 started (provider=%s, %d recent stations, "
-        "radio-browser=active, tunein=active)",
-        provider_pref, _store.recent_count,
+        "Radio plugin v3.0 started (%d recent stations, radio-browser=active)",
+        _store.recent_count,
     )
 
 
 async def teardown(ctx: PluginContext) -> None:
     """Called by PluginManager during server shutdown."""
-    global _radio_browser, _tunein_client, _provider, _tunein_provider
+    global _radio_browser, _provider
     global _event_bus, _store, _ctx, _http_client
 
     # Save recently played stations.
@@ -562,16 +380,11 @@ async def teardown(ctx: PluginContext) -> None:
     if _radio_browser is not None:
         await _radio_browser.close()
 
-    if _tunein_client is not None:
-        await _tunein_client.close()
-
     if _http_client is not None:
         await _http_client.aclose()
 
     _radio_browser = None
-    _tunein_client = None
     _provider = None
-    _tunein_provider = None
     _event_bus = None
     _store = None
     _http_client = None
@@ -591,13 +404,13 @@ async def _on_track_started(event: Event) -> None:
 
     # Only track radio sources.
     source = getattr(event, "source", "")
-    if source not in ("radio", "tunein"):
+    if source != "radio":
         # Check if it's a radio stream by looking at the track metadata.
         track = getattr(event, "track", None)
         if track is None:
             return
         track_source = getattr(track, "source", "")
-        if track_source not in ("radio", "tunein"):
+        if track_source != "radio":
             return
         source = track_source
         # Extract station metadata from the track.
@@ -619,8 +432,6 @@ async def _on_track_started(event: Event) -> None:
     if not url:
         return
 
-    provider = "tunein" if source == "tunein" else "radio-browser"
-
     entry = _store.record_play(
         url=url,
         title=title,
@@ -628,13 +439,13 @@ async def _on_track_started(event: Event) -> None:
         codec=codec,
         bitrate=bitrate,
         station_id=station_id,
-        provider=provider,
+        provider="radio-browser",
     )
     _store.save()
 
     logger.debug(
-        "Recorded radio play: %s (count=%d, provider=%s)",
-        entry.title or url[:60], entry.play_count, provider,
+        "Recorded radio play: %s (count=%d)",
+        entry.title or url[:60], entry.play_count,
     )
 
     # Notify the SDUI frontend to refresh.
@@ -643,39 +454,19 @@ async def _on_track_started(event: Event) -> None:
 
 
 # ---------------------------------------------------------------------------
-# SDUI — get_ui / handle_action
+# SDUI — Page builder
 # ---------------------------------------------------------------------------
 
 
 async def get_ui(ctx: PluginContext) -> Any:
     """Build the SDUI page for the Radio plugin."""
     from resonance.ui import (
-        Alert,
-        Button,
-        Card,
-        Column,
-        Form,
-        Heading,
-        KeyValue,
-        KVItem,
-        Markdown,
         Page,
-        Row,
-        Select,
-        SelectOption,
-        StatusBadge,
-        Tab,
-        Table,
-        TableAction,
-        TableColumn,
         Tabs,
-        Text,
-        TextInput,
-        Toggle,
     )
 
     recent_tab = _build_recent_tab()
-    browse_tab = _build_browse_tab()
+    browse_tab = await _build_browse_tab()
     settings_tab = _build_settings_tab()
     about_tab = _build_about_tab()
 
@@ -700,14 +491,11 @@ def _build_recent_tab() -> Any:
         Alert,
         Button,
         Card,
-        Heading,
         KeyValue,
         KVItem,
         Row,
-        StatusBadge,
         Tab,
         Table,
-        TableAction,
         TableColumn,
         Text,
     )
@@ -729,7 +517,6 @@ def _build_recent_tab() -> Any:
     columns = [
         TableColumn(key="title", label="Station"),
         TableColumn(key="info", label="Info"),
-        TableColumn(key="provider", label="Source"),
         TableColumn(key="plays", label="Plays"),
         TableColumn(key="actions", label="Actions", variant="actions"),
     ]
@@ -748,7 +535,6 @@ def _build_recent_tab() -> Any:
         rows.append({
             "title": station.title or station.url[:40],
             "info": " · ".join(info_parts) if info_parts else "—",
-            "provider": "TuneIn" if station.provider == "tunein" else "radio-browser",
             "plays": str(station.play_count),
             "_url": station.url,
             "_station_id": station.station_id,
@@ -802,98 +588,212 @@ def _build_recent_tab() -> Any:
     ])
 
 
-def _build_browse_tab() -> Any:
-    """Build the 'Browse' tab with quick-access category cards."""
+async def _build_browse_tab() -> Any:
+    """Build the 'Browse' tab with live data from radio-browser.info.
+
+    Uses the module-level _browse_path to determine what to show:
+    - "" (empty) → category overview cards with quick-access buttons
+    - "popular" → table of popular stations
+    - "trending" → table of trending stations
+    - "country" → table of countries (click to drill down)
+    - "country:DE" → table of stations in Germany
+    - "tag" → table of genres/tags
+    - "tag:jazz" → table of jazz stations
+    - "language" → table of languages
+    - "language:german" → table of German-language stations
+    - "search:<query>" → search results
+    """
     from resonance.ui import (
         Alert,
         Button,
         Card,
         Column,
-        Heading,
+        Form,
         KeyValue,
         KVItem,
         Row,
         StatusBadge,
         Tab,
+        Table,
+        TableColumn,
         Text,
+        TextInput,
     )
 
-    provider_pref = _preferred_provider()
+    global _browse_data, _browse_title
 
-    # Provider status badges.
     rb_status = "active" if _radio_browser is not None else "inactive"
-    ti_status = "active" if _tunein_client is not None else "inactive"
 
-    status_children: list[Any] = [
-        Row(gap="md", children=[
-            StatusBadge(
-                label="radio-browser.info",
-                status=rb_status,
-                color="green" if rb_status == "active" else "gray",
-            ),
-            StatusBadge(
-                label="TuneIn",
-                status=ti_status,
-                color="green" if ti_status == "active" else "gray",
-            ),
-        ]),
-        KeyValue(items=[
-            KVItem(key="Preferred Provider", value=_format_provider_name(provider_pref)),
-            KVItem(
-                key="radio-browser Cache",
-                value=f"{_radio_browser.cache_size} entries" if _radio_browser else "N/A",
-            ),
-            KVItem(
-                key="TuneIn Cache",
-                value=f"{_tunein_client.cache_size} entries" if _tunein_client else "N/A",
-            ),
-        ]),
-    ]
+    # Navigation bar — always shown.  Back button + category shortcuts.
+    nav_children: list[Any] = []
 
-    # Browse quick-access cards.
-    browse_children: list[Any] = []
+    if _browse_path:
+        # Show back button and current location.
+        back_target = ""
+        if ":" in _browse_path and not _browse_path.startswith("search:"):
+            # e.g. "country:DE" → go back to "country"
+            back_target = _browse_path.split(":")[0]
 
-    if provider_pref in ("radio-browser", "both"):
-        browse_children.append(
-            Card(title="radio-browser.info", collapsible=True, children=[
-                Text(content="Free, open-source community database with ~40,000+ stations. No API key required."),
-                Row(gap="sm", children=[
-                    Button(label="Popular Stations", action="browse_rb", style="secondary", icon="trending-up"),
-                    Button(label="Trending Now", action="browse_rb_trending", style="secondary", icon="zap"),
-                ]),
-                Row(gap="sm", children=[
-                    Button(label="By Country", action="browse_rb_country", style="secondary", icon="globe"),
-                    Button(label="By Genre", action="browse_rb_tag", style="secondary", icon="music"),
-                    Button(label="By Language", action="browse_rb_language", style="secondary", icon="languages"),
-                ]),
+        nav_children.append(
+            Row(gap="sm", children=[
+                Button(label="← Back", action="browse_back",
+                       params={"target": back_target}, style="secondary", icon="arrow-left"),
+                Button(label="Home", action="browse_home", style="secondary", icon="home"),
+            ])
+        )
+        nav_children.append(
+            Text(content=f"**Browsing:** {_browse_title or _browse_path}"),
+        )
+    else:
+        # Show status and search.
+        nav_children.append(
+            Row(gap="md", children=[
+                StatusBadge(
+                    label="radio-browser.info",
+                    status=rb_status,
+                    color="green" if rb_status == "active" else "gray",
+                ),
+                StatusBadge(
+                    label="Cache",
+                    status=f"{_radio_browser.cache_size} entries" if _radio_browser else "N/A",
+                    color="blue" if _radio_browser and _radio_browser.cache_size > 0 else "gray",
+                ),
             ])
         )
 
-    if provider_pref in ("tunein", "both"):
-        browse_children.append(
-            Card(title="TuneIn Radio", collapsible=True, children=[
-                Text(content="TuneIn/RadioTime — same provider as LMS. Local radio, premium stations, and curated categories."),
-                Row(gap="sm", children=[
-                    Button(label="Browse TuneIn", action="browse_tunein", style="secondary", icon="radio"),
-                ]),
-            ])
+    # Search form — always available.
+    nav_children.append(
+        Form(
+            action="browse_search",
+            submit_label="Search",
+            children=[
+                TextInput(
+                    name="query",
+                    label="Search Stations",
+                    placeholder="Search by station name...",
+                    help_text="Search across ~40,000+ stations on radio-browser.info",
+                ),
+            ],
         )
-
-    # Cache management.
-    browse_children.append(
-        Row(gap="md", children=[
-            Button(
-                label="Clear All Caches",
-                action="clear_caches",
-                style="secondary",
-                icon="refresh-cw",
-            ),
-        ])
     )
+
+    # Content area — depends on browse path.
+    content_children: list[Any] = []
+
+    if not _browse_path:
+        # Category overview — quick-access cards.
+        content_children.append(
+            Card(title="Popular & Trending", collapsible=False, children=[
+                Row(gap="sm", children=[
+                    Button(label="Popular Stations", action="browse_navigate",
+                           params={"path": "popular"}, style="primary", icon="trending-up"),
+                    Button(label="Trending Now", action="browse_navigate",
+                           params={"path": "trending"}, style="primary", icon="zap"),
+                ]),
+            ])
+        )
+        content_children.append(
+            Card(title="Browse by Category", collapsible=False, children=[
+                Row(gap="sm", children=[
+                    Button(label="By Country", action="browse_navigate",
+                           params={"path": "country"}, style="secondary", icon="globe"),
+                    Button(label="By Genre", action="browse_navigate",
+                           params={"path": "tag"}, style="secondary", icon="music"),
+                    Button(label="By Language", action="browse_navigate",
+                           params={"path": "language"}, style="secondary", icon="languages"),
+                ]),
+            ])
+        )
+        content_children.append(
+            Row(gap="md", children=[
+                Button(
+                    label="Clear Cache",
+                    action="clear_caches",
+                    style="secondary",
+                    icon="refresh-cw",
+                ),
+            ])
+        )
+
+    elif _browse_data is not None:
+        # We have data to show — render it.
+        if _browse_path in ("popular", "trending") or ":" in _browse_path or _browse_path.startswith("search:"):
+            # Station list — show as table with play action.
+            content_children.append(
+                _build_station_table(_browse_data, _browse_title or "Stations"),
+            )
+        elif _browse_path in ("country", "tag", "language"):
+            # Category list — show as table with drill-down action.
+            content_children.append(
+                _build_category_table(_browse_data, _browse_path, _browse_title or "Categories"),
+            )
+        else:
+            content_children.append(
+                Alert(message=f"Unknown browse path: {_browse_path}", severity="warning"),
+            )
+    else:
+        # Browse path is set but no data loaded yet (shouldn't happen normally).
+        content_children.append(
+            Alert(message="Loading...", severity="info"),
+        )
 
     return Tab(label="Browse", children=[
-        Card(title="Provider Status", children=status_children),
-        *browse_children,
+        Card(title="Radio Browser", children=nav_children),
+        *content_children,
+    ])
+
+
+def _build_station_table(stations: list[dict[str, Any]], title: str) -> Any:
+    """Build a Table widget showing radio stations with play action."""
+    from resonance.ui import Alert, Card, Table, TableColumn, Text
+
+    if not stations:
+        return Card(title=title, children=[
+            Alert(message="No stations found.", severity="info"),
+        ])
+
+    columns = [
+        TableColumn(key="title", label="Station"),
+        TableColumn(key="info", label="Info"),
+        TableColumn(key="country", label="Country"),
+        TableColumn(key="votes", label="Votes"),
+    ]
+
+    return Card(title=f"{title} ({len(stations)})", children=[
+        Text(content=f"Click a station to play it on your default player."),
+        Table(
+            columns=columns,
+            rows=stations,
+            edit_action="play_station",
+            row_key="_station_id",
+        ),
+    ])
+
+
+def _build_category_table(
+    categories: list[dict[str, Any]], browse_path: str, title: str
+) -> Any:
+    """Build a Table widget showing browse categories with drill-down."""
+    from resonance.ui import Alert, Card, Table, TableColumn, Text
+
+    if not categories:
+        return Card(title=title, children=[
+            Alert(message="No categories found.", severity="info"),
+        ])
+
+    columns = [
+        TableColumn(key="name", label="Name"),
+        TableColumn(key="stations", label="Stations"),
+    ]
+
+    return Card(title=f"{title} ({len(categories)})", children=[
+        Text(content="Click a category to browse its stations."),
+        Table(
+            columns=columns,
+            rows=categories,
+            edit_action="browse_drilldown",
+            row_key="_path",
+        ),
     ])
 
 
@@ -903,15 +803,11 @@ def _build_settings_tab() -> Any:
         Alert,
         Form,
         NumberInput,
-        Select,
-        SelectOption,
         Tab,
-        Text,
         TextInput,
         Toggle,
     )
 
-    provider_pref = _preferred_provider()
     default_country = str(_setting("default_country", ""))
     cache_ttl = int(_setting("cache_ttl", 600))
     max_recent = int(_setting("max_recent_stations", 50))
@@ -922,23 +818,12 @@ def _build_settings_tab() -> Any:
             action="save_settings",
             submit_label="Save Settings",
             children=[
-                Select(
-                    name="preferred_provider",
-                    label="Preferred Provider",
-                    value=provider_pref,
-                    help_text="Controls which provider is used for browsing and search. 'both' shows categories from both providers.",
-                    options=[
-                        SelectOption(value="radio-browser", label="radio-browser.info (free, open-source)"),
-                        SelectOption(value="tunein", label="TuneIn (LMS-compatible)"),
-                        SelectOption(value="both", label="Both Providers"),
-                    ],
-                ),
                 TextInput(
                     name="default_country",
                     label="Default Country Code",
                     value=default_country,
                     placeholder="e.g. DE, US, GB, FR",
-                    help_text="ISO 3166-1 alpha-2 code. Used for local radio sorting and TuneIn's 'Local Radio' feature.",
+                    help_text="ISO 3166-1 alpha-2 code. Used for sorting and highlighting your country in listings.",
                 ),
                 NumberInput(
                     name="cache_ttl",
@@ -965,7 +850,7 @@ def _build_settings_tab() -> Any:
             ],
         ),
         Alert(
-            message="Changes to provider preferences and cache settings take effect after restarting the server.",
+            message="Changes to cache settings take effect after restarting the server.",
             severity="info",
         ),
     ])
@@ -975,38 +860,29 @@ def _build_about_tab() -> Any:
     """Build the 'About' tab with plugin information."""
     from resonance.ui import Markdown, Tab
 
-    md = """## Radio Plugin v2.2
+    md = """## Radio Plugin v3.0
 
-**Dual-Provider Internet Radio** for Resonance.
-
-### Providers
-
-| Provider | Stations | API Key | Source |
-|----------|----------|---------|--------|
-| radio-browser.info | ~40,000+ | Not required | Open-source community database |
-| TuneIn / RadioTime | 100,000+ | Partner ID 16 | Same as LMS uses |
+**Internet Radio** for Resonance — powered by radio-browser.info.
 
 ### Features
 
-- **Browse** — categories, countries, genres, languages, local radio
-- **Search** — full-text station search across providers
-- **Play** — stream live radio to any connected player
-- **Play from SDUI** — click a recently played station to start playback directly from this dashboard
-- **Recently Played** — persistent history of played stations
-- **Favorites** — add stations to your Favorites via the context menu
+- **Browse** — popular, trending, by country, genre, language
+- **Search** — full-text station search across ~40,000+ stations
+- **Play from SDUI** — click any station in the Browse or Recent tab to start playback
+- **Recently Played** — persistent history with play counts
+- **Favorites** — add stations to your Favorites via the context menu on your player
 - **Jive Menu** — full integration for Squeezebox Touch/Radio/Boom/Controller
-- **SDUI Dashboard** — this page! Browse, manage, and configure from the Web UI
+- **SDUI Dashboard** — this page! Browse, play, manage, and configure from the Web UI
 
-### Data Sources
+### Data Source
 
-- [radio-browser.info](https://www.radio-browser.info) — free, open-source, community-maintained
-- [TuneIn](https://tunein.com) — premium radio directory (Partner ID 16, same as LMS)
+[radio-browser.info](https://www.radio-browser.info) — free, open-source,
+community-maintained database. No API key required. Pre-resolved stream URLs.
 
 ### Credits
 
-Built on top of the Resonance plugin framework. radio-browser.info
-is maintained by its wonderful community. TuneIn integration uses
-the same RadioTime OPML API as the original Logitech Media Server.
+Built on the Resonance plugin framework. radio-browser.info is maintained
+by its wonderful open-source community.
 """
 
     return Tab(label="About", children=[
@@ -1014,45 +890,254 @@ the same RadioTime OPML API as the original Logitech Media Server.
     ])
 
 
-def _format_provider_name(pref: str) -> str:
-    """Format a provider preference value for display."""
-    return {
-        "radio-browser": "radio-browser.info",
-        "tunein": "TuneIn",
-        "both": "Both Providers",
-    }.get(pref, pref)
-
-
 # ---------------------------------------------------------------------------
-# SDUI — action handler
+# SDUI — Action handlers
 # ---------------------------------------------------------------------------
 
 
 async def handle_action(action: str, params: dict[str, Any], ctx: PluginContext) -> dict[str, Any] | None:
     """Handle SDUI actions from the frontend."""
     match action:
+        # Recent tab actions
         case "play_recent":
-            return await _handle_play_recent(params, ctx)
+            return await _handle_play_station(params, ctx)
         case "remove_recent":
             return await _handle_remove_recent(params)
         case "clear_recent":
             return await _handle_clear_recent()
+
+        # Browse tab actions — navigation
+        case "browse_navigate":
+            return await _handle_browse_navigate(params)
+        case "browse_back":
+            return await _handle_browse_back(params)
+        case "browse_home":
+            return await _handle_browse_home()
+        case "browse_search":
+            return await _handle_browse_search(params)
+        case "browse_drilldown":
+            return await _handle_browse_drilldown(params)
+
+        # Browse tab actions — play
+        case "play_station":
+            return await _handle_play_station(params, ctx)
+
+        # Settings
         case "clear_caches":
             return _handle_clear_caches()
         case "save_settings":
             return await _handle_save_settings(params, ctx)
-        case "browse_rb" | "browse_rb_trending" | "browse_rb_country" \
-                | "browse_rb_tag" | "browse_rb_language" | "browse_tunein":
-            # These are informational browse buttons — the actual browsing
-            # happens via the Jive menu / JSON-RPC commands. The SDUI buttons
-            # serve as shortcuts that show a message.
-            return {"message": _browse_action_message(action)}
+
         case _:
             return {"error": f"Unknown action: {action}"}
 
 
-async def _handle_play_recent(params: dict[str, Any], ctx: Any) -> dict[str, Any]:
-    """Replay a recently played station via JSON-RPC self-call.
+# ---------------------------------------------------------------------------
+# Browse navigation handlers
+# ---------------------------------------------------------------------------
+
+
+async def _handle_browse_navigate(params: dict[str, Any]) -> dict[str, Any]:
+    """Navigate to a browse path and load data."""
+    path = params.get("path", "")
+    if not path:
+        return await _handle_browse_home()
+
+    return await _load_browse_data(path)
+
+
+async def _handle_browse_back(params: dict[str, Any]) -> dict[str, Any]:
+    """Go back one level in browse navigation."""
+    target = params.get("target", "")
+    if target:
+        return await _load_browse_data(target)
+    return await _handle_browse_home()
+
+
+async def _handle_browse_home() -> dict[str, Any]:
+    """Return to browse home (category overview)."""
+    global _browse_path, _browse_data, _browse_title
+    _browse_path = ""
+    _browse_data = None
+    _browse_title = ""
+
+    if _ctx is not None:
+        _ctx.notify_ui_update()
+
+    return {"message": "Browse home"}
+
+
+async def _handle_browse_search(params: dict[str, Any]) -> dict[str, Any]:
+    """Search for stations and show results."""
+    query = params.get("query", "").strip()
+    if not query:
+        return {"error": "Please enter a search term"}
+
+    if _radio_browser is None:
+        return {"error": "Radio browser not available"}
+
+    try:
+        stations = await _radio_browser.search(query, limit=100)
+        return await _set_browse_stations(f"search:{query}", f'Search: "{query}"', stations)
+    except Exception as exc:
+        logger.warning("Browse search failed: %s", exc)
+        return {"error": f"Search failed: {exc}"}
+
+
+async def _handle_browse_drilldown(params: dict[str, Any]) -> dict[str, Any]:
+    """Drill down into a category (e.g. click a country to see its stations)."""
+    row = params.get("row", params)
+    path = row.get("_path", "")
+    if not path:
+        return {"error": "No category path found"}
+
+    return await _load_browse_data(path)
+
+
+async def _load_browse_data(path: str) -> dict[str, Any]:
+    """Load browse data for a given path and update module state."""
+    global _browse_path, _browse_data, _browse_title
+
+    if _radio_browser is None:
+        return {"error": "Radio browser not available"}
+
+    try:
+        if path == "popular":
+            stations = await _radio_browser.get_popular_stations(limit=100)
+            return await _set_browse_stations(path, "Popular Stations", stations)
+
+        elif path == "trending":
+            stations = await _radio_browser.get_trending_stations(limit=100)
+            return await _set_browse_stations(path, "Trending Now", stations)
+
+        elif path == "country":
+            countries = await _radio_browser.get_countries(limit=200)
+            return await _set_browse_categories(
+                path, "Countries",
+                [
+                    {
+                        "name": c.name,
+                        "stations": str(c.stationcount),
+                        "_path": f"country:{c.iso_3166_1}",
+                    }
+                    for c in countries
+                    if c.iso_3166_1
+                ],
+            )
+
+        elif path.startswith("country:"):
+            code = path.split(":", 1)[1]
+            stations = await _radio_browser.get_stations_by_country(code, limit=100)
+            return await _set_browse_stations(path, f"Stations in {code}", stations)
+
+        elif path == "tag":
+            tags = await _radio_browser.get_tags(limit=200)
+            return await _set_browse_categories(
+                path, "Genres / Tags",
+                [
+                    {
+                        "name": t.name,
+                        "stations": str(t.stationcount),
+                        "_path": f"tag:{t.name}",
+                    }
+                    for t in tags
+                ],
+            )
+
+        elif path.startswith("tag:"):
+            tag = path.split(":", 1)[1]
+            stations = await _radio_browser.get_stations_by_tag(tag, limit=100)
+            return await _set_browse_stations(path, f"Genre: {tag}", stations)
+
+        elif path == "language":
+            languages = await _radio_browser.get_languages(limit=200)
+            return await _set_browse_categories(
+                path, "Languages",
+                [
+                    {
+                        "name": lang.name,
+                        "stations": str(lang.stationcount),
+                        "_path": f"language:{lang.name}",
+                    }
+                    for lang in languages
+                ],
+            )
+
+        elif path.startswith("language:"):
+            lang = path.split(":", 1)[1]
+            stations = await _radio_browser.get_stations_by_language(lang, limit=100)
+            return await _set_browse_stations(path, f"Language: {lang}", stations)
+
+        else:
+            return {"error": f"Unknown browse path: {path}"}
+
+    except Exception as exc:
+        logger.warning("Failed to load browse data for %s: %s", path, exc)
+        return {"error": f"Failed to load data: {exc}"}
+
+
+async def _set_browse_stations(
+    path: str, title: str, stations: list[Any]
+) -> dict[str, Any]:
+    """Convert RadioStation objects to table rows and set browse state."""
+    global _browse_path, _browse_data, _browse_title
+
+    from .radiobrowser import format_station_subtitle
+
+    rows: list[dict[str, Any]] = []
+    for s in stations:
+        info_parts: list[str] = []
+        if s.codec:
+            info_parts.append(s.codec)
+        if s.bitrate:
+            info_parts.append(f"{s.bitrate}kbps")
+
+        rows.append({
+            "title": s.name,
+            "info": " · ".join(info_parts) if info_parts else "—",
+            "country": s.country or "—",
+            "votes": str(s.votes) if s.votes else "—",
+            "_url": s.url_resolved or s.url,
+            "_station_id": s.stationuuid,
+            "_icon": s.favicon or "",
+            "_codec": s.codec,
+            "_bitrate": str(s.bitrate) if s.bitrate else "0",
+            "_provider": "radio-browser",
+        })
+
+    _browse_path = path
+    _browse_data = rows
+    _browse_title = title
+
+    if _ctx is not None:
+        _ctx.notify_ui_update()
+
+    return {"message": f"Loaded {len(rows)} station(s)"}
+
+
+async def _set_browse_categories(
+    path: str, title: str, categories: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Set browse state to show a category list."""
+    global _browse_path, _browse_data, _browse_title
+
+    _browse_path = path
+    _browse_data = categories
+    _browse_title = title
+
+    if _ctx is not None:
+        _ctx.notify_ui_update()
+
+    return {"message": f"Loaded {len(categories)} categories"}
+
+
+# ---------------------------------------------------------------------------
+# Play handler (shared by Recent tab and Browse tab)
+# ---------------------------------------------------------------------------
+
+
+async def _handle_play_station(params: dict[str, Any], ctx: Any) -> dict[str, Any]:
+    """Play a station via JSON-RPC self-call.
 
     Uses the server's own JSON-RPC endpoint (``radio play``) to start
     playback.  This reuses the full playback pipeline — playlist, streaming,
@@ -1068,7 +1153,6 @@ async def _handle_play_recent(params: dict[str, Any], ctx: Any) -> dict[str, Any
     icon = row.get("_icon", "")
     codec = row.get("_codec", "")
     bitrate = row.get("_bitrate", "0")
-    provider = row.get("_provider", "radio-browser")
 
     if not url:
         return {"error": "No station URL found"}
@@ -1157,13 +1241,16 @@ async def _handle_play_recent(params: dict[str, Any], ctx: Any) -> dict[str, Any
         }
 
 
+# ---------------------------------------------------------------------------
+# Other action handlers
+# ---------------------------------------------------------------------------
+
+
 async def _handle_remove_recent(params: dict[str, Any]) -> dict[str, Any]:
     """Remove a station from the recently played list."""
     if _store is None:
         return {"error": "Store not available"}
 
-    # Table row-actions pass params directly (from the action's params dict).
-    # Also accept nested "row" for compatibility with table row-click.
     row = params.get("row", params)
     url = row.get("_url", "")
 
@@ -1196,24 +1283,21 @@ async def _handle_clear_recent() -> dict[str, Any]:
 
 
 def _handle_clear_caches() -> dict[str, Any]:
-    """Clear browse caches for all providers."""
-    cleared: list[str] = []
+    """Clear browse caches."""
+    global _browse_data, _browse_path, _browse_title
 
     if _radio_browser is not None:
         _radio_browser.clear_cache()
-        cleared.append("radio-browser")
 
-    if _tunein_client is not None:
-        _tunein_client.clear_cache()
-        cleared.append("tunein")
+    # Also reset browse state.
+    _browse_path = ""
+    _browse_data = None
+    _browse_title = ""
 
     if _ctx is not None:
         _ctx.notify_ui_update()
 
-    if cleared:
-        return {"message": f"Cleared caches for: {', '.join(cleared)}"}
-    else:
-        return {"error": "No providers available"}
+    return {"message": "Cleared browse cache"}
 
 
 async def _handle_save_settings(params: dict[str, Any], ctx: PluginContext) -> dict[str, Any]:
@@ -1221,7 +1305,7 @@ async def _handle_save_settings(params: dict[str, Any], ctx: PluginContext) -> d
     saved: list[str] = []
 
     setting_keys = [
-        "preferred_provider", "default_country", "cache_ttl",
+        "default_country", "cache_ttl",
         "max_recent_stations", "show_station_metadata",
     ]
 
@@ -1252,44 +1336,13 @@ async def _handle_save_settings(params: dict[str, Any], ctx: PluginContext) -> d
         _ctx.notify_ui_update()
 
     if saved:
-        return {"message": f"Saved settings: {', '.join(saved)}. Restart for provider/cache changes."}
+        return {"message": f"Saved settings: {', '.join(saved)}. Restart for cache changes."}
     else:
         return {"message": "No changes to save"}
 
 
-def _browse_action_message(action: str) -> str:
-    """Generate a helpful message for browse shortcut buttons."""
-    messages = {
-        "browse_rb": (
-            "Browse popular stations via your player's Radio menu, "
-            "or use: radio items 0 50 category:popular"
-        ),
-        "browse_rb_trending": (
-            "Browse trending stations via your player's Radio menu, "
-            "or use: radio items 0 50 category:trending"
-        ),
-        "browse_rb_country": (
-            "Browse by country via your player's Radio menu, "
-            "or use: radio items 0 50 category:country"
-        ),
-        "browse_rb_tag": (
-            "Browse by genre/tag via your player's Radio menu, "
-            "or use: radio items 0 50 category:tag"
-        ),
-        "browse_rb_language": (
-            "Browse by language via your player's Radio menu, "
-            "or use: radio items 0 50 category:language"
-        ),
-        "browse_tunein": (
-            "Browse TuneIn via your player's Radio menu. TuneIn provides "
-            "local radio, curated categories, and premium stations."
-        ),
-    }
-    return messages.get(action, "Use your player's Radio menu to browse.")
-
-
 # ---------------------------------------------------------------------------
-# JSON-RPC command dispatcher
+# JSON-RPC command handler
 # ---------------------------------------------------------------------------
 
 
@@ -1353,8 +1406,6 @@ async def _radio_items(
 
     from .radiobrowser import (
         BROWSE_CATEGORIES,
-        RadioStation,
-        format_station_subtitle,
     )
 
     all_items: list[dict[str, Any]] = []
@@ -1485,7 +1536,7 @@ async def _radio_items(
 
 
 # ---------------------------------------------------------------------------
-# radio search — search stations
+# radio search
 # ---------------------------------------------------------------------------
 
 
@@ -1750,17 +1801,17 @@ def _build_category_jive_item(key: str, name: str) -> dict[str, Any]:
         },
     }
 
-    # Add search input for the top-level menu.
+    # Add icons for categories.
     if key == "popular":
-        entry["icon-id"] = "plugins/TuneIn/html/images/radiomusic.png"
+        entry["icon-id"] = "plugins/RadioBrowser/html/images/popular.png"
     elif key == "trending":
-        entry["icon-id"] = "plugins/TuneIn/html/images/radionews.png"
+        entry["icon-id"] = "plugins/RadioBrowser/html/images/trending.png"
     elif key == "country":
-        entry["icon-id"] = "plugins/TuneIn/html/images/radioworld.png"
+        entry["icon-id"] = "plugins/RadioBrowser/html/images/world.png"
     elif key == "tag":
-        entry["icon-id"] = "plugins/TuneIn/html/images/radiomusic.png"
+        entry["icon-id"] = "plugins/RadioBrowser/html/images/genre.png"
     elif key == "language":
-        entry["icon-id"] = "plugins/TuneIn/html/images/radiotalk.png"
+        entry["icon-id"] = "plugins/RadioBrowser/html/images/language.png"
 
     return entry
 

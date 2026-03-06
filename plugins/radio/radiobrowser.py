@@ -1,8 +1,7 @@
 """
 Radio Browser API client for the Radio plugin.
 
-This module wraps the free community **radio-browser.info** API, replacing
-the proprietary TuneIn/RadioTime OPML API.  radio-browser.info is an open,
+This module wraps the free community **radio-browser.info** API — an open,
 community-maintained database of ~40 000+ Internet radio stations with:
 
 * **Pre-resolved stream URLs** (``url_resolved``) — M3U/PLS/redirects
@@ -162,7 +161,7 @@ class CategoryEntry:
 
 
 # ---------------------------------------------------------------------------
-# Simple cache (same pattern as tunein.py)
+# Simple in-memory cache
 # ---------------------------------------------------------------------------
 
 
