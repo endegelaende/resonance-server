@@ -1559,19 +1559,24 @@ Complete, production-ready plugin:
 
 ### Radio Plugin (`plugins/radio/`)
 
-First ContentProvider plugin — Internet Radio via radio-browser.info:
+ContentProvider plugin — Internet Radio via radio-browser.info (v3.0):
 
 - 1 command (`radio`) with 3 sub-commands (`items`, `search`, `play`)
 - 1 menu node ("Radio" at weight 45)
 - ContentProvider registered as `"radio"` (`browse`, `search`, `get_stream_info`)
-- radio-browser.info API client with async caching (256 entries, 10min TTL)
+- radio-browser.info API client with async caching (128 entries, 10min TTL)
 - Pre-resolved stream URLs, play/add/insert modes
+- SDUI dashboard with 4 tabs: Recent (play history), Browse (live data
+  with drill-down navigation), Settings, About
+- Browse tab uses Table row-click for station playback and category
+  drill-down (browse state machine with back/home navigation)
 - "Add to Favorites" context menu via `jivefavorites add`
-- ~730 lines of code (plugin + radio-browser.info client)
-- 114 tests
+- ~1400 lines of code (plugin + radio-browser.info client + store)
+- 150 tests
 
 **Ideal as a reference for ContentProvider plugins (remote streaming,
-Jive browse/search menus, URL proxy integration).**
+Jive browse/search menus, URL proxy integration) and SDUI Table
+row-click navigation patterns.**
 
 ### Podcast Plugin (`plugins/podcast/`)
 
@@ -1863,8 +1868,8 @@ KeyValue(items=[
 
 #### `Table`
 
-Data table with column definitions, row data, and optional inline
-editing and action buttons.
+Data table with column definitions, row data, optional row-click
+dispatch, inline editing, and action buttons.
 
 ```python
 Table(
@@ -1876,15 +1881,40 @@ Table(
 )
 ```
 
-| Prop          | Type                   | Default | Description                                    |
-| ------------- | ---------------------- | ------- | ---------------------------------------------- |
-| `columns`     | `list[TableColumn]`    | —       | Column definitions (required)                  |
-| `rows`        | `list[dict[str, Any]]` | —       | Row data where keys match column `key` values  |
-| `title`       | `str \| None`          | `None`  | Table heading above the table                  |
-| `edit_action` | `str \| None`          | `None`  | Plugin action dispatched on inline edit commit |
-| `row_key`     | `str`                  | `"udn"` | Column key that uniquely identifies rows       |
+| Prop          | Type                   | Default | Description                                                  |
+| ------------- | ---------------------- | ------- | ------------------------------------------------------------ |
+| `columns`     | `list[TableColumn]`    | —       | Column definitions (required)                                |
+| `rows`        | `list[dict[str, Any]]` | —       | Row data where keys match column `key` values                |
+| `title`       | `str \| None`          | `None`  | Table heading above the table                                |
+| `edit_action` | `str \| None`          | `None`  | Plugin action dispatched on row click and inline edit commit |
+| `row_key`     | `str`                  | `"udn"` | Column key that uniquely identifies rows                     |
 
 `edit_action` and `row_key` are only serialized when `edit_action` is set.
+
+**Row-click behaviour:**
+
+When `edit_action` is set, clicking anywhere on a table row (except on
+action buttons, editable cells, or other interactive elements) dispatches
+the action with the full row data wrapped in a `"row"` key:
+
+```python
+# Sent to handle_action(edit_action, params):
+params = {
+    "row": {
+        "title": "Jazz FM",
+        "_url": "http://stream.example.com/live.mp3",
+        "_station_id": "abc-123",
+        # … all row dict keys, including underscore-prefixed hidden data
+    }
+}
+```
+
+Clickable rows get a pointer cursor and a loading indicator while the
+action is in flight. This is the primary mechanism for "click a row to
+do something" — e.g. play a station, drill into a category.
+
+The handler should access `params.get("row", params)` to support both
+row-click (nested under `"row"`) and direct params (from action buttons).
 
 **`TableColumn` (frozen dataclass):**
 
@@ -1930,7 +1960,8 @@ TableAction(
 **Inline editing behaviour:**
 
 When a column has `variant="editable"`, clicking the cell opens an inline
-text input. On Enter or blur, the frontend dispatches:
+text input. On Enter or blur, the frontend dispatches `edit_action` with
+flat params (not wrapped in `"row"`):
 
 ```python
 # Sent to handle_action(edit_action, params):
@@ -1941,6 +1972,11 @@ params = {
 ```
 
 Pressing Escape cancels. Only changed values trigger a dispatch.
+
+> **Note:** Row-click and inline-edit both use `edit_action` but with
+> different param shapes. Row-click wraps data under `"row"`, inline-edit
+> sends flat `{row_key: ..., col_key: ...}`. If you need both on the same
+> table, your handler must distinguish by checking for the `"row"` key.
 
 **Example:**
 

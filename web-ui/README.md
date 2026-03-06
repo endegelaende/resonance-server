@@ -188,28 +188,28 @@ web-ui/
 
 ### SDUI Widgets (`src/lib/plugin-ui/widgets/` — 20 files)
 
-| Widget          | Type Key       | Category | Description                                                   |
-| --------------- | -------------- | -------- | ------------------------------------------------------------- |
-| `Heading`       | `heading`      | Display  | h1–h4 with themed styling                                     |
-| `TextBlock`     | `text`         | Display  | Paragraph text with optional color and size (sm/md/lg)        |
-| `StatusBadge`   | `status_badge` | Display  | Colored pill badge with dot indicator                         |
-| `KeyValue`      | `key_value`    | Display  | Key-value pairs list with optional color per value            |
-| `ProgressBar`   | `progress`     | Display  | Animated progress bar with label and percentage               |
-| `MarkdownBlock` | `markdown`     | Display  | Full GFM rendering via `marked` with themed custom renderer   |
-| `Alert`         | `alert`        | Display  | Info/success/warning/error message box                        |
-| `Card`          | `card`         | Layout   | Container with title, optional collapsible                    |
-| `Row`           | `row`          | Layout   | Horizontal flex container with gap, justify, align            |
-| `Column`        | `column`       | Layout   | Vertical flex container with gap                              |
-| `Tabs`          | `tabs`         | Layout   | Client-side tab navigation with icons                         |
-| `Modal`         | `modal`        | Layout   | Dialog overlay with trigger button, focus trap, 4 sizes       |
-| `ActionButton`  | `button`       | Action   | Action-dispatching button with icon, spinner, confirm dialog  |
-| `DataTable`     | `table`        | Action   | Table with badge cells, action buttons, inline editing        |
-| `Form`          | `form`         | Form     | Form wrapper: dirty tracking, validation, submit with spinner |
-| `TextInput`     | `text_input`   | Form     | Text field with label, validation, pattern, help_text         |
-| `Textarea`      | `textarea`     | Form     | Multi-line text with maxlength counter, help_text             |
-| `NumberInput`   | `number_input` | Form     | Number field with min/max/step, range hint, help_text         |
-| `Select`        | `select`       | Form     | Dropdown with options, custom chevron, help_text              |
-| `Toggle`        | `toggle`       | Form     | Switch with accessible role, help_text                        |
+| Widget          | Type Key       | Category | Description                                                                |
+| --------------- | -------------- | -------- | -------------------------------------------------------------------------- |
+| `Heading`       | `heading`      | Display  | h1–h4 with themed styling                                                  |
+| `TextBlock`     | `text`         | Display  | Paragraph text with optional color and size (sm/md/lg)                     |
+| `StatusBadge`   | `status_badge` | Display  | Colored pill badge with dot indicator                                      |
+| `KeyValue`      | `key_value`    | Display  | Key-value pairs list with optional color per value                         |
+| `ProgressBar`   | `progress`     | Display  | Animated progress bar with label and percentage                            |
+| `MarkdownBlock` | `markdown`     | Display  | Full GFM rendering via `marked` with themed custom renderer                |
+| `Alert`         | `alert`        | Display  | Info/success/warning/error message box                                     |
+| `Card`          | `card`         | Layout   | Container with title, optional collapsible                                 |
+| `Row`           | `row`          | Layout   | Horizontal flex container with gap, justify, align                         |
+| `Column`        | `column`       | Layout   | Vertical flex container with gap                                           |
+| `Tabs`          | `tabs`         | Layout   | Client-side tab navigation with icons                                      |
+| `Modal`         | `modal`        | Layout   | Dialog overlay with trigger button, focus trap, 4 sizes                    |
+| `ActionButton`  | `button`       | Action   | Action-dispatching button with icon, spinner, confirm dialog               |
+| `DataTable`     | `table`        | Action   | Table with row-click dispatch, badge cells, action buttons, inline editing |
+| `Form`          | `form`         | Form     | Form wrapper: dirty tracking, validation, submit with spinner              |
+| `TextInput`     | `text_input`   | Form     | Text field with label, validation, pattern, help_text                      |
+| `Textarea`      | `textarea`     | Form     | Multi-line text with maxlength counter, help_text                          |
+| `NumberInput`   | `number_input` | Form     | Number field with min/max/step, range hint, help_text                      |
+| `Select`        | `select`       | Form     | Dropdown with options, custom chevron, help_text                           |
+| `Toggle`        | `toggle`       | Form     | Switch with accessible role, help_text                                     |
 
 ---
 
@@ -333,6 +333,7 @@ notify_ui_update()                 SSE /api/plugins/{id}/events
 - **Conditional rendering:** `visible_when` with 8 operators (eq, ne, gt, lt, gte, lte, in, not_in)
 - **Form system:** `formContext` via Svelte context — dirty tracking, disabled propagation, value collection
 - **Focus trap:** Modal implements full Tab/Shift+Tab focus trap with focus restore
+- **Row-click dispatch:** DataTable dispatches `edit_action` with full row data on row click (pointer cursor, loading state)
 - **Inline editing:** DataTable supports click-to-edit cells with Enter/Escape/Blur commit
 - **Secure Markdown:** Custom `marked` renderer with HTML disabled, URL scheme allowlist, attribute escaping
 - **`help_text`:** Form widgets show contextual help below the field (hidden during validation errors)
