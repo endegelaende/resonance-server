@@ -104,6 +104,34 @@ async def count_albums(conn: aiosqlite.Connection) -> int:
     return int(row["c"]) if row else 0
 
 
+async def search_albums(
+    conn: aiosqlite.Connection,
+    query: str,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[AlbumRow]:
+    """Search albums by title or artist name (case-insensitive LIKE).
+
+    Returns list of AlbumRow.
+    """
+    like_pattern = f"%{query}%"
+    cursor = await conn.execute(
+        """
+        SELECT
+            a.id, a.title, a.title_sort, a.artist_id, ar.name AS artist_name, a.year
+        FROM albums a
+        LEFT JOIN artists ar ON a.artist_id = ar.id
+        WHERE a.title LIKE ? OR ar.name LIKE ?
+        ORDER BY a.title COLLATE NOCASE
+        LIMIT ? OFFSET ?;
+        """,
+        (like_pattern, like_pattern, int(limit), int(offset)),
+    )
+    rows = await cursor.fetchall()
+    return [_row_to_album(r) for r in rows]
+
+
 async def count_albums_by_artist(conn: aiosqlite.Connection, artist_id: int) -> int:
     cursor = await conn.execute(
         "SELECT COUNT(*) AS c FROM albums WHERE artist_id = ?;",

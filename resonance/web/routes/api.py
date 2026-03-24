@@ -175,7 +175,9 @@ def _mask_secret(value: Any) -> Any:
     return "*" * max(4, len(value) - 4) + value[-4:]
 
 
-def _mask_values(definitions: tuple[SettingDefinition, ...], values: dict[str, Any]) -> dict[str, Any]:
+def _mask_values(
+    definitions: tuple[SettingDefinition, ...], values: dict[str, Any]
+) -> dict[str, Any]:
     masked = dict(values)
     for definition in definitions:
         if definition.secret:
@@ -359,7 +361,9 @@ async def uninstall_plugin(plugin_name: str) -> dict[str, Any]:
     installer = _require_plugin_installer()
 
     if manager.is_core_plugin(plugin_name):
-        raise HTTPException(status_code=400, detail=f"Core plugin cannot be uninstalled: {plugin_name}")
+        raise HTTPException(
+            status_code=400, detail=f"Core plugin cannot be uninstalled: {plugin_name}"
+        )
     if not installer.uninstall(plugin_name):
         raise HTTPException(status_code=404, detail=f"Plugin not installed: {plugin_name}")
 
@@ -379,7 +383,9 @@ async def get_repository(force_refresh: bool = False) -> dict[str, Any]:
 
     available = await repository.fetch_available(force_refresh=force_refresh)
     installed = {manifest.name: manifest.version for manifest in manager.manifests}
-    core_plugins = {manifest.name for manifest in manager.manifests if manifest.plugin_type == "core"}
+    core_plugins = {
+        manifest.name for manifest in manager.manifests if manifest.plugin_type == "core"
+    }
     compared = repository.compare_with_installed(available, installed, core_plugins)
     return {"count": len(compared), "plugins": compared}
 
@@ -407,7 +413,9 @@ async def install_from_repository(request: Request) -> dict[str, Any]:
         available = await repository.fetch_available()
         entry = next((item for item in available if item.name == plugin_name), None)
         if entry is None:
-            raise HTTPException(status_code=404, detail=f"Plugin not found in repository: {plugin_name}")
+            raise HTTPException(
+                status_code=404, detail=f"Plugin not found in repository: {plugin_name}"
+            )
 
         compatible, reason = repository.check_compatible(entry)
         if not compatible:
@@ -485,9 +493,7 @@ async def get_plugin_ui(plugin_id: str) -> dict[str, Any]:
 
 
 @router.post("/api/plugins/{plugin_id}/actions/{action}")
-async def dispatch_plugin_action(
-    plugin_id: str, action: str, request: Request
-) -> dict[str, Any]:
+async def dispatch_plugin_action(plugin_id: str, action: str, request: Request) -> dict[str, Any]:
     """Dispatch a UI button action to a plugin's action handler."""
     manager = _require_plugin_manager()
     loaded = manager.plugins.get(plugin_id)
@@ -499,9 +505,7 @@ async def dispatch_plugin_action(
 
     ctx = loaded.context
     if ctx is None or ctx._action_handler is None:
-        raise HTTPException(
-            status_code=404, detail=f"Plugin has no action handler: {plugin_id}"
-        )
+        raise HTTPException(status_code=404, detail=f"Plugin has no action handler: {plugin_id}")
 
     try:
         body = await request.json()
@@ -516,9 +520,7 @@ async def dispatch_plugin_action(
         ctx.notify_ui_update()
         return result
     except Exception as exc:
-        logger.error(
-            "Plugin action '%s' error for '%s': %s", action, plugin_id, exc
-        )
+        logger.error("Plugin action '%s' error for '%s': %s", action, plugin_id, exc)
         raise HTTPException(status_code=500, detail=f"Action failed: {exc}")
 
 
@@ -553,12 +555,10 @@ async def plugin_ui_events(plugin_id: str, request: Request) -> StreamingRespons
                 # Check if client disconnected
                 if await request.is_disconnected():
                     break
-                new_rev = await ctx.wait_for_ui_update(
-                    last_revision=last_rev, timeout=25.0
-                )
+                new_rev = await ctx.wait_for_ui_update(last_revision=last_rev, timeout=25.0)
                 if new_rev > last_rev:
                     last_rev = new_rev
-                    yield f"data: {{\"event\": \"ui_refresh\", \"revision\": {new_rev}}}\n\n"
+                    yield f'data: {{"event": "ui_refresh", "revision": {new_rev}}}\n\n'
                 else:
                     # Keep-alive comment to prevent proxy timeouts
                     yield ": keepalive\n\n"
@@ -975,34 +975,40 @@ async def search_library(q: str, limit: int = 50) -> dict[str, Any]:
     db = _music_library._db
 
     # Search all categories
-    artists = await db.search_artists(term=q, offset=0, limit=limit)
-    albums = await db.search_albums(term=q, offset=0, limit=limit)
-    tracks = await db.search_tracks(term=q, offset=0, limit=limit)
+    artists = await db.search_artists(query=q, offset=0, limit=limit)
+    albums = await db.search_albums(query=q, offset=0, limit=limit)
+    tracks = await db.search_tracks(query=q, offset=0, limit=limit)
 
     return {
         "query": q,
         "artists": [
             {
-                "id": r.get("id") if isinstance(r, dict) else r["id"],
+                "id": r["id"] if isinstance(r, dict) else r.id,
                 "artist": r.get("name", r.get("artist", ""))
                 if isinstance(r, dict)
-                else r.get("name", ""),
+                else getattr(r, "name", getattr(r, "artist", "")),
             }
             for r in artists
         ],
         "albums": [
             {
-                "id": r.get("id") if isinstance(r, dict) else r["id"],
+                "id": r["id"] if isinstance(r, dict) else r.id,
                 "album": r.get("title", r.get("album", ""))
                 if isinstance(r, dict)
-                else r.get("title", ""),
+                else getattr(r, "title", getattr(r, "album", "")),
+                "artist": r.get("artist_name", "")
+                if isinstance(r, dict)
+                else getattr(r, "artist_name", ""),
+                "year": r.get("year") if isinstance(r, dict) else getattr(r, "year", None),
             }
             for r in albums
         ],
         "tracks": [
             {
-                "id": r.get("id") if isinstance(r, dict) else r["id"],
-                "title": r.get("title", "") if isinstance(r, dict) else r.get("title", ""),
+                "id": r["id"] if isinstance(r, dict) else r.id,
+                "title": r.get("title", "") if isinstance(r, dict) else getattr(r, "title", ""),
+                "artist": r.get("artist", "") if isinstance(r, dict) else getattr(r, "artist", ""),
+                "album": r.get("album", "") if isinstance(r, dict) else getattr(r, "album", ""),
             }
             for r in tracks
         ],

@@ -89,6 +89,32 @@ async def count_artists(conn: aiosqlite.Connection) -> int:
     return int(row["c"]) if row is not None else 0
 
 
+async def search_artists(
+    conn: aiosqlite.Connection,
+    query: str,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Search artists by name (case-insensitive LIKE).
+
+    Returns list of dicts: {id, name}.
+    """
+    like_pattern = f"%{query}%"
+    cursor = await conn.execute(
+        """
+        SELECT id, name
+        FROM artists
+        WHERE name LIKE ?
+        ORDER BY name COLLATE NOCASE
+        LIMIT ? OFFSET ?;
+        """,
+        (like_pattern, int(limit), int(offset)),
+    )
+    rows = await cursor.fetchall()
+    return [{"id": int(row["id"]), "name": str(row["name"])} for row in rows]
+
+
 async def get_artist_album_count(conn: aiosqlite.Connection, artist_id: int) -> int:
     cursor = await conn.execute(
         "SELECT COUNT(*) AS c FROM albums WHERE artist_id = ?;",

@@ -429,6 +429,22 @@ class LibraryDb:
             self._require_conn(), query, limit=limit, offset=offset
         )
 
+    async def search_artists(
+        self, query: str, *, limit: int = 50, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        """Search artists by name (case-insensitive LIKE)."""
+        return await queries_artists.search_artists(
+            self._require_conn(), query, limit=limit, offset=offset
+        )
+
+    async def search_albums(
+        self, query: str, *, limit: int = 50, offset: int = 0
+    ) -> list[AlbumRow]:
+        """Search albums by title or artist name (case-insensitive LIKE)."""
+        return await queries_albums.search_albums(
+            self._require_conn(), query, limit=limit, offset=offset
+        )
+
     async def delete_track_by_path(self, path: str) -> bool:
         return await queries_tracks.delete_track_by_path(self._require_conn(), path)
 
@@ -1739,14 +1755,9 @@ class LibraryDb:
             "SELECT path, mtime_ns, file_size FROM tracks WHERE mtime_ns IS NOT NULL AND file_size IS NOT NULL;"
         )
         rows = await cursor.fetchall()
-        return {
-            str(row["path"]): (int(row["mtime_ns"]), int(row["file_size"]))
-            for row in rows
-        }
+        return {str(row["path"]): (int(row["mtime_ns"]), int(row["file_size"])) for row in rows}
 
-    async def delete_tracks_not_in_paths(
-        self, valid_paths: set[str], scan_root: str
-    ) -> int:
+    async def delete_tracks_not_in_paths(self, valid_paths: set[str], scan_root: str) -> int:
         """Delete tracks whose path starts with *scan_root* but is not in *valid_paths*.
 
         This removes "orphaned" DB entries for files that have been deleted from
