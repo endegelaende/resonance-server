@@ -61,8 +61,11 @@ RUN groupadd --gid 1000 resonance \
 WORKDIR /app
 
 # Install Python dependencies (layer caching: copy only pyproject.toml + README first)
+# Create stub dirs so hatch force-include paths resolve during wheel build.
+# The real content is COPY'd below and overlays /app at runtime.
 COPY pyproject.toml README.md ./
-RUN pip install --no-cache-dir ".[blurhash]"
+RUN mkdir -p plugins static web-ui/build \
+    && pip install --no-cache-dir ".[blurhash]"
 
 # Copy application code
 # Note: resonance/ includes config/legacy.conf and config/devices.toml
