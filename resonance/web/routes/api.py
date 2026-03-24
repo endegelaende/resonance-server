@@ -696,6 +696,20 @@ async def get_player_status(player_id: str) -> dict[str, Any]:
             current = playlist.current_track
             if current is not None:
                 result["duration"] = (current.duration_ms or 0) / 1000.0
+                if current.title:
+                    result["title"] = current.title
+                if current.artist:
+                    result["artist"] = current.artist
+                if current.album:
+                    result["album"] = current.album
+                if current.source and current.source != "local":
+                    result["source"] = current.source
+                if current.artwork_url:
+                    result["artwork_url"] = current.artwork_url
+                if current.is_remote:
+                    result["remote"] = 1
+                if current.is_live:
+                    result["is_live"] = 1
 
     return result
 
