@@ -855,6 +855,7 @@ class TestPodcastStore:
 class TestPodcastProvider:
     def _make_provider(self) -> Any:
         from plugins.podcast import PodcastProvider
+
         return PodcastProvider()
 
     def test_name(self):
@@ -913,7 +914,9 @@ class TestPodcastProvider:
             mock_store.total_new_episodes = 0
             mock_store.get_in_progress_episodes.return_value = []
             mock_store.subscriptions = [
-                Subscription(name="My Podcast", url="https://example.com/feed.xml", image="img.jpg"),
+                Subscription(
+                    name="My Podcast", url="https://example.com/feed.xml", image="img.jpg"
+                ),
             ]
             podcast_mod._store = mock_store
 
@@ -973,58 +976,72 @@ class TestPodcastProvider:
 class TestParameterParsing:
     def test_parse_tagged_colon_format(self):
         from plugins.podcast import _parse_tagged
+
         result = _parse_tagged(["podcast", "items", "url:https://example.com", "menu:1"], start=2)
         assert result["url"] == "https://example.com"
         assert result["menu"] == "1"
 
     def test_parse_tagged_dict_format(self):
         from plugins.podcast import _parse_tagged
-        result = _parse_tagged(["podcast", "items", {"url": "https://example.com", "menu": "1"}], start=2)
+
+        result = _parse_tagged(
+            ["podcast", "items", {"url": "https://example.com", "menu": "1"}], start=2
+        )
         assert result["url"] == "https://example.com"
         assert result["menu"] == "1"
 
     def test_parse_tagged_mixed(self):
         from plugins.podcast import _parse_tagged
-        result = _parse_tagged(["podcast", "items", "url:https://example.com", {"menu": "1"}], start=2)
+
+        result = _parse_tagged(
+            ["podcast", "items", "url:https://example.com", {"menu": "1"}], start=2
+        )
         assert result["url"] == "https://example.com"
         assert result["menu"] == "1"
 
     def test_parse_tagged_ignores_non_tagged(self):
         from plugins.podcast import _parse_tagged
+
         result = _parse_tagged(["podcast", "items", "notatag", "key:val"], start=2)
         assert "notatag" not in result
         assert result["key"] == "val"
 
     def test_parse_tagged_none_values_skipped(self):
         from plugins.podcast import _parse_tagged
+
         result = _parse_tagged(["podcast", "items", {"key": None, "key2": "val"}], start=2)
         assert "key" not in result
         assert result["key2"] == "val"
 
     def test_parse_start_count_defaults(self):
         from plugins.podcast import _parse_start_count
+
         start, count = _parse_start_count(["podcast", "items"])
         assert start == 0
         assert count == 200
 
     def test_parse_start_count_explicit(self):
         from plugins.podcast import _parse_start_count
+
         start, count = _parse_start_count(["podcast", "items", 10, 50])
         assert start == 10
         assert count == 50
 
     def test_parse_start_count_negative_clamped(self):
         from plugins.podcast import _parse_start_count
+
         start, count = _parse_start_count(["podcast", "items", -5, 50])
         assert start == 0
 
     def test_parse_start_count_large_clamped(self):
         from plugins.podcast import _parse_start_count
+
         start, count = _parse_start_count(["podcast", "items", 0, 20_000])
         assert count == 10_000
 
     def test_parse_start_count_invalid_types(self):
         from plugins.podcast import _parse_start_count
+
         start, count = _parse_start_count(["podcast", "items", "invalid", "bad"])
         assert start == 0
         assert count == 200
@@ -1616,10 +1633,17 @@ class TestPodcastItems:
             from plugins.podcast import _podcast_items
 
             ctx = self._make_ctx()
-            result = await _podcast_items(ctx, [
-                "podcast", "items", 0, 100,
-                "url:https://example.com/feed.xml", "menu:1",
-            ])
+            result = await _podcast_items(
+                ctx,
+                [
+                    "podcast",
+                    "items",
+                    0,
+                    100,
+                    "url:https://example.com/feed.xml",
+                    "menu:1",
+                ],
+            )
 
             assert result["count"] == 1
             items = result["item_loop"]
@@ -1655,10 +1679,17 @@ class TestPodcastItems:
             from plugins.podcast import _podcast_items
 
             ctx = self._make_ctx()
-            result = await _podcast_items(ctx, [
-                "podcast", "items", 0, 100,
-                "url:__recent__", "menu:1",
-            ])
+            result = await _podcast_items(
+                ctx,
+                [
+                    "podcast",
+                    "items",
+                    0,
+                    100,
+                    "url:__recent__",
+                    "menu:1",
+                ],
+            )
 
             assert result["count"] == 1
             assert result["item_loop"][0]["text"] == "Recent Ep"
@@ -1737,14 +1768,23 @@ class TestPodcastItems:
             # Mock client that fails
             podcast_mod._http_client = MagicMock()
 
-            with patch("plugins.podcast.feed_parser.fetch_feed", side_effect=Exception("Network error")):
+            with patch(
+                "plugins.podcast.feed_parser.fetch_feed", side_effect=Exception("Network error")
+            ):
                 from plugins.podcast import _podcast_items
 
                 ctx = self._make_ctx()
-                result = await _podcast_items(ctx, [
-                    "podcast", "items", 0, 100,
-                    "url:https://example.com/bad.xml", "menu:1",
-                ])
+                result = await _podcast_items(
+                    ctx,
+                    [
+                        "podcast",
+                        "items",
+                        0,
+                        100,
+                        "url:https://example.com/bad.xml",
+                        "menu:1",
+                    ],
+                )
                 assert result["count"] == 0
         finally:
             podcast_mod._store = old_store
@@ -1799,16 +1839,34 @@ class TestPodcastSearch:
             from plugins.podcast.providers import PodcastSearchResult
 
             mock_results = [
-                PodcastSearchResult(name="Found Podcast", url="https://example.com/feed.xml", image="img.jpg", author="Author", provider="podcastindex"),
+                PodcastSearchResult(
+                    name="Found Podcast",
+                    url="https://example.com/feed.xml",
+                    image="img.jpg",
+                    author="Author",
+                    provider="podcastindex",
+                ),
             ]
 
-            with patch("plugins.podcast.providers.PodcastIndexProvider.search", new_callable=AsyncMock, return_value=mock_results):
+            with patch(
+                "plugins.podcast.providers.PodcastIndexProvider.search",
+                new_callable=AsyncMock,
+                return_value=mock_results,
+            ):
                 from plugins.podcast import _podcast_search
 
                 ctx = self._make_ctx()
-                result = await _podcast_search(ctx, [
-                    "podcast", "search", 0, 100, "term:test query", "menu:1",
-                ])
+                result = await _podcast_search(
+                    ctx,
+                    [
+                        "podcast",
+                        "search",
+                        0,
+                        100,
+                        "term:test query",
+                        "menu:1",
+                    ],
+                )
                 assert result["count"] == 1
                 assert result["item_loop"][0]["text"] == "Found Podcast"
         finally:
@@ -1830,16 +1888,29 @@ class TestPodcastSearch:
             from plugins.podcast.providers import PodcastSearchResult
 
             mock_results = [
-                PodcastSearchResult(name="CLI Podcast", url="https://example.com/feed.xml", provider="podcastindex"),
+                PodcastSearchResult(
+                    name="CLI Podcast", url="https://example.com/feed.xml", provider="podcastindex"
+                ),
             ]
 
-            with patch("plugins.podcast.providers.PodcastIndexProvider.search", new_callable=AsyncMock, return_value=mock_results):
+            with patch(
+                "plugins.podcast.providers.PodcastIndexProvider.search",
+                new_callable=AsyncMock,
+                return_value=mock_results,
+            ):
                 from plugins.podcast import _podcast_search
 
                 ctx = self._make_ctx()
-                result = await _podcast_search(ctx, [
-                    "podcast", "search", 0, 100, "term:test",
-                ])
+                result = await _podcast_search(
+                    ctx,
+                    [
+                        "podcast",
+                        "search",
+                        0,
+                        100,
+                        "term:test",
+                    ],
+                )
                 assert "loop" in result
                 assert result["loop"][0]["name"] == "CLI Podcast"
         finally:
@@ -1858,13 +1929,24 @@ class TestPodcastSearch:
             podcast_mod._ctx = MagicMock()
             podcast_mod._ctx.get_setting.return_value = "podcastindex"
 
-            with patch("plugins.podcast.providers.PodcastIndexProvider.search", new_callable=AsyncMock, return_value=[]) as mock_search:
+            with patch(
+                "plugins.podcast.providers.PodcastIndexProvider.search",
+                new_callable=AsyncMock,
+                return_value=[],
+            ) as mock_search:
                 from plugins.podcast import _podcast_search
 
                 ctx = self._make_ctx()
-                result = await _podcast_search(ctx, [
-                    "podcast", "search", 0, 100, "query:my podcast",
-                ])
+                result = await _podcast_search(
+                    ctx,
+                    [
+                        "podcast",
+                        "search",
+                        0,
+                        100,
+                        "query:my podcast",
+                    ],
+                )
                 mock_search.assert_called_once_with("my podcast", client=podcast_mod._http_client)
         finally:
             podcast_mod._store = old_store
@@ -1928,21 +2010,33 @@ class TestPodcastPlay:
 
             ctx = self._make_ctx()
 
-            with patch("resonance.web.handlers.playlist_playback._start_track_stream", new_callable=AsyncMock):
-                result = await _podcast_play(ctx, [
-                    "podcast", "play", 0, 0,
-                    "url:https://example.com/ep.mp3",
-                    "title:Test Episode",
-                    "feed_title:My Podcast",
-                    "cmd:play",
-                ])
+            with patch(
+                "resonance.web.handlers.playlist_playback._start_track_stream",
+                new_callable=AsyncMock,
+            ):
+                result = await _podcast_play(
+                    ctx,
+                    [
+                        "podcast",
+                        "play",
+                        0,
+                        0,
+                        "url:https://example.com/ep.mp3",
+                        "title:Test Episode",
+                        "feed_title:My Podcast",
+                        "cmd:play",
+                    ],
+                )
 
             assert result == {"count": 1}
 
             # Should record as recently played
             mock_store.record_played.assert_called_once()
             call_kwargs = mock_store.record_played.call_args
-            assert call_kwargs[1]["url"] == "https://example.com/ep.mp3" or call_kwargs.kwargs.get("url") == "https://example.com/ep.mp3"
+            assert (
+                call_kwargs[1]["url"] == "https://example.com/ep.mp3"
+                or call_kwargs.kwargs.get("url") == "https://example.com/ep.mp3"
+            )
         finally:
             podcast_mod._store = old_store
             podcast_mod._event_bus = old_event_bus
@@ -1958,10 +2052,16 @@ class TestPodcastPlay:
             from plugins.podcast import _podcast_play
 
             ctx = self._make_ctx(with_player=False)
-            result = await _podcast_play(ctx, [
-                "podcast", "play", 0, 0,
-                "url:https://example.com/ep.mp3",
-            ])
+            result = await _podcast_play(
+                ctx,
+                [
+                    "podcast",
+                    "play",
+                    0,
+                    0,
+                    "url:https://example.com/ep.mp3",
+                ],
+            )
             assert "error" in result
             assert "No player" in result["error"]
         finally:
@@ -1978,10 +2078,16 @@ class TestPodcastPlay:
             from plugins.podcast import _podcast_play
 
             ctx = self._make_ctx(with_playlist_manager=False)
-            result = await _podcast_play(ctx, [
-                "podcast", "play", 0, 0,
-                "url:https://example.com/ep.mp3",
-            ])
+            result = await _podcast_play(
+                ctx,
+                [
+                    "podcast",
+                    "play",
+                    0,
+                    0,
+                    "url:https://example.com/ep.mp3",
+                ],
+            )
             assert "error" in result
             assert "Playlist manager" in result["error"]
         finally:
@@ -2001,11 +2107,17 @@ class TestPodcastPlay:
             ctx = self._make_ctx()
             playlist = ctx.playlist_manager.get.return_value
 
-            result = await _podcast_play(ctx, [
-                "podcast", "play", 0, 0,
-                "url:https://example.com/ep.mp3",
-                "cmd:add",
-            ])
+            result = await _podcast_play(
+                ctx,
+                [
+                    "podcast",
+                    "play",
+                    0,
+                    0,
+                    "url:https://example.com/ep.mp3",
+                    "cmd:add",
+                ],
+            )
             assert result == {"count": 1}
             playlist.add.assert_called_once()
         finally:
@@ -2025,11 +2137,17 @@ class TestPodcastPlay:
             ctx = self._make_ctx()
             playlist = ctx.playlist_manager.get.return_value
 
-            result = await _podcast_play(ctx, [
-                "podcast", "play", 0, 0,
-                "url:https://example.com/ep.mp3",
-                "cmd:insert",
-            ])
+            result = await _podcast_play(
+                ctx,
+                [
+                    "podcast",
+                    "play",
+                    0,
+                    0,
+                    "url:https://example.com/ep.mp3",
+                    "cmd:insert",
+                ],
+            )
             assert result == {"count": 1}
             playlist.insert.assert_called_once()
         finally:
@@ -2058,12 +2176,18 @@ class TestPodcastAddshow:
             from plugins.podcast import _podcast_addshow
 
             ctx = self._make_ctx()
-            result = await _podcast_addshow(ctx, [
-                "podcast", "addshow", 0, 0,
-                "url:https://example.com/feed.xml",
-                "name:My Podcast",
-                "image:cover.jpg",
-            ])
+            result = await _podcast_addshow(
+                ctx,
+                [
+                    "podcast",
+                    "addshow",
+                    0,
+                    0,
+                    "url:https://example.com/feed.xml",
+                    "name:My Podcast",
+                    "image:cover.jpg",
+                ],
+            )
             assert result["subscribed"] is True
             assert result["name"] == "My Podcast"
             mock_store.add_subscription.assert_called_once()
@@ -2099,12 +2223,18 @@ class TestPodcastAddshow:
             from plugins.podcast import _podcast_addshow
 
             ctx = self._make_ctx()
-            result = await _podcast_addshow(ctx, [
-                "podcast", "addshow", 0, 0,
-                "url:https://example.com/feed.xml",
-                "name:My Podcast",
-                "menu:1",
-            ])
+            result = await _podcast_addshow(
+                ctx,
+                [
+                    "podcast",
+                    "addshow",
+                    0,
+                    0,
+                    "url:https://example.com/feed.xml",
+                    "name:My Podcast",
+                    "menu:1",
+                ],
+            )
             assert "item_loop" in result
             assert result["item_loop"][0]["showBriefly"] == 1
             assert "Subscribed" in result["item_loop"][0]["text"]
@@ -2124,12 +2254,18 @@ class TestPodcastAddshow:
             from plugins.podcast import _podcast_addshow
 
             ctx = self._make_ctx()
-            result = await _podcast_addshow(ctx, [
-                "podcast", "addshow", 0, 0,
-                "url:https://example.com/feed.xml",
-                "name:My Podcast",
-                "menu:1",
-            ])
+            result = await _podcast_addshow(
+                ctx,
+                [
+                    "podcast",
+                    "addshow",
+                    0,
+                    0,
+                    "url:https://example.com/feed.xml",
+                    "name:My Podcast",
+                    "menu:1",
+                ],
+            )
             assert "Already subscribed" in result["item_loop"][0]["text"]
         finally:
             podcast_mod._store = old_store
@@ -2157,10 +2293,16 @@ class TestPodcastAddshow:
             from plugins.podcast import _podcast_addshow
 
             ctx = self._make_ctx()
-            result = await _podcast_addshow(ctx, [
-                "podcast", "addshow", 0, 0,
-                "url:https://example.com/feed.xml",
-            ])
+            result = await _podcast_addshow(
+                ctx,
+                [
+                    "podcast",
+                    "addshow",
+                    0,
+                    0,
+                    "url:https://example.com/feed.xml",
+                ],
+            )
             assert result["name"] == "Auto-Detected Title"
         finally:
             podcast_mod._store = old_store
@@ -2190,10 +2332,16 @@ class TestPodcastDelshow:
             from plugins.podcast import _podcast_delshow
 
             ctx = self._make_ctx()
-            result = await _podcast_delshow(ctx, [
-                "podcast", "delshow", 0, 0,
-                "url:https://example.com/feed.xml",
-            ])
+            result = await _podcast_delshow(
+                ctx,
+                [
+                    "podcast",
+                    "delshow",
+                    0,
+                    0,
+                    "url:https://example.com/feed.xml",
+                ],
+            )
             assert result["unsubscribed"] is True
             mock_store.remove_subscription.assert_called_once_with("https://example.com/feed.xml")
         finally:
@@ -2228,12 +2376,18 @@ class TestPodcastDelshow:
             from plugins.podcast import _podcast_delshow
 
             ctx = self._make_ctx()
-            result = await _podcast_delshow(ctx, [
-                "podcast", "delshow", 0, 0,
-                "url:https://example.com/feed.xml",
-                "name:My Podcast",
-                "menu:1",
-            ])
+            result = await _podcast_delshow(
+                ctx,
+                [
+                    "podcast",
+                    "delshow",
+                    0,
+                    0,
+                    "url:https://example.com/feed.xml",
+                    "name:My Podcast",
+                    "menu:1",
+                ],
+            )
             assert "item_loop" in result
             assert "Unsubscribed" in result["item_loop"][0]["text"]
             assert result["item_loop"][0]["nextWindow"] == "grandparent"
@@ -2253,12 +2407,18 @@ class TestPodcastDelshow:
             from plugins.podcast import _podcast_delshow
 
             ctx = self._make_ctx()
-            result = await _podcast_delshow(ctx, [
-                "podcast", "delshow", 0, 0,
-                "url:https://example.com/feed.xml",
-                "name:My Podcast",
-                "menu:1",
-            ])
+            result = await _podcast_delshow(
+                ctx,
+                [
+                    "podcast",
+                    "delshow",
+                    0,
+                    0,
+                    "url:https://example.com/feed.xml",
+                    "name:My Podcast",
+                    "menu:1",
+                ],
+            )
             assert "Not subscribed" in result["item_loop"][0]["text"]
         finally:
             podcast_mod._store = old_store
@@ -2303,7 +2463,9 @@ class TestPodcastIndexSearch:
         }
 
         provider = PodcastIndexProvider()
-        with patch("plugins.podcast.providers._pi_get", new_callable=AsyncMock, return_value=mock_response):
+        with patch(
+            "plugins.podcast.providers._pi_get", new_callable=AsyncMock, return_value=mock_response
+        ):
             results = await provider.search("test query")
             assert len(results) == 1
             assert results[0].name == "Found Podcast"
@@ -2324,16 +2486,20 @@ class TestPodcastIndexSearch:
         from plugins.podcast.providers import PodcastIndexProvider
 
         mock_response = {
-            "feeds": [{
-                "title": "Test",
-                "url": "https://example.com/feed.xml",
-                "image": "https://example.com/image.jpg",
-                # No "artwork" field — should fall back to "image"
-            }],
+            "feeds": [
+                {
+                    "title": "Test",
+                    "url": "https://example.com/feed.xml",
+                    "image": "https://example.com/image.jpg",
+                    # No "artwork" field — should fall back to "image"
+                }
+            ],
         }
 
         provider = PodcastIndexProvider()
-        with patch("plugins.podcast.providers._pi_get", new_callable=AsyncMock, return_value=mock_response):
+        with patch(
+            "plugins.podcast.providers._pi_get", new_callable=AsyncMock, return_value=mock_response
+        ):
             results = await provider.search("test")
             assert results[0].image == "https://example.com/image.jpg"
 
@@ -2401,7 +2567,11 @@ class TestFeedCache:
 
             new_feed = PodcastFeed(title="Fresh", url="https://example.com/feed.xml")
 
-            with patch("plugins.podcast.feed_parser.fetch_feed", new_callable=AsyncMock, return_value=new_feed):
+            with patch(
+                "plugins.podcast.feed_parser.fetch_feed",
+                new_callable=AsyncMock,
+                return_value=new_feed,
+            ):
                 from plugins.podcast import _get_feed
 
                 result = await _get_feed("https://example.com/feed.xml")
@@ -2422,6 +2592,7 @@ class TestFeedCache:
             assert len(podcast_mod._feed_cache) > 0
 
             from plugins.podcast import _clear_feed_cache
+
             _clear_feed_cache()
             assert len(podcast_mod._feed_cache) == 0
         finally:
@@ -2470,7 +2641,10 @@ class TestPluginLifecycle:
             # Should register menu node
             ctx.register_menu_node.assert_called_once()
             node_args = ctx.register_menu_node.call_args
-            assert node_args[1]["node_id"] == "podcasts" or node_args.kwargs.get("node_id") == "podcasts"
+            assert (
+                node_args[1]["node_id"] == "podcasts"
+                or node_args.kwargs.get("node_id") == "podcasts"
+            )
 
             # Should subscribe to player events
             ctx.subscribe.assert_called_once()
@@ -2482,7 +2656,10 @@ class TestPluginLifecycle:
             assert podcast_mod._ctx is not None
         finally:
             # Cancel any background task created during test
-            if podcast_mod._refresh_task is not None and podcast_mod._refresh_task is not old_refresh:
+            if (
+                podcast_mod._refresh_task is not None
+                and podcast_mod._refresh_task is not old_refresh
+            ):
                 podcast_mod._refresh_task.cancel()
                 try:
                     await podcast_mod._refresh_task
@@ -2566,7 +2743,10 @@ class TestPluginLifecycle:
             assert node_call.kwargs.get("weight") == 50 or node_call[1].get("weight") == 50
         finally:
             # Cancel any background task created during test
-            if podcast_mod._refresh_task is not None and podcast_mod._refresh_task is not old_refresh:
+            if (
+                podcast_mod._refresh_task is not None
+                and podcast_mod._refresh_task is not old_refresh
+            ):
                 podcast_mod._refresh_task.cancel()
                 try:
                     await podcast_mod._refresh_task
@@ -2616,11 +2796,17 @@ class TestIntegration:
             from plugins.podcast import _podcast_addshow, _podcast_items
 
             ctx = _FakeCommandContext()
-            result = await _podcast_addshow(ctx, [
-                "podcast", "addshow", 0, 0,
-                "url:https://example.com/feed.xml",
-                "name:Test Podcast",
-            ])
+            result = await _podcast_addshow(
+                ctx,
+                [
+                    "podcast",
+                    "addshow",
+                    0,
+                    0,
+                    "url:https://example.com/feed.xml",
+                    "name:Test Podcast",
+                ],
+            )
             assert result["subscribed"] is True
 
             # Browse root — should show subscription
@@ -2646,11 +2832,17 @@ class TestIntegration:
             podcast_mod._feed_cache["https://example.com/feed.xml"] = (feed, time.time() + 600)
 
             # Browse feed — should show episode
-            result = await _podcast_items(ctx, [
-                "podcast", "items", 0, 100,
-                "url:https://example.com/feed.xml",
-                "menu:1",
-            ])
+            result = await _podcast_items(
+                ctx,
+                [
+                    "podcast",
+                    "items",
+                    0,
+                    100,
+                    "url:https://example.com/feed.xml",
+                    "menu:1",
+                ],
+            )
             assert result["count"] == 1
             assert result["item_loop"][0]["text"] == "First Episode"
         finally:
@@ -2689,19 +2881,37 @@ class TestIntegration:
                     provider="podcastindex",
                 ),
             ]
-            with patch("plugins.podcast.providers.PodcastIndexProvider.search", new_callable=AsyncMock, return_value=mock_results):
-                result = await _podcast_search(ctx, [
-                    "podcast", "search", 0, 100, "term:test", "menu:1",
-                ])
+            with patch(
+                "plugins.podcast.providers.PodcastIndexProvider.search",
+                new_callable=AsyncMock,
+                return_value=mock_results,
+            ):
+                result = await _podcast_search(
+                    ctx,
+                    [
+                        "podcast",
+                        "search",
+                        0,
+                        100,
+                        "term:test",
+                        "menu:1",
+                    ],
+                )
                 assert result["count"] == 1
                 feed_url = result["item_loop"][0]["actions"]["go"]["params"]["url"]
 
             # Subscribe to found feed
-            result = await _podcast_addshow(ctx, [
-                "podcast", "addshow", 0, 0,
-                f"url:{feed_url}",
-                "name:Discovered Podcast",
-            ])
+            result = await _podcast_addshow(
+                ctx,
+                [
+                    "podcast",
+                    "addshow",
+                    0,
+                    0,
+                    f"url:{feed_url}",
+                    "name:Discovered Podcast",
+                ],
+            )
             assert result["subscribed"] is True
         finally:
             podcast_mod._store = old_store
@@ -2781,7 +2991,9 @@ class TestEpisodeProgress:
 
     def test_progress_percentage(self, store: PodcastStore):
         store.update_progress("https://example.com/ep.mp3", 1800, 3600)
-        assert store.get_progress_percentage("https://example.com/ep.mp3") == pytest.approx(50.0, abs=0.1)
+        assert store.get_progress_percentage("https://example.com/ep.mp3") == pytest.approx(
+            50.0, abs=0.1
+        )
 
     def test_progress_100_percent(self, store: PodcastStore):
         store.update_progress("https://example.com/ep.mp3", 3600, 3600)
@@ -3559,9 +3771,14 @@ class TestMarkPlayedCommands:
             from plugins.podcast import _podcast_markplayed
 
             ctx = _FakeCommandContext()
-            result = await _podcast_markplayed(ctx, [
-                "podcast", "markplayed", "url:https://example.com/ep.mp3",
-            ])
+            result = await _podcast_markplayed(
+                ctx,
+                [
+                    "podcast",
+                    "markplayed",
+                    "url:https://example.com/ep.mp3",
+                ],
+            )
             mock_store.mark_played.assert_called_once_with("https://example.com/ep.mp3")
             assert result["count"] == 1
         finally:
@@ -3579,9 +3796,15 @@ class TestMarkPlayedCommands:
             from plugins.podcast import _podcast_markplayed
 
             ctx = _FakeCommandContext()
-            result = await _podcast_markplayed(ctx, [
-                "podcast", "markplayed", "url:https://example.com/ep.mp3", "menu:1",
-            ])
+            result = await _podcast_markplayed(
+                ctx,
+                [
+                    "podcast",
+                    "markplayed",
+                    "url:https://example.com/ep.mp3",
+                    "menu:1",
+                ],
+            )
             assert "item_loop" in result
             assert result["item_loop"][0]["showBriefly"] == 1
 
@@ -3616,9 +3839,14 @@ class TestMarkPlayedCommands:
             from plugins.podcast import _podcast_markunplayed
 
             ctx = _FakeCommandContext()
-            result = await _podcast_markunplayed(ctx, [
-                "podcast", "markunplayed", "url:https://example.com/ep.mp3",
-            ])
+            result = await _podcast_markunplayed(
+                ctx,
+                [
+                    "podcast",
+                    "markunplayed",
+                    "url:https://example.com/ep.mp3",
+                ],
+            )
             mock_store.mark_unplayed.assert_called_once_with("https://example.com/ep.mp3")
             assert result["count"] == 1
         finally:
@@ -3941,9 +4169,7 @@ class TestSDUI:
         self._setup_module_state(tmp_path)
         try:
             # Add in-progress episode (needs progress > resume_threshold, not played)
-            podcast_mod._store.update_progress(
-                "https://example.com/ep.mp3", 300, 1800
-            )
+            podcast_mod._store.update_progress("https://example.com/ep.mp3", 300, 1800)
             podcast_mod._store.record_played(
                 url="https://example.com/ep.mp3",
                 title="In Progress Episode",
@@ -4009,9 +4235,7 @@ class TestSDUI:
                 show="Test Podcast",
                 duration=1200,
             )
-            podcast_mod._store.update_progress(
-                "https://example.com/ep2.mp3", 120, 600
-            )
+            podcast_mod._store.update_progress("https://example.com/ep2.mp3", 120, 600)
 
             page = await podcast_mod.get_ui(podcast_mod._ctx)
             d = page.to_dict("podcast")
@@ -4098,7 +4322,9 @@ class TestSDUIActions:
         self._setup_module_state(tmp_path)
         try:
             result = await podcast_mod.handle_action(
-                "mark_played", {}, podcast_mod._ctx,
+                "mark_played",
+                {},
+                podcast_mod._ctx,
             )
             assert "error" in result
         finally:
@@ -4132,7 +4358,9 @@ class TestSDUIActions:
         self._setup_module_state(tmp_path)
         try:
             result = await podcast_mod.handle_action(
-                "mark_unplayed", {}, podcast_mod._ctx,
+                "mark_unplayed",
+                {},
+                podcast_mod._ctx,
             )
             assert "error" in result
         finally:
@@ -4184,7 +4412,9 @@ class TestSDUIActions:
         self._setup_module_state(tmp_path)
         try:
             result = await podcast_mod.handle_action(
-                "unsubscribe", {}, podcast_mod._ctx,
+                "unsubscribe",
+                {},
+                podcast_mod._ctx,
             )
             assert "error" in result
         finally:
@@ -4196,16 +4426,14 @@ class TestSDUIActions:
 
         self._setup_module_state(tmp_path)
         try:
-            podcast_mod._store.record_played(
-                url="https://example.com/ep1.mp3", title="Ep1"
-            )
-            podcast_mod._store.record_played(
-                url="https://example.com/ep2.mp3", title="Ep2"
-            )
+            podcast_mod._store.record_played(url="https://example.com/ep1.mp3", title="Ep1")
+            podcast_mod._store.record_played(url="https://example.com/ep2.mp3", title="Ep2")
             assert podcast_mod._store.recent_count == 2
 
             result = await podcast_mod.handle_action(
-                "clear_recent", {}, podcast_mod._ctx,
+                "clear_recent",
+                {},
+                podcast_mod._ctx,
             )
             assert "message" in result
             assert "2" in result["message"]
@@ -4224,7 +4452,9 @@ class TestSDUIActions:
             podcast_mod._feed_cache["https://example.com/feed2.xml"] = ("data2", time.time() + 600)
 
             result = await podcast_mod.handle_action(
-                "clear_feed_cache", {}, podcast_mod._ctx,
+                "clear_feed_cache",
+                {},
+                podcast_mod._ctx,
             )
             assert "message" in result
             assert "2" in result["message"]
@@ -4240,7 +4470,9 @@ class TestSDUIActions:
         self._setup_module_state(tmp_path)
         try:
             result = await podcast_mod.handle_action(
-                "export_opml", {}, podcast_mod._ctx,
+                "export_opml",
+                {},
+                podcast_mod._ctx,
             )
             assert "message" in result
             assert "No subscriptions" in result["message"]
@@ -4254,10 +4486,13 @@ class TestSDUIActions:
         self._setup_module_state(tmp_path)
         try:
             podcast_mod._store.add_subscription(
-                url="https://example.com/feed.xml", name="Test",
+                url="https://example.com/feed.xml",
+                name="Test",
             )
             result = await podcast_mod.handle_action(
-                "export_opml", {}, podcast_mod._ctx,
+                "export_opml",
+                {},
+                podcast_mod._ctx,
             )
             assert "message" in result
             assert "1 subscription" in result["message"]
@@ -4271,7 +4506,9 @@ class TestSDUIActions:
         self._setup_module_state(tmp_path)
         try:
             result = await podcast_mod.handle_action(
-                "refresh_feeds", {}, podcast_mod._ctx,
+                "refresh_feeds",
+                {},
+                podcast_mod._ctx,
             )
             assert "message" in result
             assert "No subscriptions" in result["message"]
@@ -4355,7 +4592,9 @@ class TestSDUIActions:
         self._setup_module_state(tmp_path)
         try:
             result = await podcast_mod.handle_action(
-                "save_settings", {}, podcast_mod._ctx,
+                "save_settings",
+                {},
+                podcast_mod._ctx,
             )
             assert "message" in result
             assert "No changes" in result["message"]
@@ -4369,7 +4608,9 @@ class TestSDUIActions:
         self._setup_module_state(tmp_path)
         try:
             result = await podcast_mod.handle_action(
-                "nonexistent_action", {}, podcast_mod._ctx,
+                "nonexistent_action",
+                {},
+                podcast_mod._ctx,
             )
             assert "error" in result
             assert "Unknown" in result["error"]
@@ -4441,7 +4682,10 @@ class TestSDUISetupRegistration:
             ctx.register_ui_handler.assert_called_once_with(podcast_mod.get_ui)
             ctx.register_action_handler.assert_called_once_with(podcast_mod.handle_action)
         finally:
-            if podcast_mod._refresh_task is not None and podcast_mod._refresh_task is not old_refresh:
+            if (
+                podcast_mod._refresh_task is not None
+                and podcast_mod._refresh_task is not old_refresh
+            ):
                 podcast_mod._refresh_task.cancel()
                 try:
                     await podcast_mod._refresh_task
@@ -4629,7 +4873,9 @@ class TestSDUIMoveActions:
         self._setup_module_state(tmp_path)
         try:
             result = await podcast_mod.handle_action(
-                "move_up", {}, podcast_mod._ctx,
+                "move_up",
+                {},
+                podcast_mod._ctx,
             )
             assert "error" in result
         finally:
@@ -4778,7 +5024,9 @@ class TestSDUIImportOPMLUrl:
         self._setup_module_state(tmp_path)
         try:
             result = await podcast_mod.handle_action(
-                "import_opml_url", {}, podcast_mod._ctx,
+                "import_opml_url",
+                {},
+                podcast_mod._ctx,
             )
             assert "error" in result
         finally:
@@ -4790,9 +5038,7 @@ class TestSDUIImportOPMLUrl:
 
         self._setup_module_state(tmp_path)
         try:
-            podcast_mod._http_client.get = AsyncMock(
-                side_effect=Exception("Connection refused")
-            )
+            podcast_mod._http_client.get = AsyncMock(side_effect=Exception("Connection refused"))
 
             result = await podcast_mod.handle_action(
                 "import_opml_url",
@@ -4995,7 +5241,9 @@ class TestSDUIBrowseEpisodes:
         self._setup_module_state(tmp_path)
         try:
             result = await podcast_mod.handle_action(
-                "browse_episodes", {}, podcast_mod._ctx,
+                "browse_episodes",
+                {},
+                podcast_mod._ctx,
             )
             assert "error" in result
         finally:
@@ -5015,7 +5263,9 @@ class TestSDUIBrowseEpisodes:
                     podcast_mod._ctx,
                 )
             assert "error" in result
-            assert "could not load" in result["error"].lower() or "network" in result["error"].lower()
+            assert (
+                "could not load" in result["error"].lower() or "network" in result["error"].lower()
+            )
         finally:
             self._teardown_module_state()
 
@@ -5066,9 +5316,7 @@ class TestSDUIPlayEpisode:
             mock_player = MagicMock()
             mock_player.mac_address = "aa:bb:cc:dd:ee:ff"
             mock_player.name = "Living Room"
-            podcast_mod._ctx.player_registry.get_all = AsyncMock(
-                return_value=[mock_player]
-            )
+            podcast_mod._ctx.player_registry.get_all = AsyncMock(return_value=[mock_player])
 
             # Mock JSON-RPC self-call
             mock_rpc_response = MagicMock()
@@ -5113,9 +5361,7 @@ class TestSDUIPlayEpisode:
             mock_player = MagicMock()
             mock_player.mac_address = "aa:bb:cc:dd:ee:ff"
             mock_player.name = "Kitchen"
-            podcast_mod._ctx.player_registry.get_all = AsyncMock(
-                return_value=[mock_player]
-            )
+            podcast_mod._ctx.player_registry.get_all = AsyncMock(return_value=[mock_player])
 
             mock_rpc_response = MagicMock()
             mock_rpc_response.json.return_value = {"result": {"count": 1}}
@@ -5144,7 +5390,9 @@ class TestSDUIPlayEpisode:
         self._setup_module_state(tmp_path)
         try:
             result = await podcast_mod.handle_action(
-                "play_episode", {}, podcast_mod._ctx,
+                "play_episode",
+                {},
+                podcast_mod._ctx,
             )
             assert "error" in result
         finally:
@@ -5194,15 +5442,11 @@ class TestSDUIPlayEpisode:
             mock_player = MagicMock()
             mock_player.mac_address = "aa:bb:cc:dd:ee:ff"
             mock_player.name = "Test Player"
-            podcast_mod._ctx.player_registry.get_all = AsyncMock(
-                return_value=[mock_player]
-            )
+            podcast_mod._ctx.player_registry.get_all = AsyncMock(return_value=[mock_player])
 
             # Simulate JSON-RPC returning an error
             mock_rpc_response = MagicMock()
-            mock_rpc_response.json.return_value = {
-                "result": {"error": "No player selected"}
-            }
+            mock_rpc_response.json.return_value = {"result": {"error": "No player selected"}}
             mock_rpc_response.raise_for_status = MagicMock()
             podcast_mod._http_client.post = AsyncMock(return_value=mock_rpc_response)
 
@@ -5225,13 +5469,9 @@ class TestSDUIPlayEpisode:
             mock_player = MagicMock()
             mock_player.mac_address = "aa:bb:cc:dd:ee:ff"
             mock_player.name = "Test Player"
-            podcast_mod._ctx.player_registry.get_all = AsyncMock(
-                return_value=[mock_player]
-            )
+            podcast_mod._ctx.player_registry.get_all = AsyncMock(return_value=[mock_player])
 
-            podcast_mod._http_client.post = AsyncMock(
-                side_effect=Exception("Connection refused")
-            )
+            podcast_mod._http_client.post = AsyncMock(side_effect=Exception("Connection refused"))
 
             result = await podcast_mod.handle_action(
                 "play_episode",
@@ -5271,9 +5511,7 @@ class TestSDUIPlayEpisode:
             mock_player = MagicMock()
             mock_player.mac_address = "aa:bb:cc:dd:ee:ff"
             mock_player.name = "Test"
-            podcast_mod._ctx.player_registry.get_all = AsyncMock(
-                return_value=[mock_player]
-            )
+            podcast_mod._ctx.player_registry.get_all = AsyncMock(return_value=[mock_player])
 
             mock_rpc_response = MagicMock()
             mock_rpc_response.json.return_value = {"result": {"count": 1}}
@@ -5305,9 +5543,7 @@ class TestSDUIPlayEpisode:
             mock_player = MagicMock()
             mock_player.mac_address = "aa:bb:cc:dd:ee:ff"
             mock_player.name = "Test"
-            podcast_mod._ctx.player_registry.get_all = AsyncMock(
-                return_value=[mock_player]
-            )
+            podcast_mod._ctx.player_registry.get_all = AsyncMock(return_value=[mock_player])
 
             mock_rpc_response = MagicMock()
             mock_rpc_response.json.return_value = {"result": {"count": 1}}
@@ -5363,12 +5599,12 @@ class TestSDUIExportOPMLUpdated:
 
         self._setup_module_state(tmp_path)
         try:
-            podcast_mod._store.add_subscription(
-                name="Test Pod", url="https://example.com/feed.xml"
-            )
+            podcast_mod._store.add_subscription(name="Test Pod", url="https://example.com/feed.xml")
 
             result = await podcast_mod.handle_action(
-                "export_opml", {}, podcast_mod._ctx,
+                "export_opml",
+                {},
+                podcast_mod._ctx,
             )
             assert "message" in result
             assert "1" in result["message"]
@@ -5427,16 +5663,20 @@ class TestSDUIv22Structure:
             sub_tab = tabs["props"]["tabs"][0]
             assert sub_tab["label"] == "Subscriptions"
 
-            # Find the modal widget in the children
+            # Find modal widgets in the children
             sub_children = sub_tab["children"]
-            modal_found = False
+            modal_titles: list[str] = []
             for child in sub_children:
                 if child["type"] == "row":
                     for row_child in child.get("children", []):
                         if row_child["type"] == "modal":
-                            modal_found = True
-                            assert row_child["props"]["title"] == "Import OPML"
-            assert modal_found, "Import OPML modal not found in empty subscriptions tab"
+                            modal_titles.append(row_child["props"]["title"])
+            assert "Subscribe by URL" in modal_titles, (
+                "Subscribe by URL modal not found in empty subscriptions tab"
+            )
+            assert "Import OPML" in modal_titles, (
+                "Import OPML modal not found in empty subscriptions tab"
+            )
         finally:
             self._teardown_module_state()
 
@@ -5447,9 +5687,7 @@ class TestSDUIv22Structure:
 
         self._setup_module_state(tmp_path)
         try:
-            podcast_mod._store.add_subscription(
-                name="Test Pod", url="https://example.com/feed.xml"
-            )
+            podcast_mod._store.add_subscription(name="Test Pod", url="https://example.com/feed.xml")
             page = await podcast_mod.get_ui(podcast_mod._ctx)
             page_dict = page.to_dict(plugin_id="podcast")
             tabs = page_dict["components"][0]
@@ -5478,15 +5716,9 @@ class TestSDUIv22Structure:
 
         self._setup_module_state(tmp_path)
         try:
-            podcast_mod._store.add_subscription(
-                name="Pod A", url="https://a.example.com/feed.xml"
-            )
-            podcast_mod._store.add_subscription(
-                name="Pod B", url="https://b.example.com/feed.xml"
-            )
-            podcast_mod._store.add_subscription(
-                name="Pod C", url="https://c.example.com/feed.xml"
-            )
+            podcast_mod._store.add_subscription(name="Pod A", url="https://a.example.com/feed.xml")
+            podcast_mod._store.add_subscription(name="Pod B", url="https://b.example.com/feed.xml")
+            podcast_mod._store.add_subscription(name="Pod C", url="https://c.example.com/feed.xml")
 
             page = await podcast_mod.get_ui(podcast_mod._ctx)
             page_dict = page.to_dict(plugin_id="podcast")
@@ -5530,9 +5762,7 @@ class TestSDUIv22Structure:
 
         self._setup_module_state(tmp_path)
         try:
-            podcast_mod._store.add_subscription(
-                name="Test Pod", url="https://example.com/feed.xml"
-            )
+            podcast_mod._store.add_subscription(name="Test Pod", url="https://example.com/feed.xml")
 
             page = await podcast_mod.get_ui(podcast_mod._ctx)
             page_dict = page.to_dict(plugin_id="podcast")
@@ -5597,7 +5827,9 @@ class TestSDUIv22Structure:
         try:
             ep_url = "https://example.com/ep.mp3"
             podcast_mod._store.record_played(
-                url=ep_url, title="Ongoing", show="TestShow",
+                url=ep_url,
+                title="Ongoing",
+                show="TestShow",
                 feed_url="https://example.com/feed.xml",
             )
             podcast_mod._store._update_progress(ep_url, 600, 3600)
@@ -5691,15 +5923,11 @@ class TestSDUIv22Structure:
             podcast_mod._store.add_subscription(
                 name="Pod A", url="https://a.example.com/feed.xml", author="Author A"
             )
-            podcast_mod._store.add_subscription(
-                name="Pod B", url="https://b.example.com/feed.xml"
-            )
+            podcast_mod._store.add_subscription(name="Pod B", url="https://b.example.com/feed.xml")
             podcast_mod._store.record_played(
                 url="https://example.com/ep.mp3", title="Ep 1", show="Pod A"
             )
-            podcast_mod._store._update_progress(
-                "https://example.com/ep2.mp3", 300, 1800
-            )
+            podcast_mod._store._update_progress("https://example.com/ep2.mp3", 300, 1800)
 
             page = await podcast_mod.get_ui(podcast_mod._ctx)
             page_dict = page.to_dict(plugin_id="podcast")

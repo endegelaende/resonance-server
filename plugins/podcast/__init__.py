@@ -89,11 +89,11 @@ logger = logging.getLogger(__name__)
 # Module-level state (set during setup, cleared during teardown)
 # ---------------------------------------------------------------------------
 
-_store: Any | None = None            # PodcastStore instance
-_http_client: Any | None = None      # httpx.AsyncClient (shared)
-_event_bus: Any | None = None        # EventBus reference
-_provider: Any | None = None         # PodcastProvider instance
-_ctx: Any | None = None              # PluginContext reference
+_store: Any | None = None  # PodcastStore instance
+_http_client: Any | None = None  # httpx.AsyncClient (shared)
+_event_bus: Any | None = None  # EventBus reference
+_provider: Any | None = None  # PodcastProvider instance
+_ctx: Any | None = None  # PluginContext reference
 _refresh_task: asyncio.Task[None] | None = None  # Background refresh task
 
 # Simple in-memory cache for parsed feeds {feed_url: (PodcastFeed, expire_ts)}
@@ -218,7 +218,9 @@ async def _on_player_status(event: Any) -> None:
             prev_elapsed = tracking.get("elapsed", 0.0)
             if abs(elapsed - prev_elapsed) >= 30 and duration > 0:
                 _store.set_resume_position(
-                    track_url, int(elapsed), int(duration),
+                    track_url,
+                    int(elapsed),
+                    int(duration),
                 )
 
         elif state in ("paused", "stopped"):
@@ -276,8 +278,7 @@ async def _background_refresh_loop() -> None:
                 # Count new episodes since last browse
                 if sub.last_browsed_at > 0:
                     new_count = sum(
-                        1 for ep in feed.episodes
-                        if ep.published_epoch > sub.last_browsed_at
+                        1 for ep in feed.episodes if ep.published_epoch > sub.last_browsed_at
                     )
                     _store.set_new_episode_count(sub.url, new_count)
 
@@ -325,61 +326,73 @@ class PodcastProvider:
             items: list[BrowseItem] = []
 
             # Search entry
-            items.append(BrowseItem(
-                id="search",
-                title="Search Podcasts",
-                type="search",
-            ))
+            items.append(
+                BrowseItem(
+                    id="search",
+                    title="Search Podcasts",
+                    type="search",
+                )
+            )
 
             # What's New
             if _store.subscription_count > 0:
                 total_new = _store.total_new_episodes
                 subtitle = f"{total_new} new" if total_new > 0 else "Latest episodes"
-                items.append(BrowseItem(
-                    id="__whatsnew__",
-                    title="What's New",
-                    type="folder",
-                    subtitle=subtitle,
-                ))
+                items.append(
+                    BrowseItem(
+                        id="__whatsnew__",
+                        title="What's New",
+                        type="folder",
+                        subtitle=subtitle,
+                    )
+                )
 
             # Continue Listening
             in_progress = _store.get_in_progress_episodes()
             if in_progress:
-                items.append(BrowseItem(
-                    id="__continue__",
-                    title="Continue Listening",
-                    type="folder",
-                    subtitle=f"{len(in_progress)} episodes",
-                ))
+                items.append(
+                    BrowseItem(
+                        id="__continue__",
+                        title="Continue Listening",
+                        type="folder",
+                        subtitle=f"{len(in_progress)} episodes",
+                    )
+                )
 
             # Recently played
             if _store.recent_count > 0:
-                items.append(BrowseItem(
-                    id="__recent__",
-                    title="Recently Played",
-                    type="folder",
-                    subtitle=f"{_store.recent_count} episodes",
-                ))
+                items.append(
+                    BrowseItem(
+                        id="__recent__",
+                        title="Recently Played",
+                        type="folder",
+                        subtitle=f"{_store.recent_count} episodes",
+                    )
+                )
 
             # Trending
-            items.append(BrowseItem(
-                id="__trending__",
-                title="Trending Podcasts",
-                type="folder",
-                subtitle="Discover popular shows",
-            ))
+            items.append(
+                BrowseItem(
+                    id="__trending__",
+                    title="Trending Podcasts",
+                    type="folder",
+                    subtitle="Discover popular shows",
+                )
+            )
 
             # Subscribed feeds
             for sub in _store.subscriptions:
                 badge = f" ({sub.new_episode_count} new)" if sub.new_episode_count > 0 else ""
-                items.append(BrowseItem(
-                    id=sub.url,
-                    title=sub.name + badge,
-                    type="folder",
-                    url=sub.url,
-                    icon=sub.image or None,
-                    subtitle=sub.author or None,
-                ))
+                items.append(
+                    BrowseItem(
+                        id=sub.url,
+                        title=sub.name + badge,
+                        type="folder",
+                        url=sub.url,
+                        icon=sub.image or None,
+                        subtitle=sub.author or None,
+                    )
+                )
 
             return items
 
@@ -391,15 +404,17 @@ class PodcastProvider:
                 if ep.show:
                     subtitle_parts.append(ep.show)
 
-                items.append(BrowseItem(
-                    id=ep.url,
-                    title=ep.title or ep.url,
-                    type="audio",
-                    url=ep.url,
-                    icon=ep.image or None,
-                    subtitle=" — ".join(subtitle_parts) if subtitle_parts else None,
-                    extra={"feed_url": ep.feed_url, "duration": ep.duration},
-                ))
+                items.append(
+                    BrowseItem(
+                        id=ep.url,
+                        title=ep.title or ep.url,
+                        type="audio",
+                        url=ep.url,
+                        icon=ep.image or None,
+                        subtitle=" — ".join(subtitle_parts) if subtitle_parts else None,
+                        extra={"feed_url": ep.feed_url, "duration": ep.duration},
+                    )
+                )
             return items
 
         # Feed URL: list episodes
@@ -430,22 +445,24 @@ class PodcastProvider:
             if is_played:
                 subtitle_parts.append("✓")
 
-            items.append(BrowseItem(
-                id=ep.guid or ep.url,
-                title=ep.title,
-                type="audio",
-                url=ep.url,
-                icon=ep.image_url or feed.image_url or None,
-                subtitle=" · ".join(subtitle_parts) if subtitle_parts else None,
-                extra={
-                    "duration": ep.duration_seconds,
-                    "content_type": ep.content_type,
-                    "feed_url": path,
-                    "feed_title": feed.title,
-                    "feed_image": feed.image_url,
-                    "is_played": is_played,
-                },
-            ))
+            items.append(
+                BrowseItem(
+                    id=ep.guid or ep.url,
+                    title=ep.title,
+                    type="audio",
+                    url=ep.url,
+                    icon=ep.image_url or feed.image_url or None,
+                    subtitle=" · ".join(subtitle_parts) if subtitle_parts else None,
+                    extra={
+                        "duration": ep.duration_seconds,
+                        "content_type": ep.content_type,
+                        "feed_url": path,
+                        "feed_title": feed.title,
+                        "feed_image": feed.image_url,
+                        "is_played": is_played,
+                    },
+                )
+            )
 
         return items
 
@@ -462,14 +479,16 @@ class PodcastProvider:
 
         items: list[BrowseItem] = []
         for r in results:
-            items.append(BrowseItem(
-                id=r.url,
-                title=r.name,
-                type="folder",
-                url=r.url,
-                icon=r.image or None,
-                subtitle=r.author or (r.description[:100] if r.description else None),
-            ))
+            items.append(
+                BrowseItem(
+                    id=r.url,
+                    title=r.name,
+                    type="folder",
+                    url=r.url,
+                    icon=r.image or None,
+                    subtitle=r.author or (r.description[:100] if r.description else None),
+                )
+            )
 
         return items
 
@@ -491,9 +510,7 @@ class PodcastProvider:
         )
 
     async def on_stream_started(self, item_id: str, player_mac: str) -> None:
-        logger.info(
-            "Podcast stream started: episode=%s player=%s", item_id, player_mac
-        )
+        logger.info("Podcast stream started: episode=%s player=%s", item_id, player_mac)
 
     async def on_stream_stopped(self, item_id: str, player_mac: str) -> None:
         # Save any tracked position for this player
@@ -505,9 +522,7 @@ class PodcastProvider:
                 _store.set_resume_position(item_id, int(pos), int(dur))
             _player_tracking.pop(player_mac, None)
 
-        logger.debug(
-            "Podcast stream stopped: episode=%s player=%s", item_id, player_mac
-        )
+        logger.debug("Podcast stream stopped: episode=%s player=%s", item_id, player_mac)
 
 
 # ---------------------------------------------------------------------------
@@ -662,13 +677,15 @@ async def get_ui(ctx: PluginContext) -> Any:
         icon="podcast",
         refresh_interval=60,
         components=[
-            Tabs(tabs=[
-                subscriptions_tab,
-                recent_tab,
-                continue_tab,
-                settings_tab,
-                about_tab,
-            ]),
+            Tabs(
+                tabs=[
+                    subscriptions_tab,
+                    recent_tab,
+                    continue_tab,
+                    settings_tab,
+                    about_tab,
+                ]
+            ),
         ],
     )
 
@@ -691,37 +708,43 @@ def _build_subscriptions_tab() -> Any:
     )
 
     if _store is None:
-        return Tab(label="Subscriptions", children=[
-            Alert(message="Podcast plugin not initialized.", severity="warning"),
-        ])
+        return Tab(
+            label="Subscriptions",
+            children=[
+                Alert(message="Podcast plugin not initialized.", severity="warning"),
+            ],
+        )
 
     stats = _store.get_stats()
     subs = _store.subscriptions
 
     # Stats summary card
     stats_children: list[Any] = [
-        Row(gap="md", children=[
-            StatusBadge(
-                label="Subscriptions",
-                status=str(stats["subscriptions"]),
-                color="blue" if stats["subscriptions"] > 0 else "gray",
-            ),
-            StatusBadge(
-                label="New Episodes",
-                status=str(stats["total_new_episodes"]),
-                color="green" if stats["total_new_episodes"] > 0 else "gray",
-            ),
-            StatusBadge(
-                label="In Progress",
-                status=str(stats["in_progress_episodes"]),
-                color="yellow" if stats["in_progress_episodes"] > 0 else "gray",
-            ),
-            StatusBadge(
-                label="Played",
-                status=str(stats["played_episodes"]),
-                color="blue" if stats["played_episodes"] > 0 else "gray",
-            ),
-        ]),
+        Row(
+            gap="md",
+            children=[
+                StatusBadge(
+                    label="Subscriptions",
+                    status=str(stats["subscriptions"]),
+                    color="blue" if stats["subscriptions"] > 0 else "gray",
+                ),
+                StatusBadge(
+                    label="New Episodes",
+                    status=str(stats["total_new_episodes"]),
+                    color="green" if stats["total_new_episodes"] > 0 else "gray",
+                ),
+                StatusBadge(
+                    label="In Progress",
+                    status=str(stats["in_progress_episodes"]),
+                    color="yellow" if stats["in_progress_episodes"] > 0 else "gray",
+                ),
+                StatusBadge(
+                    label="Played",
+                    status=str(stats["played_episodes"]),
+                    color="blue" if stats["played_episodes"] > 0 else "gray",
+                ),
+            ],
+        ),
     ]
 
     # OPML Import modal (always shown — works with or without subscriptions)
@@ -743,7 +766,32 @@ def _build_subscriptions_tab() -> Any:
                         placeholder="https://example.com/podcasts.opml or /path/to/file.opml",
                         required=True,
                         help_text="Enter a URL to an OPML file (http/https) or a local file path. "
-                                  "Duplicate subscriptions will be skipped automatically.",
+                        "Duplicate subscriptions will be skipped automatically.",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    # "Subscribe by URL" modal — direct RSS feed subscription
+    subscribe_modal = Modal(
+        title="Subscribe by URL",
+        trigger_label="Add Feed URL",
+        trigger_style="primary",
+        trigger_icon="plus",
+        size="md",
+        children=[
+            Text(content="Subscribe to a podcast by entering its RSS feed URL."),
+            Form(
+                action="subscribe_by_url",
+                submit_label="Subscribe",
+                children=[
+                    TextInput(
+                        name="feed_url",
+                        label="RSS Feed URL",
+                        placeholder="https://example.com/podcast/feed.xml",
+                        required=True,
+                        help_text="Enter the RSS feed URL of the podcast you want to subscribe to.",
                     ),
                 ],
             ),
@@ -751,18 +799,28 @@ def _build_subscriptions_tab() -> Any:
     )
 
     if not subs:
-        return Tab(label="Subscriptions", children=[
-            Card(title="Overview", children=stats_children),
-            Card(title="Subscriptions", children=[
-                Alert(
-                    message="No podcast subscriptions yet. Use the Podcasts menu on your player to search and subscribe, or import an OPML file.",
-                    severity="info",
+        return Tab(
+            label="Subscriptions",
+            children=[
+                Card(title="Overview", children=stats_children),
+                Card(
+                    title="Subscriptions",
+                    children=[
+                        Alert(
+                            message="No podcast subscriptions yet. Add a podcast by its RSS feed URL, search on your player, or import an OPML file.",
+                            severity="info",
+                        ),
+                    ],
                 ),
-            ]),
-            Row(gap="md", children=[
-                import_modal,
-            ]),
-        ])
+                Row(
+                    gap="md",
+                    children=[
+                        subscribe_modal,
+                        import_modal,
+                    ],
+                ),
+            ],
+        )
 
     # Build subscription table with move and browse actions
     columns = [
@@ -787,90 +845,112 @@ def _build_subscriptions_tab() -> Any:
 
         # Move up (not for first item)
         if idx > 0:
-            actions.append({
-                "label": "↑ Move Up",
-                "action": "move_up",
-                "params": {"_url": sub.url, "name": sub.name},
-                "style": "secondary",
-            })
+            actions.append(
+                {
+                    "label": "↑ Move Up",
+                    "action": "move_up",
+                    "params": {"_url": sub.url, "name": sub.name},
+                    "style": "secondary",
+                }
+            )
 
         # Move down (not for last item)
         if idx < total - 1:
-            actions.append({
-                "label": "↓ Move Down",
-                "action": "move_down",
-                "params": {"_url": sub.url, "name": sub.name},
-                "style": "secondary",
-            })
+            actions.append(
+                {
+                    "label": "↓ Move Down",
+                    "action": "move_down",
+                    "params": {"_url": sub.url, "name": sub.name},
+                    "style": "secondary",
+                }
+            )
 
         # Browse episodes
-        actions.append({
-            "label": "Browse Episodes",
-            "action": "browse_episodes",
-            "params": {"_url": sub.url, "name": sub.name},
-            "style": "primary",
-        })
+        actions.append(
+            {
+                "label": "Browse Episodes",
+                "action": "browse_episodes",
+                "params": {"_url": sub.url, "name": sub.name},
+                "style": "primary",
+            }
+        )
 
         # Mark all played
-        actions.append({
-            "label": "Mark All Played",
-            "action": "mark_feed_played",
-            "params": {"_url": sub.url, "name": sub.name},
-            "style": "secondary",
-            "confirm": True,
-        })
+        actions.append(
+            {
+                "label": "Mark All Played",
+                "action": "mark_feed_played",
+                "params": {"_url": sub.url, "name": sub.name},
+                "style": "secondary",
+                "confirm": True,
+            }
+        )
 
         # Unsubscribe
-        actions.append({
-            "label": "Unsubscribe",
-            "action": "unsubscribe",
-            "params": {"_url": sub.url, "name": sub.name},
-            "style": "danger",
-            "confirm": True,
-        })
+        actions.append(
+            {
+                "label": "Unsubscribe",
+                "action": "unsubscribe",
+                "params": {"_url": sub.url, "name": sub.name},
+                "style": "danger",
+                "confirm": True,
+            }
+        )
 
-        rows.append({
-            "order": str(idx + 1),
-            "name": sub.name or sub.url[:50],
-            "author": sub.author or "—",
-            "new": new_badge,
-            "description": desc or "—",
-            "_url": sub.url,
-            "_image": sub.image,
-            "actions": actions,
-        })
+        rows.append(
+            {
+                "order": str(idx + 1),
+                "name": sub.name or sub.url[:50],
+                "author": sub.author or "—",
+                "new": new_badge,
+                "description": desc or "—",
+                "_url": sub.url,
+                "_image": sub.image,
+                "actions": actions,
+            }
+        )
 
-    return Tab(label="Subscriptions", children=[
-        Card(title="Overview", children=stats_children),
-        Card(title=f"Subscriptions ({len(subs)})", children=[
-            Table(
-                columns=columns,
-                rows=rows,
-                row_key="_url",
+    return Tab(
+        label="Subscriptions",
+        children=[
+            Card(title="Overview", children=stats_children),
+            Card(
+                title=f"Subscriptions ({len(subs)})",
+                children=[
+                    Table(
+                        columns=columns,
+                        rows=rows,
+                        row_key="_url",
+                    ),
+                ],
             ),
-        ]),
-        Row(gap="md", children=[
-            Button(
-                label="Refresh All Feeds",
-                action="refresh_feeds",
-                style="secondary",
-                icon="refresh-cw",
+            Row(
+                gap="md",
+                children=[
+                    subscribe_modal,
+                    Button(
+                        label="Refresh All Feeds",
+                        action="refresh_feeds",
+                        style="secondary",
+                        icon="refresh-cw",
+                    ),
+                    import_modal,
+                    Button(
+                        label="Export OPML",
+                        action="export_opml",
+                        style="secondary",
+                        icon="download",
+                    ),
+                    Button(
+                        label="Clear Feed Cache",
+                        action="clear_feed_cache",
+                        style="secondary",
+                        icon="trash-2",
+                    ),
+                ],
             ),
-            import_modal,
-            Button(
-                label="Export OPML",
-                action="export_opml",
-                style="secondary",
-                icon="download",
-            ),
-            Button(
-                label="Clear Feed Cache",
-                action="clear_feed_cache",
-                style="secondary",
-                icon="trash-2",
-            ),
-        ]),
-    ])
+        ],
+    )
 
 
 def _build_recent_tab() -> Any:
@@ -886,14 +966,20 @@ def _build_recent_tab() -> Any:
     )
 
     if _store is None or _store.recent_count == 0:
-        return Tab(label="Recent", children=[
-            Card(title="Recently Played", children=[
-                Alert(
-                    message="No episodes played yet. Browse your subscriptions and start listening!",
-                    severity="info",
+        return Tab(
+            label="Recent",
+            children=[
+                Card(
+                    title="Recently Played",
+                    children=[
+                        Alert(
+                            message="No episodes played yet. Browse your subscriptions and start listening!",
+                            severity="info",
+                        ),
+                    ],
                 ),
-            ]),
-        ])
+            ],
+        )
 
     from .feed_parser import format_duration
 
@@ -940,34 +1026,45 @@ def _build_recent_tab() -> Any:
             },
         ]
 
-        rows.append({
-            "title": ep.title or ep.url[:50],
-            "show": ep.show or "—",
-            "duration": dur_str,
-            "played_at": played_str,
-            "_url": ep.url,
-            "_feed_url": ep.feed_url,
-            "actions": actions,
-        })
+        rows.append(
+            {
+                "title": ep.title or ep.url[:50],
+                "show": ep.show or "—",
+                "duration": dur_str,
+                "played_at": played_str,
+                "_url": ep.url,
+                "_feed_url": ep.feed_url,
+                "actions": actions,
+            }
+        )
 
-    return Tab(label="Recent", children=[
-        Card(title=f"Recently Played ({len(recent)})", children=[
-            Table(
-                columns=columns,
-                rows=rows,
-                row_key="_url",
+    return Tab(
+        label="Recent",
+        children=[
+            Card(
+                title=f"Recently Played ({len(recent)})",
+                children=[
+                    Table(
+                        columns=columns,
+                        rows=rows,
+                        row_key="_url",
+                    ),
+                ],
             ),
-        ]),
-        Row(gap="md", children=[
-            Button(
-                label="Clear History",
-                action="clear_recent",
-                style="danger",
-                confirm=True,
-                icon="trash-2",
+            Row(
+                gap="md",
+                children=[
+                    Button(
+                        label="Clear History",
+                        action="clear_recent",
+                        style="danger",
+                        confirm=True,
+                        icon="trash-2",
+                    ),
+                ],
             ),
-        ]),
-    ])
+        ],
+    )
 
 
 def _build_continue_tab() -> Any:
@@ -985,23 +1082,32 @@ def _build_continue_tab() -> Any:
     )
 
     if _store is None:
-        return Tab(label="Continue", children=[
-            Alert(message="Podcast plugin not initialized.", severity="warning"),
-        ])
+        return Tab(
+            label="Continue",
+            children=[
+                Alert(message="Podcast plugin not initialized.", severity="warning"),
+            ],
+        )
 
     from .feed_parser import format_duration
 
     in_progress = _store.get_in_progress_episodes()
 
     if not in_progress:
-        return Tab(label="Continue", children=[
-            Card(title="Continue Listening", children=[
-                Alert(
-                    message="No episodes in progress. Start listening to a podcast episode and your progress will be tracked automatically.",
-                    severity="info",
+        return Tab(
+            label="Continue",
+            children=[
+                Card(
+                    title="Continue Listening",
+                    children=[
+                        Alert(
+                            message="No episodes in progress. Start listening to a podcast episode and your progress will be tracked automatically.",
+                            severity="info",
+                        ),
+                    ],
                 ),
-            ]),
-        ])
+            ],
+        )
 
     children: list[Any] = []
     for ep in in_progress:
@@ -1027,42 +1133,52 @@ def _build_continue_tab() -> Any:
             kv_items.insert(0, KVItem(key="Podcast", value=show))
 
         children.append(
-            Card(title=label, collapsible=True, children=[
-                Progress(
-                    value=percentage,
-                    label=f"{percentage}% complete",
-                ),
-                KeyValue(items=kv_items),
-                Row(gap="md", children=[
-                    Button(
-                        label="▶ Resume",
-                        action="play_episode",
-                        params={
-                            "_url": ep["url"],
-                            "title": title,
-                            "feed_url": feed_url,
-                            "feed_title": show,
-                            "icon": image,
-                            "duration": duration,
-                            "resume_from": int(position),
-                        },
-                        style="primary",
-                        icon="play",
+            Card(
+                title=label,
+                collapsible=True,
+                children=[
+                    Progress(
+                        value=percentage,
+                        label=f"{percentage}% complete",
                     ),
-                    Button(
-                        label="Mark Played",
-                        action="mark_played",
-                        params={"_url": ep["url"], "title": title},
-                        style="secondary",
+                    KeyValue(items=kv_items),
+                    Row(
+                        gap="md",
+                        children=[
+                            Button(
+                                label="▶ Resume",
+                                action="play_episode",
+                                params={
+                                    "_url": ep["url"],
+                                    "title": title,
+                                    "feed_url": feed_url,
+                                    "feed_title": show,
+                                    "icon": image,
+                                    "duration": duration,
+                                    "resume_from": int(position),
+                                },
+                                style="primary",
+                                icon="play",
+                            ),
+                            Button(
+                                label="Mark Played",
+                                action="mark_played",
+                                params={"_url": ep["url"], "title": title},
+                                style="secondary",
+                            ),
+                        ],
                     ),
-                ]),
-            ])
+                ],
+            )
         )
 
-    return Tab(label="Continue", children=[
-        Text(content=f"**{len(in_progress)}** episode(s) in progress"),
-        *children,
-    ])
+    return Tab(
+        label="Continue",
+        children=[
+            Text(content=f"**{len(in_progress)}** episode(s) in progress"),
+            *children,
+        ],
+    )
 
 
 def _build_settings_tab() -> Any:
@@ -1087,108 +1203,111 @@ def _build_settings_tab() -> Any:
     auto_refresh = int(_setting("auto_refresh_minutes", 60) or 60)
     playback_speed = str(_setting("default_playback_speed", "1.0") or "1.0")
 
-    return Tab(label="Settings", children=[
-        Form(
-            action="save_settings",
-            submit_label="Save Settings",
-            children=[
-                Select(
-                    name="search_provider",
-                    label="Search Provider",
-                    value=search_provider,
-                    help_text="Which podcast directory to use when searching for new podcasts.",
-                    options=[
-                        SelectOption(value="podcastindex", label="PodcastIndex (recommended)"),
-                        SelectOption(value="gpodder", label="gPodder"),
-                        SelectOption(value="itunes", label="iTunes"),
-                    ],
-                ),
-                NumberInput(
-                    name="skip_back_seconds",
-                    label="Skip Back (seconds)",
-                    value=skip_back,
-                    min=5,
-                    max=120,
-                    help_text="Number of seconds to skip backward during podcast playback.",
-                ),
-                NumberInput(
-                    name="skip_forward_seconds",
-                    label="Skip Forward (seconds)",
-                    value=skip_forward,
-                    min=5,
-                    max=120,
-                    help_text="Number of seconds to skip forward during podcast playback.",
-                ),
-                NumberInput(
-                    name="new_since_days",
-                    label="What's New — Days",
-                    value=new_since_days,
-                    min=1,
-                    max=90,
-                    help_text="Show episodes published within this many days in the What's New feed.",
-                ),
-                NumberInput(
-                    name="max_new_episodes",
-                    label="What's New — Max Episodes",
-                    value=max_new,
-                    min=10,
-                    max=500,
-                    help_text="Maximum number of episodes to show in the What's New aggregated feed.",
-                ),
-                NumberInput(
-                    name="auto_mark_played_percent",
-                    label="Auto Mark Played (%)",
-                    value=auto_mark,
-                    min=50,
-                    max=100,
-                    help_text="Automatically mark an episode as played at this percentage. Set to 100 to disable.",
-                ),
-                NumberInput(
-                    name="feed_cache_ttl",
-                    label="Feed Cache (seconds)",
-                    value=cache_ttl,
-                    min=60,
-                    max=7200,
-                    help_text="How long parsed RSS feeds are cached in memory before re-fetching.",
-                ),
-                NumberInput(
-                    name="max_recent",
-                    label="Max Recently Played",
-                    value=max_recent,
-                    min=10,
-                    max=200,
-                    help_text="Maximum number of recently played episodes to remember.",
-                ),
-                NumberInput(
-                    name="auto_refresh_minutes",
-                    label="Auto-Refresh Interval (minutes)",
-                    value=auto_refresh,
-                    min=0,
-                    max=1440,
-                    help_text="Background interval for refreshing subscribed feeds. Set to 0 to disable.",
-                ),
-                Select(
-                    name="default_playback_speed",
-                    label="Default Playback Speed",
-                    value=playback_speed,
-                    help_text="Default playback speed for podcast episodes (hardware support varies).",
-                    options=[
-                        SelectOption(value="0.5", label="0.5×"),
-                        SelectOption(value="0.75", label="0.75×"),
-                        SelectOption(value="1.0", label="1.0× (normal)"),
-                        SelectOption(value="1.25", label="1.25×"),
-                        SelectOption(value="1.5", label="1.5×"),
-                        SelectOption(value="1.75", label="1.75×"),
-                        SelectOption(value="2.0", label="2.0×"),
-                    ],
-                ),
-            ],
-        ),
-        Alert(
-            message="Changes to search provider and cache settings take effect after restarting the server. Other settings apply immediately.",
-            severity="info",
-        ),
-    ])
+    return Tab(
+        label="Settings",
+        children=[
+            Form(
+                action="save_settings",
+                submit_label="Save Settings",
+                children=[
+                    Select(
+                        name="search_provider",
+                        label="Search Provider",
+                        value=search_provider,
+                        help_text="Which podcast directory to use when searching for new podcasts.",
+                        options=[
+                            SelectOption(value="podcastindex", label="PodcastIndex (recommended)"),
+                            SelectOption(value="gpodder", label="gPodder"),
+                            SelectOption(value="itunes", label="iTunes"),
+                        ],
+                    ),
+                    NumberInput(
+                        name="skip_back_seconds",
+                        label="Skip Back (seconds)",
+                        value=skip_back,
+                        min=5,
+                        max=120,
+                        help_text="Number of seconds to skip backward during podcast playback.",
+                    ),
+                    NumberInput(
+                        name="skip_forward_seconds",
+                        label="Skip Forward (seconds)",
+                        value=skip_forward,
+                        min=5,
+                        max=120,
+                        help_text="Number of seconds to skip forward during podcast playback.",
+                    ),
+                    NumberInput(
+                        name="new_since_days",
+                        label="What's New — Days",
+                        value=new_since_days,
+                        min=1,
+                        max=90,
+                        help_text="Show episodes published within this many days in the What's New feed.",
+                    ),
+                    NumberInput(
+                        name="max_new_episodes",
+                        label="What's New — Max Episodes",
+                        value=max_new,
+                        min=10,
+                        max=500,
+                        help_text="Maximum number of episodes to show in the What's New aggregated feed.",
+                    ),
+                    NumberInput(
+                        name="auto_mark_played_percent",
+                        label="Auto Mark Played (%)",
+                        value=auto_mark,
+                        min=50,
+                        max=100,
+                        help_text="Automatically mark an episode as played at this percentage. Set to 100 to disable.",
+                    ),
+                    NumberInput(
+                        name="feed_cache_ttl",
+                        label="Feed Cache (seconds)",
+                        value=cache_ttl,
+                        min=60,
+                        max=7200,
+                        help_text="How long parsed RSS feeds are cached in memory before re-fetching.",
+                    ),
+                    NumberInput(
+                        name="max_recent",
+                        label="Max Recently Played",
+                        value=max_recent,
+                        min=10,
+                        max=200,
+                        help_text="Maximum number of recently played episodes to remember.",
+                    ),
+                    NumberInput(
+                        name="auto_refresh_minutes",
+                        label="Auto-Refresh Interval (minutes)",
+                        value=auto_refresh,
+                        min=0,
+                        max=1440,
+                        help_text="Background interval for refreshing subscribed feeds. Set to 0 to disable.",
+                    ),
+                    Select(
+                        name="default_playback_speed",
+                        label="Default Playback Speed",
+                        value=playback_speed,
+                        help_text="Default playback speed for podcast episodes (hardware support varies).",
+                        options=[
+                            SelectOption(value="0.5", label="0.5×"),
+                            SelectOption(value="0.75", label="0.75×"),
+                            SelectOption(value="1.0", label="1.0× (normal)"),
+                            SelectOption(value="1.25", label="1.25×"),
+                            SelectOption(value="1.5", label="1.5×"),
+                            SelectOption(value="1.75", label="1.75×"),
+                            SelectOption(value="2.0", label="2.0×"),
+                        ],
+                    ),
+                ],
+            ),
+            Alert(
+                message="Changes to search provider and cache settings take effect after restarting the server. Other settings apply immediately.",
+                severity="info",
+            ),
+        ],
+    )
 
 
 def _build_about_tab() -> Any:
@@ -1253,9 +1372,12 @@ Built on the Resonance plugin framework. Podcast directory search powered by
 and [iTunes Search API](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/).
 """
 
-    return Tab(label="About", children=[
-        Markdown(content=md),
-    ])
+    return Tab(
+        label="About",
+        children=[
+            Markdown(content=md),
+        ],
+    )
 
 
 def _format_relative_time(timestamp: float) -> str:
@@ -1312,6 +1434,8 @@ async def handle_action(
             return _handle_export_opml()
         case "import_opml_url":
             return await _handle_import_opml_url(params)
+        case "subscribe_by_url":
+            return await _handle_subscribe_by_url(params)
         case "browse_episodes":
             return await _handle_browse_episodes(params)
         case "play_episode":
@@ -1446,8 +1570,7 @@ async def _handle_refresh_feeds() -> dict[str, Any]:
             # Count new episodes since last browse
             if sub.last_browsed_at > 0:
                 new_count = sum(
-                    1 for ep in feed.episodes
-                    if ep.published_epoch > sub.last_browsed_at
+                    1 for ep in feed.episodes if ep.published_epoch > sub.last_browsed_at
                 )
                 _store.set_new_episode_count(sub.url, new_count)
                 total_new += new_count
@@ -1484,16 +1607,13 @@ def _handle_export_opml() -> dict[str, Any]:
             export_path = data_dir / "subscriptions.opml"
             subs = _store.export_subscriptions()
             export_opml_file(export_path, subs)
-            return {
-                "message": f"Exported {count} subscription(s) to {export_path}"
-            }
+            return {"message": f"Exported {count} subscription(s) to {export_path}"}
         except Exception as exc:
             logger.warning("OPML export failed: %s", exc)
             return {"error": f"Export failed: {exc}"}
 
     return {
-        "message": f"To export {count} subscription(s) as OPML, use the command: "
-                   "podcast opmlexport"
+        "message": f"To export {count} subscription(s) as OPML, use the command: podcast opmlexport"
     }
 
 
@@ -1506,6 +1626,53 @@ def _handle_clear_feed_cache() -> dict[str, Any]:
         _ctx.notify_ui_update()
 
     return {"message": f"Cleared {count} cached feed(s)"}
+
+
+async def _handle_subscribe_by_url(params: dict[str, Any]) -> dict[str, Any]:
+    """Subscribe to a podcast by its RSS feed URL (SDUI action)."""
+    if _store is None:
+        return {"error": "Store not available"}
+
+    feed_url = (params.get("feed_url") or "").strip()
+    if not feed_url:
+        return {"error": "Please enter a feed URL"}
+
+    if not feed_url.startswith(("http://", "https://")):
+        return {"error": "URL must start with http:// or https://"}
+
+    if _store.is_subscribed(feed_url):
+        return {"message": f"Already subscribed to this feed"}
+
+    # Fetch the feed to get metadata (name, author, image, description)
+    name = feed_url
+    image = ""
+    author = ""
+    description = ""
+    try:
+        feed = await _get_feed(feed_url)
+        name = feed.title or feed_url
+        image = feed.image_url or ""
+        author = feed.author or ""
+        description = (feed.description or "")[:200]
+    except Exception as exc:
+        logger.warning("Could not fetch feed metadata for %s: %s", feed_url, exc)
+        return {"error": f"Could not fetch feed: {exc}. Please check the URL and try again."}
+
+    added = _store.add_subscription(
+        url=feed_url,
+        name=name,
+        image=image,
+        author=author,
+        description=description,
+    )
+
+    if _ctx is not None:
+        _ctx.notify_ui_update()
+
+    if added:
+        return {"message": f"Subscribed to '{name}'"}
+    else:
+        return {"message": f"Already subscribed to '{name}'"}
 
 
 def _handle_move_up(params: dict[str, Any]) -> dict[str, Any]:
@@ -1620,14 +1787,11 @@ async def _handle_browse_episodes(params: dict[str, Any]) -> dict[str, Any]:
 
         # Build episode summary
         total = len(feed.episodes)
-        played_count = sum(
-            1 for ep in feed.episodes
-            if ep.url and _store.is_played(ep.url)
-        )
+        played_count = sum(1 for ep in feed.episodes if ep.url and _store.is_played(ep.url))
         in_progress_count = sum(
-            1 for ep in feed.episodes
-            if ep.url and _store.has_resume_position(ep.url)
-            and not _store.is_played(ep.url)
+            1
+            for ep in feed.episodes
+            if ep.url and _store.has_resume_position(ep.url) and not _store.is_played(ep.url)
         )
         unplayed = total - played_count
 
@@ -1650,9 +1814,7 @@ async def _handle_browse_episodes(params: dict[str, Any]) -> dict[str, Any]:
         return {"error": f"Could not load feed: {exc}"}
 
 
-async def _handle_play_episode(
-    params: dict[str, Any], ctx: PluginContext
-) -> dict[str, Any]:
+async def _handle_play_episode(params: dict[str, Any], ctx: PluginContext) -> dict[str, Any]:
     """Play a podcast episode via JSON-RPC self-call.
 
     Uses the server's own JSON-RPC endpoint (``podcast play``) to start
@@ -1688,10 +1850,7 @@ async def _handle_play_episode(
 
     players = await player_registry.get_all()
     if not players:
-        return {
-            "error": "No players connected. Connect a Squeezebox or "
-                     "Squeezelite player first."
-        }
+        return {"error": "No players connected. Connect a Squeezebox or Squeezelite player first."}
 
     # Use the first connected player
     player = players[0]
@@ -1706,7 +1865,8 @@ async def _handle_play_episode(
 
     # Build the podcast play command array
     cmd: list[Any] = [
-        "podcast", "play",
+        "podcast",
+        "play",
         f"url:{episode_url}",
         f"cmd:play",
     ]
@@ -1749,7 +1909,9 @@ async def _handle_play_episode(
 
         logger.info(
             "SDUI play: %s → %s on player %s (via JSON-RPC)",
-            title, episode_url[:80], player.name or player_id,
+            title,
+            episode_url[:80],
+            player.name or player_id,
         )
 
         if _ctx is not None:
@@ -1758,6 +1920,7 @@ async def _handle_play_episode(
         play_msg = f"Playing '{title or 'episode'}' on {player.name or player_id}"
         if resume_from > 0:
             from .feed_parser import format_duration
+
             play_msg += f" (resuming from {format_duration(resume_from)})"
         return {"message": play_msg}
 
@@ -1765,20 +1928,23 @@ async def _handle_play_episode(
         logger.warning("SDUI play failed for %s: %s", episode_url, exc)
         return {
             "error": f"Could not start playback: {exc}. "
-                     f"Try playing via the Podcasts menu on your player instead."
+            f"Try playing via the Podcasts menu on your player instead."
         }
 
 
-async def _handle_save_settings(
-    params: dict[str, Any], ctx: PluginContext
-) -> dict[str, Any]:
+async def _handle_save_settings(params: dict[str, Any], ctx: PluginContext) -> dict[str, Any]:
     """Save settings from the SDUI settings form."""
     saved: list[str] = []
 
     int_keys = [
-        "skip_back_seconds", "skip_forward_seconds", "new_since_days",
-        "max_new_episodes", "auto_mark_played_percent", "feed_cache_ttl",
-        "max_recent", "auto_refresh_minutes",
+        "skip_back_seconds",
+        "skip_forward_seconds",
+        "new_since_days",
+        "max_new_episodes",
+        "auto_mark_played_percent",
+        "feed_cache_ttl",
+        "max_recent",
+        "auto_refresh_minutes",
     ]
     str_keys = ["search_provider", "default_playback_speed"]
 
@@ -1805,9 +1971,7 @@ async def _handle_save_settings(
                 pass
         if "auto_mark_played_percent" in params:
             try:
-                _store.update_auto_mark_played_percent(
-                    int(params["auto_mark_played_percent"])
-                )
+                _store.update_auto_mark_played_percent(int(params["auto_mark_played_percent"]))
             except (ValueError, TypeError):
                 pass
 
@@ -1817,7 +1981,7 @@ async def _handle_save_settings(
     if saved:
         return {
             "message": f"Saved {len(saved)} setting(s): {', '.join(saved)}. "
-                       "Search provider and cache changes require a restart."
+            "Search provider and cache changes require a restart."
         }
     else:
         return {"message": "No changes to save"}
@@ -1828,9 +1992,7 @@ async def _handle_save_settings(
 # ---------------------------------------------------------------------------
 
 
-async def cmd_podcast(
-    ctx: CommandContext, command: list[Any]
-) -> dict[str, Any]:
+async def cmd_podcast(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
     """Dispatch ``podcast <sub-command> …`` to the appropriate handler.
 
     Sub-commands:
@@ -1889,9 +2051,7 @@ async def cmd_podcast(
 # ---------------------------------------------------------------------------
 
 
-async def _podcast_items(
-    ctx: CommandContext, command: list[Any]
-) -> dict[str, Any]:
+async def _podcast_items(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
     """Handle ``podcast items <start> <count> [url:…] [menu:1] [search:…]``.
 
     Without ``url``, returns the top-level menu (what's new, continue
@@ -1922,7 +2082,7 @@ async def _podcast_items(
                 all_items.append(_build_cli_item_from_search(r.to_dict()))
 
         total = len(all_items)
-        page = all_items[start: start + count]
+        page = all_items[start : start + count]
 
         result: dict[str, Any] = {"count": total, "offset": start}
         result["item_loop" if is_menu else "loop"] = page
@@ -1949,16 +2109,18 @@ async def _podcast_items(
             if is_menu:
                 recent_items.append(_build_jive_recent_item(ep))
             else:
-                recent_items.append({
-                    "name": ep.title or ep.url,
-                    "url": ep.url,
-                    "type": "audio",
-                    "show": ep.show,
-                    "image": ep.image,
-                })
+                recent_items.append(
+                    {
+                        "name": ep.title or ep.url,
+                        "url": ep.url,
+                        "type": "audio",
+                        "show": ep.show,
+                        "image": ep.image,
+                    }
+                )
 
         total = len(recent_items)
-        page = recent_items[start: start + count]
+        page = recent_items[start : start + count]
 
         result = {"count": total, "offset": start}
         result["item_loop" if is_menu else "loop"] = page
@@ -1987,15 +2149,19 @@ async def _podcast_items(
         all_items = []
         for ep in feed.episodes:
             if is_menu:
-                all_items.append(_build_jive_episode_item(
-                    ep, feed_url=browse_url, feed_title=feed.title,
-                    feed_image=feed.image_url,
-                ))
+                all_items.append(
+                    _build_jive_episode_item(
+                        ep,
+                        feed_url=browse_url,
+                        feed_title=feed.title,
+                        feed_image=feed.image_url,
+                    )
+                )
             else:
                 all_items.append(_build_cli_episode_item(ep, feed_url=browse_url))
 
         total = len(all_items)
-        page = all_items[start: start + count]
+        page = all_items[start : start + count]
 
         result = {"count": total, "offset": start}
         result["item_loop" if is_menu else "loop"] = page
@@ -2013,22 +2179,24 @@ async def _podcast_items(
 
     if is_menu:
         # 1) Search entry
-        all_items.append({
-            "text": "Search Podcasts",
-            "hasitems": 1,
-            "actions": {
-                "go": {
-                    "cmd": ["podcast", "items"],
-                    "params": {"menu": 1},
-                    "itemsParams": "params",
+        all_items.append(
+            {
+                "text": "Search Podcasts",
+                "hasitems": 1,
+                "actions": {
+                    "go": {
+                        "cmd": ["podcast", "items"],
+                        "params": {"menu": 1},
+                        "itemsParams": "params",
+                    },
                 },
-            },
-            "input": {
-                "len": 1,
-                "processingPopup": {"text": "Searching..."},
-                "help": {"text": "Enter search text"},
-            },
-        })
+                "input": {
+                    "len": 1,
+                    "processingPopup": {"text": "Searching..."},
+                    "help": {"text": "Enter search text"},
+                },
+            }
+        )
         all_items[-1]["actions"]["go"]["params"]["search"] = "__TAGGEDINPUT__"
 
         # 2) What's New (if we have subscriptions)
@@ -2037,56 +2205,64 @@ async def _podcast_items(
             whatsnew_text = "What's New"
             if total_new > 0:
                 whatsnew_text = f"What's New ({total_new})"
-            all_items.append({
-                "text": whatsnew_text,
-                "hasitems": 1,
-                "icon": "plugins/Podcast/html/images/podcastindex.png",
-                "actions": {
-                    "go": {
-                        "cmd": ["podcast", "items"],
-                        "params": {"url": "__whatsnew__", "menu": 1},
+            all_items.append(
+                {
+                    "text": whatsnew_text,
+                    "hasitems": 1,
+                    "icon": "plugins/Podcast/html/images/podcastindex.png",
+                    "actions": {
+                        "go": {
+                            "cmd": ["podcast", "items"],
+                            "params": {"url": "__whatsnew__", "menu": 1},
+                        },
                     },
-                },
-            })
+                }
+            )
 
         # 3) Continue Listening
         in_progress = _store.get_in_progress_episodes()
         if in_progress:
-            all_items.append({
-                "text": f"Continue Listening ({len(in_progress)})",
-                "hasitems": 1,
-                "actions": {
-                    "go": {
-                        "cmd": ["podcast", "items"],
-                        "params": {"url": "__continue__", "menu": 1},
+            all_items.append(
+                {
+                    "text": f"Continue Listening ({len(in_progress)})",
+                    "hasitems": 1,
+                    "actions": {
+                        "go": {
+                            "cmd": ["podcast", "items"],
+                            "params": {"url": "__continue__", "menu": 1},
+                        },
                     },
-                },
-            })
+                }
+            )
 
         # 4) Recently played
         if _store.recent_count > 0:
-            all_items.append({
-                "text": "Recently Played",
+            all_items.append(
+                {
+                    "text": "Recently Played",
+                    "hasitems": 1,
+                    "actions": {
+                        "go": {
+                            "cmd": ["podcast", "items"],
+                            "params": {"url": "__recent__", "menu": 1},
+                        },
+                    },
+                }
+            )
+
+        # 5) Trending
+        all_items.append(
+            {
+                "text": "Trending Podcasts",
                 "hasitems": 1,
                 "actions": {
                     "go": {
                         "cmd": ["podcast", "items"],
-                        "params": {"url": "__recent__", "menu": 1},
+                        "params": {"url": "__trending__", "menu": 1},
                     },
                 },
-            })
-
-        # 5) Trending
-        all_items.append({
-            "text": "Trending Podcasts",
-            "hasitems": 1,
-            "actions": {
-                "go": {
-                    "cmd": ["podcast", "items"],
-                    "params": {"url": "__trending__", "menu": 1},
-                },
-            },
-        })
+            }
+        )
 
         # 6) Subscribed feeds
         for sub in _store.subscriptions:
@@ -2125,17 +2301,19 @@ async def _podcast_items(
     else:
         # CLI mode — return subscription list
         for sub in _store.subscriptions:
-            all_items.append({
-                "name": sub.name,
-                "url": sub.url,
-                "type": "link",
-                "image": sub.image,
-                "author": sub.author,
-                "new_episodes": sub.new_episode_count,
-            })
+            all_items.append(
+                {
+                    "name": sub.name,
+                    "url": sub.url,
+                    "type": "link",
+                    "image": sub.image,
+                    "author": sub.author,
+                    "new_episodes": sub.new_episode_count,
+                }
+            )
 
     total = len(all_items)
-    page = all_items[start: start + count]
+    page = all_items[start : start + count]
 
     result = {"count": total, "offset": start}
     result["item_loop" if is_menu else "loop"] = page
@@ -2150,7 +2328,9 @@ async def _podcast_items(
 
 
 async def _build_whatsnew(
-    start: int, count: int, is_menu: bool,
+    start: int,
+    count: int,
+    is_menu: bool,
 ) -> dict[str, Any]:
     """Aggregate new episodes from all subscribed feeds.
 
@@ -2164,7 +2344,9 @@ async def _build_whatsnew(
     max_new = int(_setting("max_new_episodes", 50))
     cutoff = time.time() - (new_since_days * 86400)
 
-    all_episodes: list[tuple[Any, str, str, str]] = []  # (episode, feed_url, feed_title, feed_image)
+    all_episodes: list[
+        tuple[Any, str, str, str]
+    ] = []  # (episode, feed_url, feed_title, feed_image)
 
     for sub in _store.subscriptions:
         try:
@@ -2183,8 +2365,11 @@ async def _build_whatsnew(
     for ep, feed_url, feed_title, feed_image in all_episodes:
         if is_menu:
             item = _build_jive_episode_item(
-                ep, feed_url=feed_url, feed_title=feed_title,
-                feed_image=feed_image, show_feed_name=True,
+                ep,
+                feed_url=feed_url,
+                feed_title=feed_title,
+                feed_image=feed_image,
+                show_feed_name=True,
             )
             all_items.append(item)
         else:
@@ -2193,7 +2378,7 @@ async def _build_whatsnew(
             all_items.append(cli_item)
 
     total = len(all_items)
-    page = all_items[start: start + count]
+    page = all_items[start : start + count]
 
     result: dict[str, Any] = {"count": total, "offset": start}
     result["item_loop" if is_menu else "loop"] = page
@@ -2208,7 +2393,9 @@ async def _build_whatsnew(
 
 
 def _build_continue_listening(
-    start: int, count: int, is_menu: bool,
+    start: int,
+    count: int,
+    is_menu: bool,
 ) -> dict[str, Any]:
     """Show episodes with saved progress (not yet finished)."""
     assert _store is not None
@@ -2287,19 +2474,21 @@ def _build_continue_listening(
 
             all_items.append(item)
         else:
-            all_items.append({
-                "name": title,
-                "url": url,
-                "type": "audio",
-                "show": show,
-                "image": image,
-                "position": position,
-                "duration": duration,
-                "percentage": percentage,
-            })
+            all_items.append(
+                {
+                    "name": title,
+                    "url": url,
+                    "type": "audio",
+                    "show": show,
+                    "image": image,
+                    "position": position,
+                    "duration": duration,
+                    "percentage": percentage,
+                }
+            )
 
     total = len(all_items)
-    page = all_items[start: start + count]
+    page = all_items[start : start + count]
 
     result: dict[str, Any] = {"count": total, "offset": start}
     result["item_loop" if is_menu else "loop"] = page
@@ -2314,7 +2503,8 @@ def _build_continue_listening(
 
 
 def _build_resume_submenu(
-    tagged: dict[str, str], is_menu: bool,
+    tagged: dict[str, str],
+    is_menu: bool,
 ) -> dict[str, Any]:
     """Build the resume sub-menu for an episode with a saved position.
 
@@ -2354,7 +2544,11 @@ def _build_resume_submenu(
             "count": 2,
             "offset": 0,
             "loop": [
-                {"name": f"Play from {format_duration(resume_pos)}", "url": ep_url, "from": resume_pos},
+                {
+                    "name": f"Play from {format_duration(resume_pos)}",
+                    "url": ep_url,
+                    "from": resume_pos,
+                },
                 {"name": "Play from beginning", "url": ep_url, "from": 0},
             ],
         }
@@ -2403,17 +2597,19 @@ def _build_resume_submenu(
     ]
 
     # Also offer "Mark as played" in this context
-    items.append({
-        "text": "Mark as played",
-        "type": "text",
-        "hasitems": 0,
-        "actions": {
-            "go": {
-                "cmd": ["podcast", "markplayed"],
-                "params": {"url": ep_url, "menu": 1},
+    items.append(
+        {
+            "text": "Mark as played",
+            "type": "text",
+            "hasitems": 0,
+            "actions": {
+                "go": {
+                    "cmd": ["podcast", "markplayed"],
+                    "params": {"url": ep_url, "menu": 1},
+                },
             },
-        },
-    })
+        }
+    )
 
     return {
         "count": len(items),
@@ -2428,7 +2624,10 @@ def _build_resume_submenu(
 
 
 async def _build_trending(
-    start: int, count: int, is_menu: bool, tagged: dict[str, str],
+    start: int,
+    count: int,
+    is_menu: bool,
+    tagged: dict[str, str],
 ) -> dict[str, Any]:
     """Fetch and display trending podcasts from the configured provider."""
     from .providers import get_provider
@@ -2442,6 +2641,7 @@ async def _build_trending(
     if not provider.supports_trending:
         # Fallback: use PodcastIndex for trending even if search is set differently
         from .providers import get_provider as _gp
+
         provider = _gp("podcastindex")
 
     results = await provider.trending(
@@ -2459,7 +2659,7 @@ async def _build_trending(
             all_items.append(_build_cli_item_from_search(r.to_dict()))
 
     total = len(all_items)
-    page = all_items[start: start + count]
+    page = all_items[start : start + count]
 
     result: dict[str, Any] = {"count": total, "offset": start}
     result["item_loop" if is_menu else "loop"] = page
@@ -2473,9 +2673,7 @@ async def _build_trending(
 # ---------------------------------------------------------------------------
 
 
-async def _podcast_search(
-    ctx: CommandContext, command: list[Any]
-) -> dict[str, Any]:
+async def _podcast_search(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
     """Handle ``podcast search <start> <count> [term:…] [menu:1]``.
 
     Searches via the configured provider and returns matching feeds.
@@ -2504,7 +2702,7 @@ async def _podcast_search(
             all_items.append(_build_cli_item_from_search(r.to_dict()))
 
     total = len(all_items)
-    page = all_items[start: start + count]
+    page = all_items[start : start + count]
 
     result = {"count": total, "offset": start}
     result["item_loop" if is_menu else "loop"] = page
@@ -2518,9 +2716,7 @@ async def _podcast_search(
 # ---------------------------------------------------------------------------
 
 
-async def _podcast_play(
-    ctx: CommandContext, command: list[Any]
-) -> dict[str, Any]:
+async def _podcast_play(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
     """Handle ``podcast play [url:…] [title:…] [icon:…] [feed_url:…] [cmd:…] [from:…]``.
 
     Plays a podcast episode.
@@ -2648,9 +2844,7 @@ async def _podcast_play(
 # ---------------------------------------------------------------------------
 
 
-async def _podcast_addshow(
-    ctx: CommandContext, command: list[Any]
-) -> dict[str, Any]:
+async def _podcast_addshow(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
     """Handle ``podcast addshow [url:…] [name:…] [image:…] [menu:1]``.
 
     Subscribe to a podcast feed.
@@ -2692,11 +2886,13 @@ async def _podcast_addshow(
         msg = f"Subscribed to '{name}'" if added else f"Already subscribed to '{name}'"
         return {
             "count": 1,
-            "item_loop": [{
-                "text": msg,
-                "showBriefly": 1,
-                "nextWindow": "parent",
-            }],
+            "item_loop": [
+                {
+                    "text": msg,
+                    "showBriefly": 1,
+                    "nextWindow": "parent",
+                }
+            ],
         }
 
     return {
@@ -2712,9 +2908,7 @@ async def _podcast_addshow(
 # ---------------------------------------------------------------------------
 
 
-async def _podcast_delshow(
-    ctx: CommandContext, command: list[Any]
-) -> dict[str, Any]:
+async def _podcast_delshow(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
     """Handle ``podcast delshow [url:…] [name:…] [menu:1]``."""
     assert _store is not None
 
@@ -2732,11 +2926,13 @@ async def _podcast_delshow(
         msg = f"Unsubscribed from '{name}'" if removed else f"Not subscribed to '{name}'"
         return {
             "count": 1,
-            "item_loop": [{
-                "text": msg,
-                "showBriefly": 1,
-                "nextWindow": "grandparent",
-            }],
+            "item_loop": [
+                {
+                    "text": msg,
+                    "showBriefly": 1,
+                    "nextWindow": "grandparent",
+                }
+            ],
         }
 
     return {
@@ -2752,9 +2948,7 @@ async def _podcast_delshow(
 # ---------------------------------------------------------------------------
 
 
-async def _podcast_markplayed(
-    ctx: CommandContext, command: list[Any]
-) -> dict[str, Any]:
+async def _podcast_markplayed(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
     """Handle ``podcast markplayed [url:…] [feed_url:…] [menu:1]``.
 
     Mark a single episode or all episodes in a feed as played.
@@ -2786,19 +2980,19 @@ async def _podcast_markplayed(
     if is_menu:
         return {
             "count": 1,
-            "item_loop": [{
-                "text": msg,
-                "showBriefly": 1,
-                "nextWindow": "parent",
-            }],
+            "item_loop": [
+                {
+                    "text": msg,
+                    "showBriefly": 1,
+                    "nextWindow": "parent",
+                }
+            ],
         }
 
     return {"count": count, "message": msg}
 
 
-async def _podcast_markunplayed(
-    ctx: CommandContext, command: list[Any]
-) -> dict[str, Any]:
+async def _podcast_markunplayed(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
     """Handle ``podcast markunplayed [url:…] [menu:1]``."""
     assert _store is not None
 
@@ -2814,11 +3008,13 @@ async def _podcast_markunplayed(
     if is_menu:
         return {
             "count": 1,
-            "item_loop": [{
-                "text": "Marked as unplayed",
-                "showBriefly": 1,
-                "nextWindow": "parent",
-            }],
+            "item_loop": [
+                {
+                    "text": "Marked as unplayed",
+                    "showBriefly": 1,
+                    "nextWindow": "parent",
+                }
+            ],
         }
 
     return {"count": 1, "message": "Marked as unplayed"}
@@ -2829,9 +3025,7 @@ async def _podcast_markunplayed(
 # ---------------------------------------------------------------------------
 
 
-async def _podcast_opml_import(
-    ctx: CommandContext, command: list[Any]
-) -> dict[str, Any]:
+async def _podcast_opml_import(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
     """Handle ``podcast opmlimport [path:…] [data:…] [menu:1]``.
 
     Import subscriptions from an OPML file or inline XML data.
@@ -2866,11 +3060,13 @@ async def _podcast_opml_import(
     if is_menu:
         return {
             "count": 1,
-            "item_loop": [{
-                "text": msg,
-                "showBriefly": 1,
-                "nextWindow": "parent",
-            }],
+            "item_loop": [
+                {
+                    "text": msg,
+                    "showBriefly": 1,
+                    "nextWindow": "parent",
+                }
+            ],
         }
 
     return {
@@ -2880,9 +3076,7 @@ async def _podcast_opml_import(
     }
 
 
-async def _podcast_opml_export(
-    ctx: CommandContext, command: list[Any]
-) -> dict[str, Any]:
+async def _podcast_opml_export(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
     """Handle ``podcast opmlexport [path:…] [menu:1]``.
 
     Export subscriptions to an OPML file.  If no path is given, returns
@@ -2910,10 +3104,12 @@ async def _podcast_opml_export(
         if is_menu:
             return {
                 "count": 1,
-                "item_loop": [{
-                    "text": f"Exported {len(subs)} subscriptions",
-                    "showBriefly": 1,
-                }],
+                "item_loop": [
+                    {
+                        "text": f"Exported {len(subs)} subscriptions",
+                        "showBriefly": 1,
+                    }
+                ],
             }
         return {
             "count": len(subs),
@@ -2923,10 +3119,12 @@ async def _podcast_opml_export(
     if is_menu:
         return {
             "count": 1,
-            "item_loop": [{
-                "text": msg,
-                "showBriefly": 1,
-            }],
+            "item_loop": [
+                {
+                    "text": msg,
+                    "showBriefly": 1,
+                }
+            ],
         }
 
     return {"count": len(subs), "message": msg}
@@ -2937,9 +3135,7 @@ async def _podcast_opml_export(
 # ---------------------------------------------------------------------------
 
 
-async def _podcast_trending(
-    ctx: CommandContext, command: list[Any]
-) -> dict[str, Any]:
+async def _podcast_trending(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
     """Handle ``podcast trending <start> <count> [lang:…] [cat:…] [menu:1]``."""
     tagged = _parse_tagged(command, start=2)
     start, count = _parse_start_count(command)
@@ -2953,9 +3149,7 @@ async def _podcast_trending(
 # ---------------------------------------------------------------------------
 
 
-async def _podcast_info(
-    ctx: CommandContext, command: list[Any]
-) -> dict[str, Any]:
+async def _podcast_info(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
     """Handle ``podcast info [url:…] [ep_url:…] [name:…] [menu:1]``.
 
     Shows detailed information about a feed (description, author, language,
@@ -2980,21 +3174,28 @@ async def _podcast_info(
             ep = next((e for e in feed.episodes if e.url == ep_url), None)
             if ep:
                 if ep.description:
-                    items.append({
-                        "text": ep.description[:1000],
-                        "type": "text" if is_menu else "info",
-                    })
+                    items.append(
+                        {
+                            "text": ep.description[:1000],
+                            "type": "text" if is_menu else "info",
+                        }
+                    )
                 if ep.published:
-                    items.append({
-                        "text": f"Published: {ep.published[:10]}",
-                        "type": "text" if is_menu else "info",
-                    })
+                    items.append(
+                        {
+                            "text": f"Published: {ep.published[:10]}",
+                            "type": "text" if is_menu else "info",
+                        }
+                    )
                 if ep.duration_seconds:
                     from .feed_parser import format_duration
-                    items.append({
-                        "text": f"Duration: {format_duration(ep.duration_seconds)}",
-                        "type": "text" if is_menu else "info",
-                    })
+
+                    items.append(
+                        {
+                            "text": f"Duration: {format_duration(ep.duration_seconds)}",
+                            "type": "text" if is_menu else "info",
+                        }
+                    )
                 if ep.season_number or ep.episode_number:
                     ep_info = ""
                     if ep.season_number:
@@ -3008,27 +3209,35 @@ async def _podcast_info(
 
                 # Mark played/unplayed
                 if _store.is_played(ep_url):
-                    items.append({
-                        "text": "Mark as unplayed",
-                        "type": "link" if is_menu else "action",
-                        "actions": {
-                            "go": {
-                                "cmd": ["podcast", "markunplayed"],
-                                "params": {"url": ep_url, "menu": 1},
-                            },
-                        } if is_menu else {},
-                    })
+                    items.append(
+                        {
+                            "text": "Mark as unplayed",
+                            "type": "link" if is_menu else "action",
+                            "actions": {
+                                "go": {
+                                    "cmd": ["podcast", "markunplayed"],
+                                    "params": {"url": ep_url, "menu": 1},
+                                },
+                            }
+                            if is_menu
+                            else {},
+                        }
+                    )
                 else:
-                    items.append({
-                        "text": "Mark as played",
-                        "type": "link" if is_menu else "action",
-                        "actions": {
-                            "go": {
-                                "cmd": ["podcast", "markplayed"],
-                                "params": {"url": ep_url, "menu": 1},
-                            },
-                        } if is_menu else {},
-                    })
+                    items.append(
+                        {
+                            "text": "Mark as played",
+                            "type": "link" if is_menu else "action",
+                            "actions": {
+                                "go": {
+                                    "cmd": ["podcast", "markplayed"],
+                                    "params": {"url": ep_url, "menu": 1},
+                                },
+                            }
+                            if is_menu
+                            else {},
+                        }
+                    )
         except Exception as exc:
             items.append({"text": f"Error: {exc}", "type": "text"})
 
@@ -3038,44 +3247,56 @@ async def _podcast_info(
 
         # Subscribe / unsubscribe action
         if is_subscribed:
-            items.append({
-                "text": f"Unsubscribe from '{name}'",
-                "type": "link" if is_menu else "action",
-                "isContextMenu": 1 if is_menu else 0,
-                "actions": {
-                    "go": {
-                        "cmd": ["podcast", "delshow"],
-                        "params": {"url": feed_url, "name": name, "menu": 1},
-                    },
-                } if is_menu else {},
-                "nextWindow": "grandparent" if is_menu else "",
-            })
+            items.append(
+                {
+                    "text": f"Unsubscribe from '{name}'",
+                    "type": "link" if is_menu else "action",
+                    "isContextMenu": 1 if is_menu else 0,
+                    "actions": {
+                        "go": {
+                            "cmd": ["podcast", "delshow"],
+                            "params": {"url": feed_url, "name": name, "menu": 1},
+                        },
+                    }
+                    if is_menu
+                    else {},
+                    "nextWindow": "grandparent" if is_menu else "",
+                }
+            )
         else:
-            items.append({
-                "text": f"Subscribe to '{name}'",
-                "type": "link" if is_menu else "action",
-                "isContextMenu": 1 if is_menu else 0,
-                "actions": {
-                    "go": {
-                        "cmd": ["podcast", "addshow"],
-                        "params": {"url": feed_url, "name": name, "image": image, "menu": 1},
-                    },
-                } if is_menu else {},
-                "nextWindow": "parent" if is_menu else "",
-            })
+            items.append(
+                {
+                    "text": f"Subscribe to '{name}'",
+                    "type": "link" if is_menu else "action",
+                    "isContextMenu": 1 if is_menu else 0,
+                    "actions": {
+                        "go": {
+                            "cmd": ["podcast", "addshow"],
+                            "params": {"url": feed_url, "name": name, "image": image, "menu": 1},
+                        },
+                    }
+                    if is_menu
+                    else {},
+                    "nextWindow": "parent" if is_menu else "",
+                }
+            )
 
         # Mark all as played
         if is_subscribed:
-            items.append({
-                "text": "Mark all episodes as played",
-                "type": "link" if is_menu else "action",
-                "actions": {
-                    "go": {
-                        "cmd": ["podcast", "markplayed"],
-                        "params": {"feed_url": feed_url, "menu": 1},
-                    },
-                } if is_menu else {},
-            })
+            items.append(
+                {
+                    "text": "Mark all episodes as played",
+                    "type": "link" if is_menu else "action",
+                    "actions": {
+                        "go": {
+                            "cmd": ["podcast", "markplayed"],
+                            "params": {"feed_url": feed_url, "menu": 1},
+                        },
+                    }
+                    if is_menu
+                    else {},
+                }
+            )
 
         # Fetch feed metadata for detail display
         try:
@@ -3107,9 +3328,7 @@ async def _podcast_info(
 # ---------------------------------------------------------------------------
 
 
-async def _podcast_skip(
-    ctx: CommandContext, command: list[Any]
-) -> dict[str, Any]:
+async def _podcast_skip(ctx: CommandContext, command: list[Any]) -> dict[str, Any]:
     """Handle ``podcast skip [direction:forward|back]``.
 
     Sends a seek command to the current player, jumping by the configured
@@ -3144,11 +3363,13 @@ async def _podcast_skip(
     if is_menu:
         return {
             "count": 1,
-            "item_loop": [{
-                "text": f"Skipped {abs_skip}s {dir_text}",
-                "showBriefly": 1,
-                "nowPlaying": 1,
-            }],
+            "item_loop": [
+                {
+                    "text": f"Skipped {abs_skip}s {dir_text}",
+                    "showBriefly": 1,
+                    "nowPlaying": 1,
+                }
+            ],
         }
 
     return {
