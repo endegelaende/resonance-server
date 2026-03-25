@@ -938,6 +938,7 @@ class ResonanceAPI {
         artwork_url?: string;
       }>;
       count: number;
+      playlist_tracks: number;
     }>(playerId, ["status", start.toString(), count.toString(), "tags:aAdlt"]);
 
     return {
@@ -950,7 +951,7 @@ class ResonanceAPI {
         path: t.url,
         coverArt: t.coverArt || t.artwork_url,
       })),
-      total: result.count || 0,
+      total: result.playlist_tracks || result.count || 0,
     };
   }
 

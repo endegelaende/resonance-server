@@ -43,6 +43,7 @@ from resonance.web.jsonrpc_helpers import (
 # Must be 7.x — SqueezePlay firmware <=7.7.3 rejects version 8.0.0+.
 VERSION = "7.999.999"
 
+
 def _parse_icy_title(icy_title: str) -> tuple[str, str]:
     """Parse an ICY StreamTitle into ``(artist, title)``.
 
@@ -351,6 +352,7 @@ async def cmd_status(
             else:
                 _model = getattr(player, "model", "")
                 from resonance.web.jsonrpc_helpers import PLAYER_MODEL_LABELS
+
                 _label = PLAYER_MODEL_LABELS.get(str(_model).lower(), "")
                 result["player_name"] = _label or getattr(player, "mac_address", "Player")
         # player_ip (LMS Queries.pm L4056)
@@ -536,6 +538,7 @@ async def cmd_status(
 
                 # ── Artwork debug logging ────────────────────────────
                 import logging as _logging
+
                 _status_logger = _logging.getLogger("resonance.web.handlers.status")
                 _status_logger.debug(
                     "[STATUS-ART] player=%s track=%s album_id=%s artwork_url=%s is_remote=%s source=%s",
@@ -569,6 +572,38 @@ async def cmd_status(
                     "path": path,
                     "coverArt": _cover_art,
                 }
+
+                # ── LMS-compatible top-level song tags ───────────
+                # JiveLite/SqueezePlay NowPlaying reads these as
+                # top-level fields in the status response, NOT from
+                # the currentTrack object (which is a Resonance
+                # Web-UI extension).  LMS Queries.pm L4193-4250
+                # calls _songData() which adds these based on the
+                # requested tags string.
+                #
+                # Without these, the Squeezebox Radio/Touch/Boom
+                # NowPlaying screen shows no artwork and incomplete
+                # track info.
+                _cur_title = getattr(current, "title", "")
+                if _cur_title:
+                    result["title"] = _cur_title
+                if artist:
+                    result["artist"] = artist
+                if album:
+                    result["album"] = album
+                if track_id is not None:
+                    result["id"] = track_id
+                if album_id:
+                    # artwork_track_id (Tag J) — primary artwork
+                    # reference for JiveLite.  NowPlaying.lua uses
+                    # this to build /music/{id}/cover_{spec} URLs
+                    # via the persistent artworkPool connection.
+                    result["artwork_track_id"] = album_id
+                    result["coverart"] = 1
+                    result["artwork_url"] = f"{current_server_url}/artwork/{album_id}"
+                elif _artwork_url:
+                    result["artwork_url"] = _artwork_url
+                    result["coverart"] = 1
 
                 # Expose remote-specific fields in currentTrack for the
                 # Web-UI (source, is_live, content_type, bitrate,
@@ -613,21 +648,18 @@ async def cmd_status(
                 if _is_remote:
                     _remote_meta: dict[str, Any] = {
                         "id": track_id or 0,
-                        "title": (_icy_parsed_title or _icy_title
-                                  or getattr(current, "title", "")),
+                        "title": (_icy_parsed_title or _icy_title or getattr(current, "title", "")),
                     }
 
                     # Artist: prefer parsed ICY, fall back to static
-                    _rm_artist = (_icy_artist
-                                  or getattr(current, "artist_name",
-                                             getattr(current, "artist", "")))
+                    _rm_artist = _icy_artist or getattr(
+                        current, "artist_name", getattr(current, "artist", "")
+                    )
                     if _rm_artist:
                         _remote_meta["artist"] = _rm_artist
 
                     # Album: static field (usually empty for radio)
-                    _rm_album = (getattr(current, "album_title",
-                                         getattr(current, "album", ""))
-                                 or "")
+                    _rm_album = getattr(current, "album_title", getattr(current, "album", "")) or ""
                     if _rm_album:
                         _remote_meta["album"] = _rm_album
 
@@ -686,13 +718,16 @@ async def cmd_status(
                         result["currentTrack"]["icon"] = _proxied_ct
                         _status_logger.info(
                             "[STATUS-ART] player=%s currentTrack.icon=%s (proxied from %s)",
-                            ctx.player_id, _proxied_ct[:120], _artwork_url[:120],
+                            ctx.player_id,
+                            _proxied_ct[:120],
+                            _artwork_url[:120],
                         )
                     else:
                         result["currentTrack"]["icon"] = _artwork_url
                         _status_logger.info(
                             "[STATUS-ART] player=%s currentTrack.icon=%s (raw, not proxied)",
-                            ctx.player_id, _artwork_url[:120],
+                            ctx.player_id,
+                            _artwork_url[:120],
                         )
                 elif _is_remote:
                     # Radio placeholder (LMS Player.pm L622).
@@ -897,13 +932,18 @@ async def cmd_status(
                             track_dict["icon"] = _proxied
                             _status_logger.info(
                                 "[STATUS-ART] player=%s item_loop[%d].icon=%s (proxied from %s)",
-                                ctx.player_id, playlist_idx, _proxied[:120], _trk_artwork[:120],
+                                ctx.player_id,
+                                playlist_idx,
+                                _proxied[:120],
+                                _trk_artwork[:120],
                             )
                         else:
                             track_dict["icon"] = _trk_artwork
                             _status_logger.info(
                                 "[STATUS-ART] player=%s item_loop[%d].icon=%s (raw, not proxied)",
-                                ctx.player_id, playlist_idx, _trk_artwork[:120],
+                                ctx.player_id,
+                                playlist_idx,
+                                _trk_artwork[:120],
                             )
                     elif _trk_is_remote:
                         # Radio placeholder (LMS Player.pm L622).
@@ -925,13 +965,22 @@ async def cmd_status(
                     else:
                         _loop_cover = ""
 
+                    # For remote tracks (podcast, radio, external), use the
+                    # proxied stream URL so the Web UI can display/play them.
+                    # Local library tracks use track_id-based URLs.
+                    if _loop_is_remote or track_id is None:
+                        _stream_url = getattr(track, "stream_url", None) or path
+                        _loop_url = f"{server_url}/stream.mp3?url={_stream_url}"
+                    else:
+                        _loop_url = f"{server_url}/stream.mp3?track_id={track_id}"
+
                     track_dict = {
-                        "id": track_id,
+                        "id": track_id if track_id is not None else -playlist_idx - 1,
                         "title": title,
                         "artist": artist or "",
                         "album": album or "",
                         "duration": (duration_ms or 0) / 1000.0,
-                        "url": f"{server_url}/stream.mp3?track_id={track_id}",
+                        "url": _loop_url,
                         "coverArt": _loop_cover,
                         "playlist index": playlist_idx,
                     }
@@ -1049,6 +1098,7 @@ async def cmd_status(
         result[loop_name] = loop_items
 
     return result
+
 
 async def cmd_pref(
     ctx: CommandContext,

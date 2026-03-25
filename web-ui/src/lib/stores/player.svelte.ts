@@ -38,6 +38,10 @@ let status = $state<PlayerStatus>({
   playlistTracks: 0,
 });
 
+// Track the last known playlist track count so we can detect external changes
+// (e.g. podcast started via voice command, CLI, or another client).
+let lastKnownPlaylistTracks = 0;
+
 // Current track
 let currentTrack = $state<Track | null>(null);
 
@@ -240,6 +244,20 @@ async function loadStatus(): Promise<void> {
     currentTrack = newTrack;
     isConnected = true;
 
+    // Detect external playlist changes (podcast started via voice/CLI,
+    // track added from another client, etc.) by comparing the server's
+    // playlist_tracks count with our last known value.
+    if (newStatus.playlistTracks !== lastKnownPlaylistTracks) {
+      console.log(
+        "[loadStatus] Playlist changed externally:",
+        lastKnownPlaylistTracks,
+        "→",
+        newStatus.playlistTracks,
+      );
+      lastKnownPlaylistTracks = newStatus.playlistTracks;
+      loadPlaylist();
+    }
+
     // Load BlurHash for new track (non-blocking)
     if (trackChanged && newTrack?.id) {
       loadBlurHashForTrack(newTrack.id);
@@ -280,6 +298,7 @@ async function loadPlaylist(): Promise<void> {
   try {
     const result = await api.getPlaylist(selectedPlayerId, 0, 100);
     playlist = result.tracks;
+    lastKnownPlaylistTracks = result.tracks.length;
   } catch (error) {
     console.error("Failed to load playlist:", error);
   }
@@ -602,6 +621,7 @@ async function clearPlaylist(): Promise<void> {
   status.playlistTracks = 0;
   currentTrack = null;
   playlist = [];
+  lastKnownPlaylistTracks = 0;
 
   await api.clearPlaylist(selectedPlayerId);
 
