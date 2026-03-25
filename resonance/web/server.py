@@ -17,14 +17,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
+import time
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from resonance._paths import static_html_dir, webui_build_dir
 from resonance.config.settings import get_settings, settings_loaded
@@ -150,6 +152,27 @@ class WebServer:
             allow_headers=["*"],
         )
 
+        # ── HTTP Access Logging middleware ──────────────────────────────
+        # Logs every incoming request at INFO level so we can see what
+        # JiveLite/Radio tries to access (uvicorn access_log is off).
+        class _AccessLogMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request: Request, call_next):
+                start = time.monotonic()
+                response = await call_next(request)
+                elapsed_ms = (time.monotonic() - start) * 1000
+                client_host = request.client.host if request.client else "?"
+                logger.info(
+                    "HTTP %s %s from %s → %d (%.0fms)",
+                    request.method,
+                    request.url.path,
+                    client_host,
+                    response.status_code,
+                    elapsed_ms,
+                )
+                return response
+
+        self.app.add_middleware(_AccessLogMiddleware)
+
         # Add security middleware (reads from ServerSettings if available).
         # Middleware execution order is LIFO — last added runs first.
         # We add security-headers first, then rate-limit, then auth, so:
@@ -198,8 +221,6 @@ class WebServer:
         # Register routes
         self._register_routes()
 
-
-
     def _register_routes(self) -> None:
         """Register all routes with the FastAPI app."""
 
@@ -210,9 +231,11 @@ class WebServer:
         @self.app.middleware("http")
         async def _log_artwork_requests(request, call_next):
             path = request.url.path
-            if path.startswith("/imageproxy/") or (
-                path.startswith("/music/") and "cover" in path
-            ) or path.startswith("/html/images/"):
+            if (
+                path.startswith("/imageproxy/")
+                or (path.startswith("/music/") and "cover" in path)
+                or path.startswith("/html/images/")
+            ):
                 logger.info(
                     "[ARTWORK-REQ] %s %s from %s (user-agent: %s)",
                     request.method,
@@ -221,9 +244,11 @@ class WebServer:
                     request.headers.get("user-agent", "?")[:80],
                 )
             resp = await call_next(request)
-            if path.startswith("/imageproxy/") or (
-                path.startswith("/music/") and "cover" in path
-            ) or path.startswith("/html/images/"):
+            if (
+                path.startswith("/imageproxy/")
+                or (path.startswith("/music/") and "cover" in path)
+                or path.startswith("/html/images/")
+            ):
                 logger.info(
                     "[ARTWORK-REQ] %s %s -> %d (%s bytes)",
                     request.method,
@@ -267,7 +292,9 @@ class WebServer:
 
         # Register streaming routes
         if self.streaming_server is not None:
-            register_streaming_routes(self.app, self.streaming_server, player_registry=self.player_registry)
+            register_streaming_routes(
+                self.app, self.streaming_server, player_registry=self.player_registry
+            )
 
         # Register artwork routes
         if self.artwork_manager is not None:
@@ -345,8 +372,6 @@ class WebServer:
 
         logger.info("Web server started on http://%s:%d", host, port)
 
-
-
     async def stop(self) -> None:
         """Stop the web server."""
         # Stop Cometd manager
@@ -375,9 +400,7 @@ class WebServer:
                     raise RuntimeError(
                         f"Web server failed to start on {self._host}:{self._port}"
                     ) from exc
-                raise RuntimeError(
-                    f"Web server exited during startup on {self._host}:{self._port}"
-                )
+                raise RuntimeError(f"Web server exited during startup on {self._host}:{self._port}")
 
             attempt += 1
             if await self._probe_healthcheck():
@@ -422,9 +445,7 @@ class WebServer:
 
         try:
             request = (
-                f"GET /health HTTP/1.0\r\n"
-                f"Host: {probe_host}\r\n"
-                f"Connection: close\r\n\r\n"
+                f"GET /health HTTP/1.0\r\nHost: {probe_host}\r\nConnection: close\r\n\r\n"
             ).encode("ascii")
             writer.write(request)
             await writer.drain()
