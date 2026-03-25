@@ -85,6 +85,22 @@ async def _process_message(
     msg_id = msg.get("id")
     client_id = msg.get("clientId", "")
 
+    # ── DEBUG: log every incoming CometD message at INFO so we can
+    #    trace the full JiveLite handshake → subscribe → playerstatus flow.
+    _log_data = msg.get("data", {})
+    _log_summary = {}
+    if isinstance(_log_data, dict):
+        _log_summary = {k: v for k, v in _log_data.items() if k in ("response", "request")}
+    logger.info(
+        "CometD IN: channel=%s clientId=%s id=%s connType=%s data_keys=%s summary=%s",
+        channel,
+        client_id or "(none)",
+        msg_id,
+        msg.get("connectionType", "-"),
+        list(_log_data.keys()) if isinstance(_log_data, dict) else type(_log_data).__name__,
+        _log_summary or "-",
+    )
+
     try:
         if channel == "/meta/handshake":
             response = await manager.handshake(msg_id=msg_id)
@@ -314,7 +330,13 @@ async def _streaming_event_generator(
     # Send initial responses first
     if initial_responses:
         chunk = json.dumps(initial_responses) + "\r\n"
-        logger.debug("Streaming initial chunk to %s: %s", client_id, chunk[:200])
+        logger.info(
+            "Streaming initial chunk to %s (%d bytes, %d msgs): %.500s",
+            client_id,
+            len(chunk),
+            len(initial_responses),
+            chunk,
+        )
         yield chunk.encode("utf-8")
 
     # Keep connection open and stream events
@@ -348,7 +370,17 @@ async def _streaming_event_generator(
             events = client.get_and_clear_events()
             if events:
                 chunk = json.dumps(events) + "\r\n"
-                logger.debug("Streaming events to %s: %s", client_id, chunk[:200])
+                # Log channel names and a truncated preview so we can see
+                # whether serverstatus / playerstatus data is actually delivered.
+                ev_channels = [e.get("channel", "?") for e in events]
+                logger.info(
+                    "Streaming %d event(s) to %s channels=%s (%d bytes): %.500s",
+                    len(events),
+                    client_id,
+                    ev_channels,
+                    len(chunk),
+                    chunk,
+                )
                 yield chunk.encode("utf-8")
                 last_heartbeat = time.time()
 
@@ -370,11 +402,13 @@ async def _streaming_event_generator(
         # Send reconnect advice so Squeezebox Radio reconnects automatically
         # instead of silently losing the push connection.
         try:
-            reconnect_advice = [{
-                "channel": "/meta/connect",
-                "successful": True,
-                "advice": {"reconnect": "retry", "interval": 0, "timeout": 0},
-            }]
+            reconnect_advice = [
+                {
+                    "channel": "/meta/connect",
+                    "successful": True,
+                    "advice": {"reconnect": "retry", "interval": 0, "timeout": 0},
+                }
+            ]
             chunk = json.dumps(reconnect_advice) + "\r\n"
             yield chunk.encode("utf-8")
         except Exception:
