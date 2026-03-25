@@ -39,9 +39,9 @@ logger = logging.getLogger(__name__)
 #   return 2.0  → 1.0s  (playlist stop — often followed by play)
 #   return 2.5  → 1.5s  (playlist jump/open — newsong follows)
 # ---------------------------------------------------------------------------
-REEXEC_DEBOUNCE_DEFAULT: float = 0.3   # LMS: return 1.3
-REEXEC_DEBOUNCE_STOP: float = 1.0      # LMS: return 2.0
-REEXEC_DEBOUNCE_JUMP: float = 1.5      # LMS: return 2.5
+REEXEC_DEBOUNCE_DEFAULT: float = 0.3  # LMS: return 1.3
+REEXEC_DEBOUNCE_STOP: float = 1.0  # LMS: return 2.0
+REEXEC_DEBOUNCE_JUMP: float = 1.5  # LMS: return 2.5
 
 
 @dataclass
@@ -500,7 +500,9 @@ class CometdManager:
 
                     logger.debug(
                         "Client %s slim_subscribe executing: player=%s cmd=%s",
-                        client_id, player_id, command
+                        client_id,
+                        player_id,
+                        command,
                     )
 
                     # ── Store subscription for re-execution on events ──
@@ -510,8 +512,7 @@ class CometdManager:
                         # Remove any old subscription for the same response channel
                         # (JiveLite may re-subscribe after reconnect)
                         client.slim_subscriptions = [
-                            s for s in client.slim_subscriptions
-                            if s.response_channel != resp_ch
+                            s for s in client.slim_subscriptions if s.response_channel != resp_ch
                         ]
                         sub = SlimSubscription(
                             player_id=player_id,
@@ -522,7 +523,10 @@ class CometdManager:
                         client.slim_subscriptions.append(sub)
                         logger.info(
                             "Client %s stored slim subscription: player=%s cmd=%s -> %s",
-                            client_id, player_id, command, resp_ch,
+                            client_id,
+                            player_id,
+                            command,
+                            resp_ch,
                         )
 
                     # Execute the JSON-RPC command
@@ -610,7 +614,8 @@ class CometdManager:
             # Strip clientId prefix for matching (JiveLite stores without prefix)
             before = len(client.slim_subscriptions)
             client.slim_subscriptions = [
-                s for s in client.slim_subscriptions
+                s
+                for s in client.slim_subscriptions
                 if not any(
                     s.response_channel == ch or s.response_channel.endswith(ch)
                     for ch in channels_to_remove
@@ -620,7 +625,8 @@ class CometdManager:
             if removed:
                 logger.debug(
                     "Client %s removed %d slim subscription(s) on unsubscribe",
-                    client_id, removed,
+                    client_id,
+                    removed,
                 )
 
         response_dict: dict[str, Any] = {
@@ -689,10 +695,7 @@ class CometdManager:
                 if isinstance(req_data, list) and len(req_data) >= 2:
                     player_id = req_data[0] if req_data[0] else ""
                     command = req_data[1]
-                    logger.debug(
-                        "slim_request executing: player=%s cmd=%s",
-                        player_id, command
-                    )
+                    logger.debug("slim_request executing: player=%s cmd=%s", player_id, command)
                     result = await self._jsonrpc_handler(player_id, command)
 
                     # Like LMS: deliver the result on the response channel for streaming clients.
@@ -704,10 +707,7 @@ class CometdManager:
                             "data": result,
                         }
                         client.add_event(event)
-                        logger.debug(
-                            "slim_request delivered result on %s",
-                            resp_channel
-                        )
+                        logger.debug("slim_request delivered result on %s", resp_channel)
 
                         # Wake up any waiters so they can deliver the event
                         async with self._lock:
@@ -886,20 +886,25 @@ class CometdManager:
                 for sub in client.slim_subscriptions:
                     total_subs += 1
                     # Match: subscription targets this player, or is a wildcard ("")
-                    if sub.player_id == player_id or (sub.player_id == "" and "playerstatus" in sub.response_channel):
+                    if sub.player_id == player_id or (
+                        sub.player_id == "" and "playerstatus" in sub.response_channel
+                    ):
                         subs_to_execute.append((cid, sub))
 
         if not subs_to_execute:
             logger.info(
                 "Reexec: no matching slim subscriptions for player %s "
                 "(clients: %d, total_subs: %d)",
-                player_id, len(self._clients), total_subs,
+                player_id,
+                len(self._clients),
+                total_subs,
             )
             return
 
         logger.info(
             "Reexec: firing %d slim subscription(s) for player %s",
-            len(subs_to_execute), player_id,
+            len(subs_to_execute),
+            player_id,
         )
 
         for cid, sub in subs_to_execute:
@@ -922,18 +927,24 @@ class CometdManager:
                                 waiter.set()
                             logger.info(
                                 "Reexec: pushed result to client %s on %s (cmd=%s)",
-                                cid, sub.response_channel, sub.command[:3],
+                                cid,
+                                sub.response_channel,
+                                sub.command[:3],
                             )
 
                 else:
                     logger.info(
                         "Reexec: empty result for player=%s cmd=%s on %s",
-                        player_id, sub.command, sub.response_channel,
+                        player_id,
+                        sub.command,
+                        sub.response_channel,
                     )
             except Exception as e:
                 logger.exception(
                     "Error re-executing slim subscription for player %s on %s: %s",
-                    player_id, sub.response_channel, e,
+                    player_id,
+                    sub.response_channel,
+                    e,
                 )
 
     def _get_reexec_delay(self, event: Event) -> float:
@@ -1009,6 +1020,10 @@ class CometdManager:
 
         For connect/disconnect:
         - Deliver on /players channel immediately
+        - Re-execute global subscriptions (serverstatus) so JiveLite sees
+          the updated player list.  This fixes the race condition where
+          JiveLite connects via CometD before the player registers via
+          slimproto and gets an empty players_loop.
         """
         from resonance.core.events import (
             PlayerConnectedEvent,
@@ -1024,7 +1039,10 @@ class CometdManager:
             logger.info(
                 "Playlist event for player %s (action=%s, count=%d) "
                 "— scheduling debounced reexec in %.1fs",
-                event.player_id, event.action, event.count, delay,
+                event.player_id,
+                event.action,
+                event.count,
+                delay,
             )
             self._schedule_debounced_reexec(event.player_id, delay)
 
@@ -1036,9 +1054,10 @@ class CometdManager:
             # and expects the full re-executed result on the response channel.
             delay = self._get_reexec_delay(event)
             logger.info(
-                "Status event for player %s (state=%s) "
-                "— scheduling debounced reexec in %.1fs",
-                event.player_id, event.state, delay,
+                "Status event for player %s (state=%s) — scheduling debounced reexec in %.1fs",
+                event.player_id,
+                event.state,
+                delay,
             )
             self._schedule_debounced_reexec(event.player_id, delay)
 
@@ -1056,12 +1075,36 @@ class CometdManager:
                 {"event": "connected", "player_id": event.player_id},
             )
 
+            # ── Re-execute global subscriptions (serverstatus) ──
+            # When a player connects via slimproto, JiveLite needs an
+            # updated serverstatus with the new players_loop.  Without
+            # this, a CometD client that connected before slimproto sees
+            # an empty players_loop and never subscribes to playerstatus.
+            # Using player_id="" matches all global subscriptions
+            # (sub.player_id == ""), including serverstatus.
+            logger.info(
+                "Player connected: %s — scheduling global subscription "
+                "reexec (serverstatus) in 0.5s",
+                event.player_id,
+            )
+            self._schedule_debounced_reexec("", 0.5)
+
         elif isinstance(event, PlayerDisconnectedEvent):
             channel = "/players"
             await self.deliver_event(
                 channel,
                 {"event": "disconnected", "player_id": event.player_id},
             )
+
+            # ── Re-execute global subscriptions (serverstatus) ──
+            # Same as connect: JiveLite needs updated players_loop when
+            # a player disconnects.
+            logger.info(
+                "Player disconnected: %s — scheduling global subscription "
+                "reexec (serverstatus) in 0.5s",
+                event.player_id,
+            )
+            self._schedule_debounced_reexec("", 0.5)
 
     async def start(self) -> None:
         """Start the Cometd manager and subscribe to events."""
