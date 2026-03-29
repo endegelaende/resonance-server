@@ -283,6 +283,127 @@ volumes:
 
 ---
 
+## Podcast Plugin — Architecture & Known Issues
+
+### Resume Position Tracking
+
+The podcast plugin (`plugins/podcast/`) tracks playback progress automatically
+via `player.status` events — no manual position saving needed.
+
+**How it works:**
+
+1. `_on_player_status()` subscribes to `player.status` events
+2. While playing a podcast (`source == "podcast"`): position saved every ~30s
+3. On pause/stop: final position saved immediately
+4. On switch to non-podcast content: tracked position saved before clearing
+5. On server shutdown (`teardown`): all tracked positions flushed to disk
+
+**Storage:** `PodcastStore` in `data/plugin_podcast.json` — fields:
+- `_resume`: `{episode_url: seconds}` — resume positions
+- `_progress`: `{episode_url: EpisodeProgress}` — position + duration + percentage
+- `_played`: `set[episode_url]` — episodes marked as played
+- Auto-mark-as-played at configurable threshold (default 90%)
+
+**Resume on play (fixed 2026-03-29):**
+
+`_podcast_play()` now reads the `from:` parameter AND auto-looks up the
+store when no explicit position is given:
+
+```
+podcast play url:https://... from:742    → seeks to 742s after start
+podcast play url:https://...             → auto-lookup from store
+podcast play url:https://... from:0      → explicit start from beginning
+```
+
+The seek happens as a deferred task (1.5s delay) after playback starts,
+giving the player time to buffer initial audio data.
+
+**Previously broken:** `_podcast_play()` documented the `from:` parameter
+but never read it from the parsed command. The SDUI handler
+`_handle_play_episode()` read `resume_from` but only used it for the
+display message, never passing it to the command. Both are now fixed.
+
+### Stream Reconnect for Podcasts
+
+Remote audio streams are proxied through Resonance because Squeezebox
+hardware cannot handle HTTPS. The proxy lives in
+`resonance/web/routes/streaming.py` → `_stream_remote_proxy()`.
+
+**Two distinct reconnect strategies:**
+
+| Stream Type | `is_live` | Reconnect Mechanism |
+|-------------|-----------|---------------------|
+| **Radio/ICY** | `True` | `LiveStreamDroppedEvent` → server-level re-stream (LMS `_RetryOrNext`) |
+| **Podcast/On-demand** | `False` | **Inline retry with HTTP Range header** (new, 2026-03-29) |
+
+**Podcast reconnect (new):**
+
+When the upstream CDN drops the connection mid-stream, the proxy
+transparently reconnects using `Range: bytes=<bytes_sent>-`:
+
+```
+CDN ──chunk──chunk──chunk──✗ DROP
+     │
+     ├─ 1s backoff
+     ├─ GET url  Range: bytes=2458624-
+     │
+CDN ──chunk──chunk──chunk──... → seamless continuation
+```
+
+- Up to 3 retries with exponential backoff (1s, 3s, 8s)
+- The player's ~2MB decode buffer bridges the reconnect gap
+- Intentional cancellation (track change, seek, disconnect) breaks out immediately
+- Logs at WARNING on each retry attempt for production visibility
+
+**Why not reuse `LiveStreamDroppedEvent` for podcasts?** The live re-stream
+path operates at the server level (cancel stream → re-queue URL → send new
+`strm` command). This causes an audible restart. The inline retry is
+invisible to the player because the byte stream is contiguous.
+
+**Why not buffer instead of reconnect?** A pre-fetch buffer would absorb
+CDN jitter but NOT connection drops — the buffer drains eventually and
+playback stops anyway. Reconnect-with-Range handles the actual failure mode
+(CDN drops) and requires no extra memory or producer/consumer threading.
+
+### Streaming Timeouts
+
+| Setting | Value | Location |
+|---------|-------|----------|
+| `_REMOTE_CONNECT_TIMEOUT` | 10s | `streaming.py` |
+| `_REMOTE_READ_TIMEOUT` | 90s | `streaming.py` (raised from 30s, 2026-03-29) |
+| `_REMOTE_MAX_RETRIES` | 3 | `streaming.py` (podcast only) |
+| `_REMOTE_RETRY_BACKOFF` | 1s, 3s, 8s | `streaming.py` (podcast only) |
+
+The read timeout was raised from 30s to 90s because some podcast CDNs
+(Akamai, Podtrac, Cloudflare) can deliver large files (~100MB+) with
+intermittent slowdowns that exceeded the 30s window.
+
+### Debugging Podcast Issues
+
+```bash
+# Watch podcast resume tracking
+docker logs -f resonance-server 2>&1 | grep --line-buffered 'podcast\|REMOTE\|resume'
+
+# Check for stream drops / reconnects
+docker logs resonance-server 2>&1 | grep 'REMOTE.*drop\|REMOTE.*reconnect\|REMOTE.*retry'
+
+# Verify resume positions are being saved
+docker logs resonance-server 2>&1 | grep 'set_resume_position'
+
+# Check podcast play with resume
+docker logs resonance-server 2>&1 | grep 'Playing podcast\|Resumed podcast'
+```
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Podcast always starts from beginning | `from:` param was ignored (pre-fix) | Fixed: `_podcast_play` now reads `from:` and auto-lookups store |
+| Podcast stops after ~30min | CDN dropped connection, no retry (pre-fix) | Fixed: inline retry with Range header (up to 3 attempts) |
+| Podcast stops, log shows `reason=request_error` | Upstream timeout or network issue | Check `_REMOTE_READ_TIMEOUT` (now 90s), verify network stability |
+| Podcast stops, log shows `retries_exhausted` | CDN persistently unreachable | CDN issue — try different episode/feed, check feed URL validity |
+| Resume position not saved | Player status events not firing | Check `player.status` subscription in setup logs |
+
+---
+
 ## Key Source Files
 
 | File | Purpose |
@@ -294,6 +415,14 @@ volumes:
 | `resonance/protocol/slimproto.py` | Slimproto protocol, player connection handling |
 | `resonance/web/server.py` | FastAPI app setup, middleware, uvicorn config |
 | `resonance/core/events.py` | Event types (PlayerStatusEvent, PlayerConnectedEvent, etc.) |
+
+| `plugins/podcast/__init__.py` | Podcast plugin: browse, search, play, resume tracking, Jive menus |
+| `plugins/podcast/store.py` | Podcast persistence: subscriptions, resume positions, progress, played state |
+| `plugins/podcast/feed_parser.py` | RSS 2.0 + iTunes namespace parser |
+| `plugins/podcast/providers.py` | Search providers: PodcastIndex, GPodder, iTunes |
+| `resonance/web/routes/streaming.py` | `/stream.mp3` endpoint, remote proxy with reconnect |
+| `resonance/streaming/server.py` | Stream queue, cancellation tokens, seek/offset state |
+| `resonance/web/handlers/seeking.py` | `time` command, SeekCoordinator integration |
 
 ---
 
