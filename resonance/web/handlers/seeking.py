@@ -28,6 +28,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from resonance.protocol.commands import FLAG_NO_RESTART_DECODER
 from resonance.streaming.seek_coordinator import get_seek_coordinator
 from resonance.web.handlers import CommandContext
@@ -234,6 +236,11 @@ async def _execute_seek_internal(
     if current_track is None:
         return
 
+    # ── Remote streams (podcasts, external URLs): HTTP Range seeking ──
+    if getattr(current_track, "is_remote", False):
+        await _execute_remote_seek(ctx, player, current_track, target_seconds)
+        return
+
     file_path = Path(current_track.path)
     suffix = file_path.suffix.lower()
 
@@ -308,6 +315,122 @@ async def _execute_seek_internal(
     # Start streaming from new position
     await player.start_track(
         current_track,
+        server_port=ctx.server_port,
+        server_ip=server_ip,
+        transition_duration=runtime_params.transition_duration,
+        transition_type=runtime_params.transition_type,
+        stream_flags=_stream_flags_for_explicit_restart(runtime_params.flags),
+        replay_gain=runtime_params.replay_gain,
+    )
+
+
+async def _execute_remote_seek(
+    ctx: CommandContext,
+    player: Any,
+    track: Any,
+    target_seconds: float,
+) -> None:
+    """Seek in a remote stream (podcast / external URL) using HTTP Range headers.
+
+    1. HEAD request to get Content-Length from the remote server.
+    2. Compute byte offset from (target_seconds / duration) * content_length.
+    3. Queue the remote URL with start_byte so the proxy sends a Range header.
+    4. Restart playback from the new position.
+
+    Falls back gracefully: if Content-Length or duration are unknown, logs a
+    warning and returns without seeking (playback continues uninterrupted).
+    """
+    if ctx.streaming_server is None:
+        return
+
+    url = track.effective_stream_url if hasattr(track, "effective_stream_url") else track.path
+    duration_ms = getattr(track, "duration_ms", 0) or 0
+    if duration_ms <= 0:
+        logger.warning("Cannot seek in remote stream (unknown duration): %s", url)
+        return
+
+    duration_sec = duration_ms / 1000.0
+    if target_seconds >= duration_sec:
+        logger.warning(
+            "Seek target %.1fs >= duration %.1fs, ignoring", target_seconds, duration_sec
+        )
+        return
+
+    # GET Content-Length via HEAD request to compute byte offset.
+    content_length = 0
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
+            head_resp = await client.head(url)
+            head_resp.raise_for_status()
+            content_length = int(head_resp.headers.get("content-length", 0))
+    except Exception:
+        logger.warning("Failed to get Content-Length for remote seek: %s", url, exc_info=True)
+
+    if content_length <= 0:
+        logger.warning("Cannot seek in remote stream (unknown Content-Length): %s", url)
+        return
+
+    # Linear byte-offset approximation (good enough for CBR podcasts; for VBR
+    # the player will be off by a few seconds — acceptable for skip controls).
+    byte_offset = int(content_length * target_seconds / duration_sec)
+    byte_offset = max(0, min(byte_offset, content_length - 1))
+
+    logger.info(
+        "Remote seek: target=%.1fs, content_length=%d, byte_offset=%d, url=%s",
+        target_seconds,
+        content_length,
+        byte_offset,
+        track.title or url,
+    )
+
+    # Resolve runtime stream params (replay gain, transitions) before stopping.
+    playlist = ctx.playlist_manager.get(ctx.player_id) if ctx.playlist_manager else None
+
+    state = getattr(getattr(player, "status", None), "state", None)
+    state_name = str(getattr(state, "name", state)).upper() if state is not None else ""
+    is_currently_playing = state_name == "PLAYING"
+
+    runtime_params = await ctx.streaming_server.resolve_runtime_stream_params(
+        ctx.player_id,
+        track=track,
+        playlist=playlist,
+        allow_transition=False,
+        is_currently_playing=is_currently_playing,
+    )
+
+    # Stop and flush player
+    await player.stop()
+    if hasattr(player, "flush"):
+        await player.flush()
+
+    # Queue remote URL with byte-offset seeking
+    content_type = getattr(track, "content_type", None) or "audio/mpeg"
+    ctx.streaming_server.queue_url_with_seek(
+        ctx.player_id,
+        url,
+        start_byte=byte_offset,
+        start_seconds=target_seconds,
+        content_type=content_type,
+        title=getattr(track, "title", "") or "",
+    )
+
+    # Get server IP for player
+    server_ip = ctx.server_host
+    if ctx.slimproto is not None and hasattr(ctx.slimproto, "get_advertise_ip_for_player"):
+        server_ip = ctx.slimproto.get_advertise_ip_for_player(player)
+
+    # Ensure audio outputs are enabled before setting gain/starting stream.
+    if hasattr(player, "set_audio_enable"):
+        await player.set_audio_enable(True)
+
+    # CRITICAL: Set volume BEFORE stream start (audg must precede strm).
+    current_volume = getattr(player.status, "volume", 100)
+    current_muted = getattr(player.status, "muted", False)
+    await player.set_volume(current_volume, current_muted)
+
+    # Start streaming from new position
+    await player.start_track(
+        track,
         server_port=ctx.server_port,
         server_ip=server_ip,
         transition_duration=runtime_params.transition_duration,

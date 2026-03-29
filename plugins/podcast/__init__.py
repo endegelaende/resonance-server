@@ -3344,7 +3344,7 @@ async def _podcast_skip(ctx: CommandContext, command: list[Any]) -> dict[str, An
         skip_secs = int(_setting("skip_back_seconds", 15))
         skip_secs = -skip_secs
 
-    # Get current player position
+    # Get current player
     player = None
     if ctx.player_id and ctx.player_id != "-":
         player = await ctx.player_registry.get_by_mac(ctx.player_id)
@@ -3352,10 +3352,31 @@ async def _podcast_skip(ctx: CommandContext, command: list[Any]) -> dict[str, An
     if player is None:
         return {"error": "No player selected"}
 
-    # Get current elapsed time from tracking
-    tracking = _player_tracking.get(ctx.player_id, {})
-    current_pos = tracking.get("elapsed", 0.0)
-    new_pos = max(0, current_pos + skip_secs)
+    # Get corrected elapsed time (start_offset + raw_elapsed).
+    # _player_tracking.elapsed is the raw value from player status events
+    # which drifts after a previous seek (reports time relative to stream
+    # start, not absolute track position).  Use the same correction as
+    # cmd_status / REST API: start_offset + raw_elapsed.
+    raw_elapsed = float(getattr(player.status, "elapsed_seconds", 0.0) or 0.0)
+    start_offset: float = 0.0
+    if ctx.streaming_server is not None:
+        try:
+            start_offset = ctx.streaming_server.get_start_offset(ctx.player_id)
+        except Exception:
+            start_offset = 0.0
+    current_pos = start_offset + raw_elapsed
+
+    new_pos = max(0.0, current_pos + skip_secs)
+
+    # Execute the seek via cmd_time (absolute position).
+    from resonance.web.handlers.seeking import cmd_time
+
+    await cmd_time(ctx, [ctx.player_id, str(new_pos)])
+
+    # Update tracking so resume position stays accurate.
+    tracking = _player_tracking.get(ctx.player_id)
+    if tracking:
+        tracking["elapsed"] = new_pos
 
     abs_skip = abs(skip_secs)
     dir_text = "forward" if skip_secs > 0 else "back"

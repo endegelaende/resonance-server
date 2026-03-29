@@ -73,6 +73,7 @@ class CancellationToken:
     def cancel(self) -> None:
         self._cancelled = True
 
+
 @dataclass(frozen=True, slots=True)
 class PendingCrossfade:
     """A queued server-side crossfade plan bound to a stream generation."""
@@ -100,6 +101,10 @@ class RemoteStreamInfo:
 
     title: str = ""
     """Display title (for logging / ICY metadata)."""
+
+    start_byte: int = 0
+    """Byte offset for seeking in remote streams (HTTP Range header).
+    0 means start from the beginning (no Range header sent)."""
 
 
 class ResolvedStream(NamedTuple):
@@ -285,7 +290,9 @@ class StreamingServer:
         config = self.get_runtime_config(player_mac)
         previous_track, next_track = self._playlist_neighbors(playlist)
 
-        same_album_transition = self._tracks_album_adjacent(previous_track, track) or self._tracks_album_adjacent(track, next_track)
+        same_album_transition = self._tracks_album_adjacent(
+            previous_track, track
+        ) or self._tracks_album_adjacent(track, next_track)
 
         transition_type = 0
         transition_duration = 0
@@ -329,9 +336,8 @@ class StreamingServer:
                     path=track_path,
                     replay_gain_mode=config.replay_gain_mode,
                     remote_replay_gain_db=config.remote_replay_gain_db,
-                    prefer_album_gain=(config.replay_gain_mode == 2) or (
-                        config.replay_gain_mode == 3 and same_album_transition
-                    ),
+                    prefer_album_gain=(config.replay_gain_mode == 2)
+                    or (config.replay_gain_mode == 3 and same_album_transition),
                 )
             except Exception:
                 logger.debug(
@@ -394,7 +400,11 @@ class StreamingServer:
 
         try:
             if left_track_no is not None and right_track_no is not None:
-                if left_disc is not None and right_disc is not None and int(left_disc) != int(right_disc):
+                if (
+                    left_disc is not None
+                    and right_disc is not None
+                    and int(left_disc) != int(right_disc)
+                ):
                     return False
                 return abs(int(left_track_no) - int(right_track_no)) == 1
         except Exception:
@@ -599,6 +609,66 @@ class StreamingServer:
             title or url,
         )
 
+    def queue_url_with_seek(
+        self,
+        player_mac: str,
+        url: str,
+        start_byte: int,
+        start_seconds: float,
+        *,
+        content_type: str = "audio/mpeg",
+        title: str = "",
+    ) -> None:
+        """Queue a remote URL with byte-offset seeking via HTTP Range.
+
+        Like :meth:`queue_url` but sets ``start_byte`` on the
+        :class:`RemoteStreamInfo` so the streaming proxy sends an HTTP
+        ``Range: bytes=<start_byte>-`` header.  Also records
+        ``start_offset`` so elapsed-time calculation stays correct after
+        the seek (same LMS-style formula as local-file seeks).
+
+        Args:
+            player_mac: MAC address of the player.
+            url: Remote audio URL (HTTP or HTTPS).
+            start_byte: Byte offset to start streaming from.
+            start_seconds: Seek target in seconds (for elapsed calculation).
+            content_type: MIME type of the remote stream.
+            title: Human-readable title for logging.
+        """
+        self.cancel_stream(player_mac)
+
+        gen = self._stream_generation.get(player_mac, 0) + 1
+        self._stream_generation[player_mac] = gen
+        self._stream_generation_started_at[player_mac] = time.monotonic()
+        self._stream_tokens[player_mac] = CancellationToken(gen)
+
+        self._remote_urls[player_mac] = RemoteStreamInfo(
+            url=url,
+            content_type=content_type,
+            is_live=False,
+            title=title,
+            start_byte=start_byte,
+        )
+        self._stream_queue.pop(player_mac, None)
+        self._seek_positions.pop(player_mac, None)
+        self._byte_offsets.pop(player_mac, None)
+        self._crossfade_plans.pop(player_mac, None)
+
+        # LMS-style start offset so status reports correct position.
+        self._start_offset[player_mac] = float(start_seconds)
+
+        # Seeking is a manual action — reset retry state.
+        self._restream_state.pop(player_mac, None)
+
+        logger.info(
+            "Queued remote URL for player %s with seek: byte=%d, start=%.1fs (generation %d): %s",
+            player_mac,
+            start_byte,
+            start_seconds,
+            gen,
+            title or url,
+        )
+
     # ------------------------------------------------------------------
     # ICY metadata (StreamTitle) per player
     # ------------------------------------------------------------------
@@ -680,7 +750,9 @@ class StreamingServer:
         if count >= self.MAX_RESTREAM_RETRIES:
             logger.warning(
                 "Re-stream retry limit reached for player %s (%d/%d) — giving up",
-                player_mac, count, self.MAX_RESTREAM_RETRIES,
+                player_mac,
+                count,
+                self.MAX_RESTREAM_RETRIES,
             )
             return False
 
@@ -688,7 +760,9 @@ class StreamingServer:
         self._restream_state[player_mac] = (count, now)
         logger.info(
             "Re-stream attempt %d/%d for player %s",
-            count, self.MAX_RESTREAM_RETRIES, player_mac,
+            count,
+            self.MAX_RESTREAM_RETRIES,
+            player_mac,
         )
         return True
 

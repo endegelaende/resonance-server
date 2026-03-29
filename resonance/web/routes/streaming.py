@@ -54,12 +54,12 @@ router = APIRouter(tags=["streaming"])
 # Note: When start/end are unknown (startup stream), we can't infer the requested segment
 # length, so we avoid warning in that case.
 _SUSPICIOUS_TRANSCODE_EOF_BYTES = 2 * 1024 * 1024  # 2MB
-_SUSPICIOUS_TRANSCODE_EOF_SECONDS = 1.0            # 1s
+_SUSPICIOUS_TRANSCODE_EOF_SECONDS = 1.0  # 1s
 
 # Timeout / buffer settings for remote URL proxy streaming.
-_REMOTE_CONNECT_TIMEOUT = 10.0   # seconds
-_REMOTE_READ_TIMEOUT = 30.0      # seconds
-_REMOTE_CHUNK_SIZE = 65536       # 64 KB — matches STREAM_BUFFER_SIZE
+_REMOTE_CONNECT_TIMEOUT = 10.0  # seconds
+_REMOTE_READ_TIMEOUT = 30.0  # seconds
+_REMOTE_CHUNK_SIZE = 65536  # 64 KB — matches STREAM_BUFFER_SIZE
 
 # Shared httpx.AsyncClient for remote proxy streaming (created lazily).
 _httpx_client: httpx.AsyncClient | None = None
@@ -141,7 +141,9 @@ async def stream_audio(
     if resolved.remote is not None:
         logger.info(
             "[DIAG-STREAM] player=%s gen=%s -> REMOTE PROXY: %s",
-            player, _diag_gen, resolved.remote.title or resolved.remote.url,
+            player,
+            _diag_gen,
+            resolved.remote.title or resolved.remote.url,
         )
         return await _stream_remote_proxy(request, player, resolved.remote)
 
@@ -152,7 +154,9 @@ async def stream_audio(
         raise HTTPException(status_code=404, detail="No track queued for player")
 
     if not file_path.exists():
-        logger.warning("[DIAG-STREAM] player=%s gen=%s -> FILE NOT FOUND: %s", player, _diag_gen, file_path)
+        logger.warning(
+            "[DIAG-STREAM] player=%s gen=%s -> FILE NOT FOUND: %s", player, _diag_gen, file_path
+        )
         raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
 
     file_size = file_path.stat().st_size
@@ -163,9 +167,12 @@ async def stream_audio(
     if crossfade_plan is not None:
         logger.info(
             "[DIAG-STREAM] player=%s gen=%s -> CROSSFADE path: prev=%s next=%s overlap=%.2fs output=%s",
-            player, _diag_gen,
-            crossfade_plan.previous_path.name, crossfade_plan.next_path.name,
-            crossfade_plan.overlap_seconds, crossfade_plan.output_format_hint,
+            player,
+            _diag_gen,
+            crossfade_plan.previous_path.name,
+            crossfade_plan.next_path.name,
+            crossfade_plan.overlap_seconds,
+            crossfade_plan.output_format_hint,
         )
         return await _stream_with_crossfade(request, player, crossfade_plan)
 
@@ -186,13 +193,24 @@ async def stream_audio(
     if needs_transcoding(suffix, device_type=device_type):
         logger.info(
             "[DIAG-STREAM] player=%s gen=%s -> TRANSCODE path: file=%s suffix=%s device=%s seek=%s",
-            player, _diag_gen, file_path.name, suffix, device_type, _diag_seek,
+            player,
+            _diag_gen,
+            file_path.name,
+            suffix,
+            device_type,
+            _diag_seek,
         )
         return await _stream_with_transcoding(request, player, file_path)
     else:
         logger.info(
             "[DIAG-STREAM] player=%s gen=%s -> DIRECT path: file=%s suffix=%s size=%d range=%s device=%s",
-            player, _diag_gen, file_path.name, suffix, file_size, range_header, device_type,
+            player,
+            _diag_gen,
+            file_path.name,
+            suffix,
+            file_size,
+            range_header,
+            device_type,
         )
         return await _stream_direct(request, player, file_path, file_size, range_header)
 
@@ -314,6 +332,7 @@ async def _stream_with_crossfade(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
 
 async def _stream_with_transcoding(
     request: Request,
@@ -665,12 +684,17 @@ async def _stream_remote_proxy(
         try:
             # Use streaming request so we can iterate chunks without
             # buffering the entire (potentially infinite) response.
+            req_headers: dict[str, str] = {}
+            if remote.start_byte > 0:
+                req_headers["Range"] = f"bytes={remote.start_byte}-"
             resp = await client.send(
-                client.build_request("GET", remote.url),
+                client.build_request("GET", remote.url, headers=req_headers),
                 stream=True,
             )
-            resp.raise_for_status()
 
+            # Accept both 200 (full content) and 206 (partial / Range honoured).
+            if resp.status_code not in (200, 206):
+                resp.raise_for_status()
             # Parse ICY metadata interval if server advertises one.
             icy_metaint_str = resp.headers.get("icy-metaint", "")
             icy_metaint: int = int(icy_metaint_str) if icy_metaint_str.isdigit() else 0
@@ -767,7 +791,9 @@ async def _stream_remote_proxy(
             #   "cancelled_error" — asyncio.CancelledError (same cause)
             #   "disconnected"    — player closed its HTTP connection
             if remote.is_live and final_reason not in (
-                "cancelled", "cancelled_error", "disconnected",
+                "cancelled",
+                "cancelled_error",
+                "disconnected",
             ):
                 logger.info(
                     "[REMOTE] Live stream dropped for player %s gen=%s reason=%s — firing re-stream event",
@@ -880,11 +906,15 @@ def _log_icy_metadata(meta_bytes: bytes, player_mac: str) -> None:
                 changed = _streaming_server.set_icy_title(player_mac, title)
                 if changed:
                     logger.info(
-                        "[ICY] player=%s StreamTitle changed: %s", player_mac, title,
+                        "[ICY] player=%s StreamTitle changed: %s",
+                        player_mac,
+                        title,
                     )
                 else:
                     logger.debug(
-                        "[ICY] player=%s StreamTitle unchanged: %s", player_mac, title,
+                        "[ICY] player=%s StreamTitle unchanged: %s",
+                        player_mac,
+                        title,
                     )
 
                 # ── Push notification on title change (LMS-equivalent) ──
