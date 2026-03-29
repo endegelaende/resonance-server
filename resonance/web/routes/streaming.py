@@ -58,8 +58,13 @@ _SUSPICIOUS_TRANSCODE_EOF_SECONDS = 1.0  # 1s
 
 # Timeout / buffer settings for remote URL proxy streaming.
 _REMOTE_CONNECT_TIMEOUT = 10.0  # seconds
-_REMOTE_READ_TIMEOUT = 30.0  # seconds
+_REMOTE_READ_TIMEOUT = 90.0  # seconds (raised from 30s for podcast CDN resilience)
 _REMOTE_CHUNK_SIZE = 65536  # 64 KB — matches STREAM_BUFFER_SIZE
+
+# Retry settings for non-live (podcast/on-demand) streams.
+# Live/ICY streams use the existing LiveStreamDroppedEvent re-stream path instead.
+_REMOTE_MAX_RETRIES = 3
+_REMOTE_RETRY_BACKOFF = (1.0, 3.0, 8.0)  # seconds per attempt
 
 # Shared httpx.AsyncClient for remote proxy streaming (created lazily).
 _httpx_client: httpx.AsyncClient | None = None
@@ -679,137 +684,268 @@ async def _stream_remote_proxy(
         bytes_sent = 0
         chunk_count = 0
         abort_reason: str | None = None
-        resp: httpx.Response | None = None
+        retries_used = 0
 
-        try:
-            # Use streaming request so we can iterate chunks without
-            # buffering the entire (potentially infinite) response.
-            req_headers: dict[str, str] = {}
-            if remote.start_byte > 0:
-                req_headers["Range"] = f"bytes={remote.start_byte}-"
-            resp = await client.send(
-                client.build_request("GET", remote.url, headers=req_headers),
-                stream=True,
-            )
+        # ── Live / ICY streams: single-attempt relay (original path) ─────
+        # Live streams use the existing LiveStreamDroppedEvent → re-stream
+        # mechanism at the server level.  We don't retry here because ICY
+        # metadata state (metaint counter) would desync on reconnect.
+        if remote.is_live:
+            resp: httpx.Response | None = None
+            try:
+                req_headers: dict[str, str] = {}
+                if remote.start_byte > 0:
+                    req_headers["Range"] = f"bytes={remote.start_byte}-"
+                resp = await client.send(
+                    client.build_request("GET", remote.url, headers=req_headers),
+                    stream=True,
+                )
+                if resp.status_code not in (200, 206):
+                    resp.raise_for_status()
 
-            # Accept both 200 (full content) and 206 (partial / Range honoured).
-            if resp.status_code not in (200, 206):
-                resp.raise_for_status()
-            # Parse ICY metadata interval if server advertises one.
-            icy_metaint_str = resp.headers.get("icy-metaint", "")
-            icy_metaint: int = int(icy_metaint_str) if icy_metaint_str.isdigit() else 0
+                icy_metaint_str = resp.headers.get("icy-metaint", "")
+                icy_metaint: int = int(icy_metaint_str) if icy_metaint_str.isdigit() else 0
+                _actual_ct = resp.headers.get("content-type", remote.content_type)
 
-            # Determine actual content type from response if available.
-            _actual_ct = resp.headers.get("content-type", remote.content_type)
-
-            logger.info(
-                "[REMOTE] Proxy stream started player=%s gen=%s url=%s ct=%s icy_metaint=%d",
-                player_mac,
-                token_generation,
-                remote.title or remote.url,
-                _actual_ct,
-                icy_metaint,
-            )
-
-            if icy_metaint > 0:
-                # ICY-aware relay: strip inline metadata blocks.
-                async for chunk in _icy_strip_relay(
-                    resp.aiter_bytes(chunk_size=_REMOTE_CHUNK_SIZE),
-                    icy_metaint,
+                logger.info(
+                    "[REMOTE] Proxy stream started player=%s gen=%s url=%s ct=%s icy_metaint=%d",
                     player_mac,
-                    cancel_token,
-                    request,
-                ):
-                    yield chunk
-                    bytes_sent += len(chunk)
-                    chunk_count += 1
-            else:
-                # Simple relay — just forward chunks.
-                async for chunk in resp.aiter_bytes(chunk_size=_REMOTE_CHUNK_SIZE):
-                    if chunk_count % 4 == 0 and await request.is_disconnected():
-                        abort_reason = "disconnected"
-                        return
-                    if chunk_count % 4 == 0 and cancel_token and cancel_token.cancelled:
+                    token_generation,
+                    remote.title or remote.url,
+                    _actual_ct,
+                    icy_metaint,
+                )
+
+                if icy_metaint > 0:
+                    async for chunk in _icy_strip_relay(
+                        resp.aiter_bytes(chunk_size=_REMOTE_CHUNK_SIZE),
+                        icy_metaint,
+                        player_mac,
+                        cancel_token,
+                        request,
+                    ):
+                        yield chunk
+                        bytes_sent += len(chunk)
+                        chunk_count += 1
+                else:
+                    async for chunk in resp.aiter_bytes(chunk_size=_REMOTE_CHUNK_SIZE):
+                        if chunk_count % 4 == 0 and await request.is_disconnected():
+                            abort_reason = "disconnected"
+                            return
+                        if chunk_count % 4 == 0 and cancel_token and cancel_token.cancelled:
+                            abort_reason = "cancelled"
+                            return
+                        yield chunk
+                        bytes_sent += len(chunk)
+                        chunk_count += 1
+
+            except httpx.HTTPStatusError as exc:
+                abort_reason = f"http_{exc.response.status_code}"
+                logger.error(
+                    "[REMOTE] HTTP error proxying for player %s: %s %s",
+                    player_mac,
+                    exc.response.status_code,
+                    remote.url,
+                )
+            except httpx.RequestError as exc:
+                abort_reason = "request_error"
+                logger.error("[REMOTE] Request error proxying for player %s: %s", player_mac, exc)
+            except asyncio.CancelledError:
+                abort_reason = abort_reason or "cancelled_error"
+                raise
+            except Exception as exc:
+                abort_reason = abort_reason or "error"
+                logger.exception(
+                    "[REMOTE] Unexpected error proxying for player %s: %s", player_mac, exc
+                )
+            finally:
+                if resp is not None:
+                    await resp.aclose()
+
+        else:
+            # ── Non-live streams (podcasts): retry with Range header ─────
+            # On upstream drop, reconnect from bytes_sent using HTTP Range.
+            # This transparently resumes the byte stream for the player —
+            # no audible gap because the player's decode buffer bridges
+            # the ~1-8 s reconnect window.
+            #
+            # Retries are bounded by _REMOTE_MAX_RETRIES with exponential
+            # backoff.  Intentional cancellation (track change, seek,
+            # player disconnect) breaks out immediately without retry.
+
+            attempt = 0
+            while True:
+                resp = None
+                try:
+                    range_start = remote.start_byte + bytes_sent
+                    req_headers = {}
+                    if range_start > 0:
+                        req_headers["Range"] = f"bytes={range_start}-"
+
+                    resp = await client.send(
+                        client.build_request("GET", remote.url, headers=req_headers),
+                        stream=True,
+                    )
+                    if resp.status_code not in (200, 206):
+                        resp.raise_for_status()
+
+                    _actual_ct = resp.headers.get("content-type", remote.content_type)
+                    if attempt == 0:
+                        logger.info(
+                            "[REMOTE] Proxy stream started player=%s gen=%s url=%s ct=%s",
+                            player_mac,
+                            token_generation,
+                            remote.title or remote.url,
+                            _actual_ct,
+                        )
+                    else:
+                        logger.info(
+                            "[REMOTE] Proxy stream reconnected player=%s gen=%s attempt=%d bytes_so_far=%d url=%s",
+                            player_mac,
+                            token_generation,
+                            attempt,
+                            bytes_sent,
+                            remote.title or remote.url,
+                        )
+
+                    async for chunk in resp.aiter_bytes(chunk_size=_REMOTE_CHUNK_SIZE):
+                        if chunk_count % 4 == 0 and await request.is_disconnected():
+                            abort_reason = "disconnected"
+                            return
+                        if chunk_count % 4 == 0 and cancel_token and cancel_token.cancelled:
+                            abort_reason = "cancelled"
+                            return
+                        yield chunk
+                        bytes_sent += len(chunk)
+                        chunk_count += 1
+
+                    # Clean EOF — upstream sent all data.  Done.
+                    break
+
+                except asyncio.CancelledError:
+                    abort_reason = abort_reason or "cancelled_error"
+                    raise
+
+                except (httpx.HTTPStatusError, httpx.RequestError, Exception) as exc:
+                    if resp is not None:
+                        await resp.aclose()
+                        resp = None
+
+                    # Don't retry if player disconnected or stream was cancelled
+                    if cancel_token and cancel_token.cancelled:
                         abort_reason = "cancelled"
-                        return
+                        break
+                    try:
+                        if await request.is_disconnected():
+                            abort_reason = "disconnected"
+                            break
+                    except Exception:
+                        pass
 
-                    yield chunk
-                    bytes_sent += len(chunk)
-                    chunk_count += 1
+                    attempt += 1
+                    retries_used = attempt
 
-        except httpx.HTTPStatusError as exc:
-            abort_reason = f"http_{exc.response.status_code}"
-            logger.error(
-                "[REMOTE] HTTP error proxying for player %s: %s %s",
-                player_mac,
-                exc.response.status_code,
-                remote.url,
-            )
-        except httpx.RequestError as exc:
-            abort_reason = "request_error"
-            logger.error(
-                "[REMOTE] Request error proxying for player %s: %s",
-                player_mac,
-                exc,
-            )
-        except asyncio.CancelledError:
-            abort_reason = abort_reason or "cancelled_error"
-            raise
-        except Exception as exc:
-            abort_reason = abort_reason or "error"
-            logger.exception(
-                "[REMOTE] Unexpected error proxying for player %s: %s",
-                player_mac,
-                exc,
-            )
-        finally:
-            # Always close the upstream response to release the connection.
-            if resp is not None:
-                await resp.aclose()
-            elapsed = time.time() - started_at
-            final_reason = abort_reason or "eof"
-            logger.info(
-                "[REMOTE] Proxy stream finished player=%s gen=%s reason=%s chunks=%d bytes=%d elapsed=%.3fs url=%s",
+                    if attempt > _REMOTE_MAX_RETRIES:
+                        abort_reason = f"retries_exhausted({type(exc).__name__})"
+                        logger.warning(
+                            "[REMOTE] Retry budget exhausted for player %s after %d attempts "
+                            "(bytes=%d): %s — %s",
+                            player_mac,
+                            attempt - 1,
+                            bytes_sent,
+                            remote.title or remote.url,
+                            exc,
+                        )
+                        break
+
+                    backoff = _REMOTE_RETRY_BACKOFF[
+                        min(attempt - 1, len(_REMOTE_RETRY_BACKOFF) - 1)
+                    ]
+                    logger.warning(
+                        "[REMOTE] Upstream drop for player %s (attempt %d/%d, bytes=%d, "
+                        "error=%s) — reconnecting in %.0fs with Range: bytes=%d-",
+                        player_mac,
+                        attempt,
+                        _REMOTE_MAX_RETRIES,
+                        bytes_sent,
+                        type(exc).__name__,
+                        backoff,
+                        remote.start_byte + bytes_sent,
+                    )
+                    await asyncio.sleep(backoff)
+                    # Loop continues → next attempt with Range header
+
+                finally:
+                    if resp is not None:
+                        await resp.aclose()
+
+        # ── Final logging + event emission (shared by both paths) ────
+        elapsed = time.time() - started_at
+        final_reason = abort_reason or "eof"
+        logger.info(
+            "[REMOTE] Proxy stream finished player=%s gen=%s reason=%s chunks=%d bytes=%d "
+            "elapsed=%.3fs retries=%d url=%s",
+            player_mac,
+            token_generation,
+            final_reason,
+            chunk_count,
+            bytes_sent,
+            elapsed,
+            retries_used,
+            remote.title or remote.url,
+        )
+
+        # ── LMS _RetryOrNext equivalent: signal re-stream candidate ──
+        #
+        # For live streams that ended unexpectedly (not intentionally
+        # cancelled by the server, and not because the player
+        # disconnected), fire an event so the server can attempt to
+        # reconnect — mirroring LMS StreamingController.pm L920-927.
+        #
+        # Intentional endings that must NOT trigger re-stream:
+        #   "cancelled"       — server cancelled (track change / seek)
+        #   "cancelled_error" — asyncio.CancelledError (same cause)
+        #   "disconnected"    — player closed its HTTP connection
+        _is_unexpected = final_reason not in (
+            "cancelled",
+            "cancelled_error",
+            "disconnected",
+            "eof",
+        )
+
+        if not remote.is_live and _is_unexpected:
+            logger.warning(
+                "[REMOTE] Non-live stream ended abnormally for player %s "
+                "gen=%s reason=%s bytes=%d elapsed=%.1fs retries=%d url=%s",
                 player_mac,
                 token_generation,
                 final_reason,
-                chunk_count,
                 bytes_sent,
                 elapsed,
+                retries_used,
                 remote.title or remote.url,
             )
 
-            # ── LMS _RetryOrNext equivalent: signal re-stream candidate ──
-            #
-            # For live streams that ended unexpectedly (not intentionally
-            # cancelled by the server, and not because the player
-            # disconnected), fire an event so the server can attempt to
-            # reconnect — mirroring LMS StreamingController.pm L920-927.
-            #
-            # Intentional endings that must NOT trigger re-stream:
-            #   "cancelled"       — server cancelled (track change / seek)
-            #   "cancelled_error" — asyncio.CancelledError (same cause)
-            #   "disconnected"    — player closed its HTTP connection
-            if remote.is_live and final_reason not in (
-                "cancelled",
-                "cancelled_error",
-                "disconnected",
-            ):
-                logger.info(
-                    "[REMOTE] Live stream dropped for player %s gen=%s reason=%s — firing re-stream event",
-                    player_mac,
-                    token_generation,
-                    final_reason,
+        if remote.is_live and final_reason not in (
+            "cancelled",
+            "cancelled_error",
+            "disconnected",
+        ):
+            logger.info(
+                "[REMOTE] Live stream dropped for player %s gen=%s reason=%s — firing re-stream event",
+                player_mac,
+                token_generation,
+                final_reason,
+            )
+            event_bus.publish_sync(
+                LiveStreamDroppedEvent(
+                    player_id=player_mac,
+                    stream_generation=token_generation,
+                    remote_url=remote.url,
+                    content_type=remote.content_type,
+                    title=remote.title,
                 )
-                event_bus.publish_sync(
-                    LiveStreamDroppedEvent(
-                        player_id=player_mac,
-                        stream_generation=token_generation,
-                        remote_url=remote.url,
-                        content_type=remote.content_type,
-                        title=remote.title,
-                    )
-                )
+            )
 
     # Use the content type advertised by the provider; the player will
     # rely on the format hint in the strm command for decoding.

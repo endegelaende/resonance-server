@@ -1880,6 +1880,8 @@ async def _handle_play_episode(params: dict[str, Any], ctx: PluginContext) -> di
         cmd.append(f"feed_title:{feed_title}")
     if duration:
         cmd.append(f"duration:{duration}")
+    if resume_from > 0:
+        cmd.append(f"from:{resume_from}")
 
     rpc_body = {
         "id": 1,
@@ -2748,6 +2750,18 @@ async def _podcast_play(ctx: CommandContext, command: list[Any]) -> dict[str, An
     except (ValueError, TypeError):
         duration_seconds = 0
 
+    # Resume position: explicit "from:" parameter, or auto-lookup from store.
+    # "from:0" means explicitly start from beginning (no auto-lookup).
+    resume_from_str = tagged.get("from")
+    if resume_from_str is not None:
+        try:
+            resume_from = int(resume_from_str)
+        except (ValueError, TypeError):
+            resume_from = 0
+    else:
+        # No explicit position — check store for a saved resume position.
+        resume_from = _store.get_resume_position(episode_url) if episode_url else 0
+
     if not episode_url:
         return {"error": "Missing 'url' parameter"}
 
@@ -2834,7 +2848,42 @@ async def _podcast_play(ctx: CommandContext, command: list[Any]) -> dict[str, An
                 )
             )
 
-        logger.info("Playing podcast episode: %s → %s", title, episode_url)
+        # ── Resume from saved position ───────────────────────────
+        # After playback has started, seek to the resume position.
+        # We need a short delay for the player to buffer initial data
+        # before seeking — otherwise the seek may be ignored or cause
+        # a stream restart race.
+        if resume_from > 0 and duration_seconds > 0 and resume_from < duration_seconds - 10:
+
+            async def _deferred_seek() -> None:
+                await asyncio.sleep(1.5)  # let player buffer initial audio
+                try:
+                    from resonance.web.handlers.seeking import perform_seek
+
+                    await perform_seek(ctx, player, float(resume_from))
+                    logger.info(
+                        "Resumed podcast at %ds: %s",
+                        resume_from,
+                        title or episode_url[:60],
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to seek to resume position %ds for %s",
+                        resume_from,
+                        title or episode_url[:60],
+                        exc_info=True,
+                    )
+
+            _task = asyncio.create_task(_deferred_seek())
+            _task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+            logger.info(
+                "Playing podcast episode (resume from %ds): %s → %s",
+                resume_from,
+                title,
+                episode_url,
+            )
+        else:
+            logger.info("Playing podcast episode: %s → %s", title, episode_url)
 
     return {"count": 1}
 
