@@ -39,7 +39,7 @@ services:
         # --- Volumes -------------------------------------------------------------
         volumes:
             # Music library — mount your music folder(s) read-only
-            - ${MUSIC_DIR:-./music}:/music:ro
+            - ${MUSIC_DIR:-/mnt/audio/audiobooks}:/music:ro
 
             # Persistent data (playlists, alarms, player prefs, plugin data, saved playlists)
             - resonance-data:/app/data
