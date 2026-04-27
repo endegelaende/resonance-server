@@ -414,14 +414,38 @@
     try {
       await api.rescan();
       toastStore.info("Library rescan started");
-      if (uiStore.currentView === "artists") {
-        loadArtists();
-      }
+      isLoadingLibrary = true;
+
+      const interval = setInterval(async () => {
+        try {
+          const status = await api.getScanStatus();
+          if (!status.scanning) {
+            clearInterval(interval);
+            isLoadingLibrary = false;
+            toastStore.success(
+              `Scan complete! Found ${status.tracks_found} tracks.`,
+            );
+            reloadCurrentLibraryView();
+          }
+        } catch {
+          /* ignore polling errors */
+        }
+      }, 1000);
     } catch (err) {
       console.error("Failed to start rescan:", err);
       toastStore.error("Failed to start rescan", {
         detail: (err as Error).message,
       });
+    }
+  }
+
+  function reloadCurrentLibraryView() {
+    if (uiStore.currentView === "artists") {
+      loadArtists();
+    } else if (uiStore.currentView === "albums") {
+      loadAlbums(uiStore.selectedArtist?.id);
+    } else if (uiStore.currentView === "tracks") {
+      loadTracks();
     }
   }
 
@@ -434,9 +458,7 @@
 
   function handleCloseAddFolder() {
     uiStore.closeModal();
-    if (uiStore.currentView === "artists") {
-      loadArtists();
-    }
+    reloadCurrentLibraryView();
   }
 
   // ---------------------------------------------------------------------------
