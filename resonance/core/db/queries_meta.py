@@ -155,9 +155,15 @@ async def add_music_folder(conn: aiosqlite.Connection, path: str) -> int:
     return int(row["id"])
 
 
-async def remove_music_folder(conn: aiosqlite.Connection, path: str) -> None:
-    """Remove a music folder by path."""
-    await conn.execute("DELETE FROM music_folders WHERE path = ?;", (path,))
+async def remove_music_folder(conn: aiosqlite.Connection, path: str) -> int:
+    """Remove a music folder by path.
+
+    Returns:
+        Number of rows deleted (0 or 1).
+    """
+    cursor = await conn.execute("DELETE FROM music_folders WHERE path = ?;", (path,))
+    await conn.commit()
+    return cursor.rowcount
 
 
 async def list_music_folders(conn: aiosqlite.Connection) -> list[str]:

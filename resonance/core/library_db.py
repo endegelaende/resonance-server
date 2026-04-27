@@ -1697,7 +1697,7 @@ class LibraryDb:
     async def add_music_folder(self, path: str) -> int:
         return await queries_meta.add_music_folder(self._require_conn(), path)
 
-    async def remove_music_folder(self, path: str) -> None:
+    async def remove_music_folder(self, path: str) -> int:
         return await queries_meta.remove_music_folder(self._require_conn(), path)
 
     async def list_music_folders(self) -> list[str]:

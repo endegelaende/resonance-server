@@ -240,9 +240,7 @@ class MusicLibrary:
 
             # Orphan detection: remove DB entries for files that no longer
             # exist on disk under this scan root.
-            deleted = await self._db.delete_tracks_not_in_paths(
-                scanned_paths, str(root)
-            )
+            deleted = await self._db.delete_tracks_not_in_paths(scanned_paths, str(root))
             if deleted:
                 logger.info("Removed %d orphaned track(s) under %s", deleted, root)
                 await self._db.cleanup_orphans()
@@ -461,18 +459,64 @@ class MusicLibrary:
         """
         Remove a music folder from the library.
 
+        Deletes the folder entry, removes all tracks whose path starts with
+        the folder prefix, and cleans up orphaned albums/artists/genres.
+
+        If the exact path is not registered, falls back to a prefix match:
+        all registered folders that lie under the given path are removed.
+
         Args:
             path: Path to the folder to remove.
 
         Returns:
-            True if the folder was removed.
+            True if at least one folder was removed.
         """
         self._require_initialized()
         folder_path = str(Path(path).resolve())
         removed = await self._db.remove_music_folder(folder_path)
+
         if removed:
+            # Delete all tracks that belong to this folder (empty valid_paths
+            # means every track under the prefix is orphaned).
+            deleted = await self._db.delete_tracks_not_in_paths(set(), folder_path)
+            if deleted:
+                logger.info(
+                    "Removed %d track(s) from removed folder %s",
+                    deleted,
+                    folder_path,
+                )
+                await self._db.cleanup_orphans()
+                await self._db.rebuild_fts()
             logger.info("Removed music folder: %s", folder_path)
-        return removed
+            return True
+
+        # Exact path didn't match — try prefix match: maybe the user is
+        # removing a parent folder and the DB has subfolders registered.
+        remaining_folders = await self._db.list_music_folders()
+        prefix = folder_path.rstrip("/")
+        matched_folders = [
+            f for f in remaining_folders if f.startswith(prefix + "/") or f == prefix
+        ]
+        if matched_folders:
+            total_deleted = 0
+            for mf in matched_folders:
+                await self._db.remove_music_folder(mf)
+                deleted = await self._db.delete_tracks_not_in_paths(set(), mf)
+                total_deleted += deleted
+                logger.info("Removed subfolder %s (%d tracks)", mf, deleted)
+            if total_deleted:
+                await self._db.cleanup_orphans()
+                await self._db.rebuild_fts()
+            logger.info(
+                "Removed %d subfolder(s) under %s (%d tracks total)",
+                len(matched_folders),
+                folder_path,
+                total_deleted,
+            )
+            return True
+
+        logger.warning("Music folder not found in library: %s", folder_path)
+        return False
 
     async def set_music_folders(self, paths: list[str | Path]) -> int:
         """
